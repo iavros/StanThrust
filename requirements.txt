@@ -1,0 +1,9 @@
+pytest
+numpy
+scipy
+scikit-learn
+# Optional: Cantera for advanced thermochemistry (if not installed, fallback estimates are used)
+cantera
+# Optional development tools
+# pandas
+

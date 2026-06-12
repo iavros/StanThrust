@@ -1,0 +1,122 @@
+"""Benchmark reconstruction and regression checks."""
+
+import sys
+
+sys.path.insert(0, r"E:/LIQUID_ENGINE")
+
+from liquid_engine_studio.benchmark_cases import (
+    build_internal_baseline_rows,
+    build_public_benchmark_reference_rows,
+    build_reconstructed_benchmark_rows,
+    get_public_benchmark_cases,
+)
+from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
+
+
+def test_public_benchmark_reference_catalog_is_complete():
+    """Assert the public collegiate benchmark catalog stays coherent and presentable."""
+    rows = build_public_benchmark_reference_rows()
+    cases = get_public_benchmark_cases()
+
+    assert len(rows) == len(cases) >= 3
+    for row in rows:
+        assert row["engine"]
+        assert row["team"]
+        assert row["fuel_name"]
+        assert row["oxidizer_name"]
+        assert row["source_label"].startswith("[")
+        assert str(row["source_url"]).startswith("https://")
+        assert float(row["reference_thrust_n"]) > 0.0
+        assert float(row["reference_chamber_pressure_kpa"]) > 0.0
+
+
+def test_internal_baseline_rows_are_within_declared_ranges():
+    """Assert generated internal baseline rows sit inside their stored regression envelopes."""
+    rows = build_internal_baseline_rows()
+    assert len(rows) >= 3
+
+    metric_names = (
+        "calculated_thrust_newtons",
+        "chamber_pressure_kpa",
+        "propellant_mass_flow_kg_s",
+        "calculated_impulse_newton_seconds",
+        "nozzle_expansion_ratio",
+        "total_stack_length_mm",
+        "thermal_margin_index",
+    )
+    for row in rows:
+        for metric_name in metric_names:
+            observed = float(row[f"{metric_name}_observed"])
+            lower_bound = float(row[f"{metric_name}_min"])
+            upper_bound = float(row[f"{metric_name}_max"])
+            assert lower_bound <= observed <= upper_bound, (
+                f"{row['case_id']} {metric_name} drifted to {observed:.3f} "
+                f"outside [{lower_bound:.3f}, {upper_bound:.3f}]"
+            )
+
+
+def test_reconstructed_public_benchmark_outputs_are_stable_when_cantera_is_available():
+    """Assert public benchmark reconstructions remain in expected neighborhoods."""
+    try:
+        import cantera  # noqa: F401
+    except Exception:
+        return
+
+    rows = build_reconstructed_benchmark_rows(get_default_solver_assumptions())
+    rows_by_engine = {row["engine"]: row for row in rows}
+
+    expected_windows = {
+        "Elysium": {
+            "simulated_thrust_n": (1200.0, 1380.0),
+            "simulated_chamber_pressure_kpa": (1000.0, 1200.0),
+            "simulated_isp_seconds": (175.0, 195.0),
+        },
+        "Juno": {
+            "simulated_thrust_n": (1400.0, 1600.0),
+            "simulated_chamber_pressure_kpa": (950.0, 1250.0),
+            "simulated_isp_seconds": (195.0, 225.0),
+        },
+        "Iron Lotus": {
+            "simulated_thrust_n": (10400.0, 11550.0),
+            "simulated_chamber_pressure_kpa": (2200.0, 2450.0),
+            "simulated_isp_seconds": (175.0, 195.0),
+        },
+    }
+
+    for engine, windows in expected_windows.items():
+        row = rows_by_engine[engine]
+        for metric_name, (lower_bound, upper_bound) in windows.items():
+            observed = float(row[metric_name])
+            assert lower_bound <= observed <= upper_bound, (
+                f"{engine} {metric_name} drifted to {observed:.3f} "
+                f"outside [{lower_bound:.3f}, {upper_bound:.3f}]"
+            )
+
+
+def run_all_tests():
+    tests = [
+        test_public_benchmark_reference_catalog_is_complete,
+        test_internal_baseline_rows_are_within_declared_ranges,
+        test_reconstructed_public_benchmark_outputs_are_stable_when_cantera_is_available,
+    ]
+
+    passed = 0
+    failed = 0
+    for test_func in tests:
+        try:
+            test_func()
+            print(f"[ok] {test_func.__name__} passed")
+            passed += 1
+        except AssertionError as exc:
+            print(f"[fail] {test_func.__name__} failed: {exc}")
+            failed += 1
+        except Exception as exc:
+            print(f"[error] {test_func.__name__} error: {exc}")
+            failed += 1
+
+    print(f"\nBenchmark Tests: {passed} passed, {failed} failed out of {len(tests)} total.")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if run_all_tests() else 1)

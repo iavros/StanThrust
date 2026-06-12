@@ -1,0 +1,5 @@
+mode,thermal_margin_index,calculated_thrust_newtons,regen_pressure_drop_kpa,regen_coolant_temperature_rise_k,film_mass_flow_kg_s
+Baseline,100.0,223.6,0.0,0.0,0.0
+Film,100.0,228.6,0.0,0.0,0.0
+Regen,100.0,233.6,20.0,320.0,0.0
+Regen + film,100.0,238.6,20.0,320.0,0.0
