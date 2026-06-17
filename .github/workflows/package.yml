@@ -47,7 +47,7 @@ jobs:
 
   macos:
     name: macOS DMG
-    runs-on: macos-13
+    runs-on: macos-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
