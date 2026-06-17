@@ -1062,7 +1062,7 @@ class Model3DView(QGraphicsView):
         self._component_title(
             scene,
             "Chamber And Nozzle",
-            "Solved chamber shell, throat, MOC-informed bell nozzle, and injector flange.",
+            "Calculated chamber shell, throat, and bell nozzle.",
         )
         values = dict(design.derived.engineering_values)
         chamber_length = float(design.derived.chamber_length_mm)
@@ -1140,7 +1140,7 @@ class Model3DView(QGraphicsView):
         self._component_title(
             scene,
             "Propellant Tanks",
-            "Separate tank envelopes sized from solved propellant volumes and input diameter.",
+            "Calculated oxidizer and fuel tank envelopes.",
         )
         values = dict(design.derived.engineering_values)
         tank_diameter = float(design.inputs.tank_diameter_mm)
@@ -1164,7 +1164,7 @@ class Model3DView(QGraphicsView):
         self._draw_callout(scene, (ox_front[0], ox_front[1]), (552.0, 128.0), "Ox length {0} mm".format(_format_number(ox_length, 2)), QT_PALETTE["oxidizer"])
         self._draw_callout(scene, (ox_body[0], ox_body[1]), (154.0, 286.0), "Diameter {0} mm".format(_format_number(tank_diameter, 2)), QT_PALETTE["text"])
         self._draw_callout(scene, (fuel_front[0], fuel_front[1]), (552.0, 344.0), "Fuel length {0} mm".format(_format_number(fuel_length, 2)), QT_PALETTE["fuel"])
-        self._draw_callout(scene, (fuel_body[0], fuel_body[1]), (154.0, 500.0), "Same tank dia", QT_PALETTE["text"])
+        self._draw_callout(scene, (fuel_body[0], fuel_body[1]), (154.0, 500.0), "Fuel dia {0} mm".format(_format_number(tank_diameter, 2)), QT_PALETTE["text"])
         self._metric(scene, 790, 104, "Ox Length", "{0} mm".format(_format_number(ox_length, 2)))
         self._metric(scene, 790, 166, "Fuel Length", "{0} mm".format(_format_number(fuel_length, 2)))
         self._metric(scene, 790, 228, "Diameter", "{0} mm".format(_format_number(tank_diameter, 2)))
@@ -1175,7 +1175,7 @@ class Model3DView(QGraphicsView):
         self._component_title(
             scene,
             "Feed Hardware",
-            "Rotating impeller housings, shafts, and motor block sized from the feed solve.",
+            "Calculated impeller geometry with feed hardware context.",
         )
         values = dict(design.derived.engineering_values)
         if not design.inputs.use_pumps:
@@ -1258,7 +1258,7 @@ class Model3DView(QGraphicsView):
         self._component_title(
             scene,
             "Injector",
-            "Injector face and element geometry derived from the current design.",
+            "Calculated injector face and element geometry.",
         )
         values = dict(design.derived.engineering_values)
         injector_type = str(design.inputs.injector_type).strip().lower()
@@ -1288,21 +1288,55 @@ class Model3DView(QGraphicsView):
             self._draw_callout(scene, (tip_point[0], tip_point[1]), (120.0, 472.0), "Pintle tip {0} mm".format(_format_number(tip_diameter, 2)), QT_PALETTE["fuel"])
             self._draw_callout(scene, (gap_point[0], gap_point[1]), (552.0, 172.0), "Annulus gap {0} mm".format(_format_number(annulus_gap, 2)), QT_PALETTE["oxidizer"])
             self._metric(scene, 790, 290, "Tip / Gap", "{0} / {1} mm".format(_format_number(tip_diameter, 2), _format_number(annulus_gap, 2)))
+            self._metric(scene, 790, 414, "Projection", "{0} mm".format(_format_number(projection_length, 2)))
         else:
             orifice_diameter = _safe_float(values.get("impinging_orifice_diameter_mm"), 1.0) or 1.0
+            impinging_angle = _safe_float(values.get("impinging_angle_deg"), 30.0) or 30.0
             pair_spacing = _safe_float(values.get("impinging_pair_spacing_mm"), face_diameter * 0.085) or face_diameter * 0.085
             element_count = max(2, int(round(_safe_float(values.get("impinging_element_count"), 2.0) or 2.0)))
             port_radius_px = max(2.6, orifice_diameter * 0.5 * display_scale)
             spacing_px = pair_spacing * display_scale
-            ring_radius_px = max(face_radius_px * 0.28, min(face_radius_px * 0.74, spacing_px * 2.2))
+            ring_radius_px = max(
+                face_radius_px * 0.34,
+                min(face_radius_px * 0.62, face_radius_px - spacing_px - port_radius_px * 3.0),
+            )
+            jet_pen = QPen(QColor(QT_PALETTE["oxidizer"]), 1.0, Qt.SolidLine, Qt.RoundCap)
+            jet_pen.setCosmetic(True)
+            first_port_point = None
+            half_angle = math.radians(max(6.0, min(80.0, impinging_angle)) * 0.5)
+            convergence_lift = min(face_radius_px * 0.32, max(8.0, spacing_px * 0.5 / max(0.18, math.tan(half_angle))))
             for pair_index in range(element_count):
-                base_angle = 2.0 * math.pi * pair_index / element_count
-                for offset in (-0.5, 0.5):
-                    port_angle = base_angle + offset * 0.18
-                    self._draw_projected_port(scene, origin, ring_radius_px + offset * spacing_px, port_angle, port_radius_px, QT_PALETTE["oxidizer"])
-            port_point = self._project(ring_radius_px, 0.0, 42.0, origin, 1.0)
+                base_angle = self._spin_phase() + 2.0 * math.pi * pair_index / element_count
+                center_x = ring_radius_px * math.cos(base_angle)
+                center_y = ring_radius_px * math.sin(base_angle)
+                tangent_x = -math.sin(base_angle)
+                tangent_y = math.cos(base_angle)
+                convergence = self._project(center_x, center_y, face_thickness_px + convergence_lift, origin, 1.0)
+                for side in (-1.0, 1.0):
+                    port_x = center_x + tangent_x * spacing_px * 0.5 * side
+                    port_y = center_y + tangent_y * spacing_px * 0.5 * side
+                    port = self._draw_projected_disc(
+                        scene,
+                        origin,
+                        port_x,
+                        port_y,
+                        face_thickness_px * 1.04,
+                        port_radius_px,
+                        QT_PALETTE["oxidizer"],
+                    )
+                    scene.addLine(port[0], port[1], convergence[0], convergence[1], jet_pen)
+                    if first_port_point is None:
+                        first_port_point = port
+            port_point = first_port_point or self._project(ring_radius_px, 0.0, face_thickness_px, origin, 1.0)
             self._draw_callout(scene, (port_point[0], port_point[1]), (552.0, 172.0), "Orifice dia {0} mm".format(_format_number(orifice_diameter, 2)), QT_PALETTE["oxidizer"])
             self._metric(scene, 790, 290, "Orifice", "{0} mm".format(_format_number(orifice_diameter, 2)))
+            self._metric(
+                scene,
+                790,
+                414,
+                "Angle / Spacing",
+                "{0} deg / {1} mm".format(_format_number(impinging_angle, 1), _format_number(pair_spacing, 2)),
+            )
         face_point = self._project(face_radius_px, 0.0, 0.0, origin, 1.0)
         thickness_point = self._project(0.0, face_radius_px * 0.70, face_thickness_px * 0.56, origin, 1.0)
         self._draw_callout(scene, (face_point[0], face_point[1]), (552.0, 392.0), "Face dia {0} mm".format(_format_number(face_diameter, 2)), QT_PALETTE["text"])
@@ -1750,6 +1784,28 @@ class Model3DView(QGraphicsView):
             path.lineTo(point[0], point[1])
         scene.addPath(path, QPen(color, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
 
+    def _draw_projected_disc(
+        self,
+        scene: QGraphicsScene,
+        origin: Tuple[float, float],
+        x: float,
+        y: float,
+        z: float,
+        radius: float,
+        color: str,
+    ) -> Tuple[float, float, float]:
+        projected = self._project(x, y, z, origin, 1.0)
+        apparent = max(2.2, radius)
+        scene.addEllipse(
+            projected[0] - apparent,
+            projected[1] - apparent,
+            apparent * 2.0,
+            apparent * 2.0,
+            QPen(QColor(color)),
+            QBrush(QColor(color)),
+        )
+        return projected
+
     def _draw_projected_port(self, scene: QGraphicsScene, origin: Tuple[float, float], ring_radius: float, angle: float, port_radius: float, color: str) -> None:
         projected = self._project(ring_radius * math.cos(angle), ring_radius * math.sin(angle), 42.0, origin, 1.0)
         apparent = max(4.0, port_radius * (0.78 + 0.18 * math.cos(math.radians(self._angle_deg))))
@@ -1784,26 +1840,31 @@ class Model3DView(QGraphicsView):
         line_color = QColor(color)
         line_color.setAlpha(210)
         pen = QPen(line_color, 1.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        elbow_x = start[0] + (label_pos[0] - start[0]) * 0.55
-        elbow_y = label_pos[1]
+        font = QFont("Segoe UI", 8)
+        metrics = QFontMetrics(font)
+        width = max(90.0, float(metrics.horizontalAdvance(label)) + 22.0)
+        label_x = min(max(56.0, label_pos[0]), 770.0 - width)
+        label_y = max(96.0, min(526.0, label_pos[1]))
+        elbow_x = start[0] + (label_x - start[0]) * 0.55
+        elbow_y = label_y
         path = QPainterPath()
         path.moveTo(start[0], start[1])
         path.lineTo(elbow_x, start[1])
         path.lineTo(elbow_x, elbow_y)
-        path.lineTo(label_pos[0], label_pos[1])
+        path.lineTo(label_x, label_y)
         scene.addPath(path, pen)
         scene.addEllipse(start[0] - 3.0, start[1] - 3.0, 6.0, 6.0, QPen(line_color, 1.0), QBrush(line_color))
-        metrics = QFontMetrics(QFont("Segoe UI", 8))
-        width = min(184.0, max(86.0, float(metrics.horizontalAdvance(label)) + 20.0))
         height = 25.0
-        box = QRectF(label_pos[0] - 2.0, label_pos[1] - height * 0.5, width, height)
+        box = QRectF(label_x - 2.0, label_y - height * 0.5, width, height)
         box_path = QPainterPath()
         box_path.addRoundedRect(box, 6.0, 6.0)
         box_item = QGraphicsPathItem(box_path)
         box_item.setBrush(QColor("#11151A"))
         box_item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1.0))
         scene.addItem(box_item)
-        self._add_text(scene, label_pos[0] + 8.0, label_pos[1] - 8.0, label, QT_PALETTE["text"], 8, width - 16.0)
+        text_item = scene.addSimpleText(label, font)
+        text_item.setBrush(QColor(QT_PALETTE["text"]))
+        text_item.setPos(label_x + 8.0, label_y - 8.0)
 
     def _add_text(self, scene: QGraphicsScene, x: float, y: float, text: str, color: str, size: int, width: float) -> None:
         item = QGraphicsTextItem(text)
@@ -2062,6 +2123,10 @@ class StanThrustQtWindow(QMainWindow):
                 background: #1B2026;
                 color: #F2F5F3;
                 border-bottom: 2px solid #37A493;
+            }
+            QTabWidget#componentTabs QTabBar::tab {
+                min-width: 126px;
+                padding: 10px 18px;
             }
             QLineEdit, QComboBox, QDoubleSpinBox, QPlainTextEdit, QTableWidget, QGraphicsView {
                 background: #11151A;
@@ -2447,9 +2512,10 @@ class StanThrustQtWindow(QMainWindow):
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         component_tabs = QTabWidget()
-        component_tabs.tabBar().setUsesScrollButtons(True)
-        component_tabs.tabBar().setElideMode(Qt.ElideRight)
-        component_tabs.tabBar().setExpanding(False)
+        component_tabs.setObjectName("componentTabs")
+        component_tabs.tabBar().setUsesScrollButtons(False)
+        component_tabs.tabBar().setElideMode(Qt.ElideNone)
+        component_tabs.tabBar().setExpanding(True)
         for key, label in (
             ("chamber_nozzle", "Chamber/Nozzle"),
             ("pumps", "Pumps"),
