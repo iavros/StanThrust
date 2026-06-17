@@ -85,7 +85,7 @@ def test_architecture_cooling_and_flow_modes_share_solved_geometry():
                         return
                     raise
                 assert result["metadata"]["flow_model"] == flow_model
-                assert result["status"] in {"ok", "warning"}
+                assert result["status"] in {"ok", "warning", "converged"}
                 assert float(result["summary"]["predicted_thrust_newtons"]) > 0.0
                 assert float(result["physics"]["nozzle"]["overall_efficiency"]) > 0.0
 

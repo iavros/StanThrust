@@ -23,12 +23,6 @@ Install the base runtime packages:
 python -m pip install -r requirements.txt
 ```
 
-For the modern Qt UI, also install `PyQt5`:
-
-```powershell
-python -m pip install PyQt5
-```
-
 Run the app:
 
 ```powershell
@@ -37,7 +31,7 @@ python app.py
 
 ## Thermochemistry
 
-StanThrust uses Cantera when available and falls back to conservative approximate estimates when it is not.
+StanThrust uses Cantera as a required supported-install dependency for thermochemistry. The code still contains conservative fallback estimates as a development guard path, but release builds and CI install Cantera.
 
 - Preferred bundled mechanism: `liquid_engine_studio/data/rocket_mech_equilibrium.yaml`
 - Additional bundled mechanisms: `rocket_mech.yaml`, `rocket_mech_minimal.yaml`
@@ -155,8 +149,7 @@ One optional diagnostic helper is included for thermochemistry troubleshooting:
 Install the packaging dependencies before building:
 
 ```bash
-python -m pip install pyinstaller pillow
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-packaging.txt
 ```
 
 Build the single-file Windows executable on Windows:
