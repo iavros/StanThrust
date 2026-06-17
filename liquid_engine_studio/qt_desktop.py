@@ -990,6 +990,7 @@ class Model3DView(QGraphicsView):
         self._angle_deg = -28.0
         self._dragging = False
         self._last_drag_x = 0
+        self._callout_rects: List[QRectF] = []
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         self.setScene(QGraphicsScene(self))
         self.setObjectName("schematicView")
@@ -1038,6 +1039,7 @@ class Model3DView(QGraphicsView):
         scene = self.scene()
         scene.clear()
         scene.setSceneRect(0, 0, 1100, 590)
+        self._callout_rects = []
         bg = QGraphicsRectItem(QRectF(0, 0, 1100, 590))
         bg.setBrush(QColor("#0D0F12"))
         bg.setPen(QPen(QColor("#0D0F12")))
@@ -1372,7 +1374,7 @@ class Model3DView(QGraphicsView):
         title_item = scene.addText(title, QFont("Segoe UI", 13, QFont.Bold))
         title_item.setDefaultTextColor(QColor(QT_PALETTE["text"]))
         title_item.setPos(48, 28)
-        self._add_text(scene, 48, 54, subtitle, QT_PALETTE["muted"], 9, 640)
+        self._add_text(scene, 48, 62, subtitle, QT_PALETTE["muted"], 9, 640)
 
     def _add_round_rect(self, scene: QGraphicsScene, rect: QRectF, radius: float, pen: QPen, brush: QBrush) -> None:
         path = QPainterPath()
@@ -1630,7 +1632,7 @@ class Model3DView(QGraphicsView):
         )
         self._draw_projected_ring(scene, origin, casing_radius, casing_depth * 0.12, QColor(QT_PALETTE["border"]), 96, 1.2)
         self._draw_impeller_mesh(scene, origin, geometry, color)
-        self._add_text(scene, origin[0] - 68, 510, label, QT_PALETTE["text"], 10, 150)
+        self._add_text(scene, origin[0] - 68, 540, label, QT_PALETTE["text"], 10, 150)
 
     def _draw_pump_callouts(
         self,
@@ -1653,9 +1655,9 @@ class Model3DView(QGraphicsView):
             dia_label = (28.0, 352.0)
             eye_label = (28.0, 414.0)
         else:
-            casing_label = (552.0, 118.0)
-            dia_label = (552.0, 352.0)
-            eye_label = (552.0, 414.0)
+            casing_label = (628.0, 118.0)
+            dia_label = (628.0, 352.0)
+            eye_label = (628.0, 414.0)
         self._draw_callout(
             scene,
             (casing_point[0], casing_point[1]),
@@ -1936,6 +1938,10 @@ class Model3DView(QGraphicsView):
         width = max(90.0, float(metrics.horizontalAdvance(label)) + 22.0)
         label_x = min(max(24.0, label_pos[0]), 770.0 - width)
         label_y = max(96.0, min(526.0, label_pos[1]))
+        height = 25.0
+        label_rect = self._place_callout_rect(QRectF(label_x - 2.0, label_y - height * 0.5, width, height))
+        label_x = label_rect.x() + 2.0
+        label_y = label_rect.center().y()
         elbow_x = start[0] + (label_x - start[0]) * 0.55
         elbow_y = label_y
         path = QPainterPath()
@@ -1945,10 +1951,8 @@ class Model3DView(QGraphicsView):
         path.lineTo(label_x, label_y)
         scene.addPath(path, pen)
         scene.addEllipse(start[0] - 3.0, start[1] - 3.0, 6.0, 6.0, QPen(line_color, 1.0), QBrush(line_color))
-        height = 25.0
-        box = QRectF(label_x - 2.0, label_y - height * 0.5, width, height)
         box_path = QPainterPath()
-        box_path.addRoundedRect(box, 6.0, 6.0)
+        box_path.addRoundedRect(label_rect, 6.0, 6.0)
         box_item = QGraphicsPathItem(box_path)
         box_item.setBrush(QColor("#11151A"))
         box_item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1.0))
@@ -1956,6 +1960,28 @@ class Model3DView(QGraphicsView):
         text_item = scene.addSimpleText(label, font)
         text_item.setBrush(QColor(QT_PALETTE["text"]))
         text_item.setPos(label_x + 8.0, label_y - 8.0)
+
+    def _place_callout_rect(self, requested: QRectF) -> QRectF:
+        rect = QRectF(requested)
+        min_y = 92.0
+        max_y = 566.0 - rect.height()
+        padded_existing = [
+            QRectF(existing.x() - 8.0, existing.y() - 8.0, existing.width() + 16.0, existing.height() + 16.0)
+            for existing in self._callout_rects
+        ]
+        for _attempt in range(28):
+            if not any(rect.intersects(existing) for existing in padded_existing):
+                self._callout_rects.append(QRectF(rect))
+                return rect
+            rect.moveTop(min(max_y, rect.y() + rect.height() + 8.0))
+        rect = QRectF(requested)
+        for _attempt in range(28):
+            if not any(rect.intersects(existing) for existing in padded_existing):
+                self._callout_rects.append(QRectF(rect))
+                return rect
+            rect.moveTop(max(min_y, rect.y() - rect.height() - 8.0))
+        self._callout_rects.append(QRectF(rect))
+        return rect
 
     def _add_text(self, scene: QGraphicsScene, x: float, y: float, text: str, color: str, size: int, width: float) -> None:
         item = QGraphicsTextItem(text)
@@ -1966,6 +1992,12 @@ class Model3DView(QGraphicsView):
         item.setPos(x, y)
         scene.addItem(item)
 
+    def _fit_font_size(self, text: str, max_width: float, preferred: int, minimum: int = 7) -> int:
+        for size in range(preferred, minimum - 1, -1):
+            if QFontMetrics(QFont("Segoe UI", size)).horizontalAdvance(text) <= max_width:
+                return size
+        return minimum
+
     def _metric(self, scene: QGraphicsScene, x: float, y: float, label: str, value: str) -> None:
         path = QPainterPath()
         path.addRoundedRect(QRectF(x, y, 244, 46), 8, 8)
@@ -1973,8 +2005,11 @@ class Model3DView(QGraphicsView):
         item.setBrush(QColor("#11151A"))
         item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
         scene.addItem(item)
-        self._add_text(scene, x + 14, y + 8, label, QT_PALETTE["muted"], 8, 70)
-        self._add_text(scene, x + 82, y + 8, value, QT_PALETTE["text"], 9, 142)
+        content_width = 216.0
+        label_size = self._fit_font_size(label, content_width, 8, 7)
+        value_size = self._fit_font_size(value, content_width, 9, 7)
+        self._add_text(scene, x + 14, y + 6, label, QT_PALETTE["muted"], label_size, content_width)
+        self._add_text(scene, x + 14, y + 22, value, QT_PALETTE["text"], value_size, content_width)
 
 
 class StanThrustQtWindow(QMainWindow):
