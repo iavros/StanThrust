@@ -5,6 +5,7 @@ This folder is an Overleaf-ready LaTeX report describing the current StanThrust 
 ## Contents
 
 - `main.tex`: primary report document
+- `StanThrust_Solver_Report.pdf`: checked PDF build of the report
 - `generate_assets.py`: regenerates example CSV data and LaTeX macros from the current solver implementation
 - `data/`: generated plot tables and numeric macros used by the report
 
@@ -47,6 +48,8 @@ The script writes:
 - `data/geometry_breakdown.csv`
 - `data/render_geometry.csv`
 - `data/propellant_breakdown.csv`
+- `data/internal_regression_summary.csv`
+- `data/individual_benchmark_runs.csv`
 - `data/nozzle_loss_breakdown.csv`
 - `data/cooling_sweep.csv`
 - `data/flow_mode_comparison.csv`

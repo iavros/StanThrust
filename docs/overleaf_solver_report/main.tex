@@ -7,6 +7,7 @@
 \usepackage{microtype}
 \usepackage{amsmath,amssymb,mathtools}
 \usepackage{booktabs}
+\usepackage{graphicx}
 \usepackage{siunitx}
 \usepackage{pgfplots}
 \usepackage{pgfplotstable}
@@ -31,9 +32,11 @@
 \input{data/report_macros.tex}
 
 \newcommand{\clip}{\operatorname{clip}}
+\newcommand{\mdot}{\dot{m}}
 \newcommand{\mdotp}{\dot{m}_{p}}
 \newcommand{\mdotf}{\dot{m}_{f}}
 \newcommand{\mdoto}{\dot{m}_{ox}}
+\newcommand{\Rey}{\operatorname{Re}}
 \newcommand{\OF}{\left(\frac{O}{F}\right)}
 
 \title{\textbf{StanThrust Solver Notes}\\\large Detailed Geometry, Feed-System, Cooling, and Quasi-1D Performance Formulation}
@@ -837,7 +840,7 @@ At every time step, the nominal total propellant flow is split by mixture ratio:
 \label{eq:feed-mass-flow-split}
 \end{equation}
 
-Line losses are computed branch by branch with a deterministic Darcy--Weisbach closure:
+Line losses are computed branch by branch with a deterministic Darcy-Weisbach closure:
 \begin{equation}
 \Delta P_{\ell}
 =
@@ -2077,26 +2080,24 @@ Table~\ref{tab:internal-regression} lists the internal baseline cases that StanT
 \caption{Internal StanThrust regression baseline cases and allowable envelopes.}
 \label{tab:internal-regression}
 \scriptsize
+\resizebox{\textwidth}{!}{%
 \pgfplotstabletypeset[
 col sep=comma,
 string type,
-columns={label,calculated_thrust_newtons_observed,calculated_thrust_newtons_min,calculated_thrust_newtons_max,chamber_pressure_kpa_observed,chamber_pressure_kpa_min,chamber_pressure_kpa_max,nozzle_expansion_ratio_observed,nozzle_expansion_ratio_min,nozzle_expansion_ratio_max,total_stack_length_mm_observed,total_stack_length_mm_min,total_stack_length_mm_max},
+columns={label,thrust_n,thrust_range_n,chamber_pressure_kpa,chamber_pressure_range_kpa,expansion_ratio,expansion_ratio_range,stack_length_mm,stack_length_range_mm},
 columns/label/.style={column name=Case},
-columns/calculated_thrust_newtons_observed/.style={column name={$F$ obs [N]}},
-columns/calculated_thrust_newtons_min/.style={column name={$F_{\min}$ [N]}},
-columns/calculated_thrust_newtons_max/.style={column name={$F_{\max}$ [N]}},
-columns/chamber_pressure_kpa_observed/.style={column name={$P_c$ obs [kPa]}},
-columns/chamber_pressure_kpa_min/.style={column name={$P_{c,\min}$ [kPa]}},
-columns/chamber_pressure_kpa_max/.style={column name={$P_{c,\max}$ [kPa]}},
-columns/nozzle_expansion_ratio_observed/.style={column name={$\varepsilon$ obs}},
-columns/nozzle_expansion_ratio_min/.style={column name={$\varepsilon_{\min}$}},
-columns/nozzle_expansion_ratio_max/.style={column name={$\varepsilon_{\max}$}},
-columns/total_stack_length_mm_observed/.style={column name={$L_{\mathrm{stack}}$ obs [mm]}},
-columns/total_stack_length_mm_min/.style={column name={$L_{\min}$ [mm]}},
-columns/total_stack_length_mm_max/.style={column name={$L_{\max}$ [mm]}},
+columns/thrust_n/.style={column name={$F$ [N]}},
+columns/thrust_range_n/.style={column name={$F$ range [N]}},
+columns/chamber_pressure_kpa/.style={column name={$P_c$ [kPa]}},
+columns/chamber_pressure_range_kpa/.style={column name={$P_c$ range [kPa]}},
+columns/expansion_ratio/.style={column name={$\varepsilon$}},
+columns/expansion_ratio_range/.style={column name={$\varepsilon$ range}},
+columns/stack_length_mm/.style={column name={$L_{\mathrm{stack}}$ [mm]}},
+columns/stack_length_range_mm/.style={column name={$L_{\mathrm{stack}}$ range [mm]}},
 every head row/.style={before row=\toprule, after row=\midrule},
 every last row/.style={after row=\bottomrule}
-]{data/internal_regression_baselines.csv}
+]{data/internal_regression_summary.csv}
+}
 \end{table}
 
 The internal table complements the public benchmark rather than replacing it. A solver can drift in subtle ways that do not immediately move the public reconstructions very far, especially when those public cases contain inferred assumptions. The internal baselines therefore provide a tighter local regression gate for thrust level, chamber pressure, expansion ratio, and overall packaging.
@@ -2168,7 +2169,7 @@ Table~\ref{tab:reconstructed-public} lists the public quantities used as benchma
 
 \begin{table}[H]
 \centering
-\caption{Published operating-point anchors used to reconstruct each benchmark engine. Blank fields indicate quantities not reported directly on the public reference page and therefore inferred with Eqs.~\eqref{eq:benchmark-mdot}--\eqref{eq:benchmark-isp} when needed.}
+\caption{Published operating-point anchors used to reconstruct each benchmark engine. Blank fields indicate quantities not reported directly on the public reference page and therefore inferred with Eqs.~\eqref{eq:benchmark-mdot} through \eqref{eq:benchmark-isp} when needed.}
 \label{tab:reconstructed-public}
 \scriptsize
 \pgfplotstabletypeset[
@@ -2213,6 +2214,32 @@ every last row/.style={after row=\bottomrule}
 \item \textbf{Juno.} Public thrust, chamber pressure, mass flow, and $O/F$ are taken directly from [B]. The benchmark state assumes a short \SI{3}{s} firing window and a pressure-fed architecture because the public page does not list those inputs explicitly.
 \item \textbf{Iron Lotus.} Public thrust, chamber pressure, burn duration, and specific impulse are taken from [C]. The pressure-fed assumption and $O/F=4.0$ are guided by the closely related Lotus Dev 2 program [D]. Film cooling is enabled because the public Iron Lotus description explicitly mentions supplemental film cooling.
 \end{itemize}
+
+\subsection*{Individual StanThrust Runs}
+Each public engine is run as its own StanThrust case rather than being reduced to a single scale point. That matters because a static benchmark table can compare thrust and chamber pressure, but it cannot close the missing mass-flow, specific-impulse, nozzle, chamber, and packaging quantities. The individual runs in Table~\ref{tab:individual-runs} report both comparison quality and the amount of solved engineering state produced by the same solver call.
+
+\begin{table}[H]
+\centering
+\caption{Individual reconstructed benchmark runs. The comparable-stat count includes thrust, chamber pressure, mass flow, and specific impulse when a public reference value is available. The solved-field count covers thrust, chamber pressure, mass flow, specific impulse, throat diameter, exit diameter, expansion ratio, chamber length, and total stack length.}
+\label{tab:individual-runs}
+\scriptsize
+\pgfplotstabletypeset[
+col sep=comma,
+string type,
+columns={engine,comparable_stats,mean_abs_error_percent,max_abs_error_percent,solved_expansion_ratio,solved_stack_length_mm,solved_field_count},
+columns/engine/.style={column name=Engine},
+columns/comparable_stats/.style={column name={Compared stats}},
+columns/mean_abs_error_percent/.style={column name={Mean abs. error [\%]}},
+columns/max_abs_error_percent/.style={column name={Max abs. error [\%]}},
+columns/solved_expansion_ratio/.style={column name={Solved $\varepsilon$}},
+columns/solved_stack_length_mm/.style={column name={$L_{\mathrm{stack}}$ [mm]}},
+columns/solved_field_count/.style={column name={Solved fields}},
+every head row/.style={before row=\toprule, after row=\midrule},
+every last row/.style={after row=\bottomrule}
+]{data/individual_benchmark_runs.csv}
+\end{table}
+
+This is where the reconstructed StanThrust cases are more useful than a flat reference list. The solver does not simply restate the published thrust. It builds a full engine state, exposes which values are directly comparable, and leaves a reproducible trail of derived geometry that can be checked again after future code changes.
 
 \subsection*{Reconstructed Operating-Point Comparison}
 Figure~\ref{fig:reconstructed-parity} compares the published and reconstructed StanThrust operating points. The purpose of this plot is not to claim exact duplication of the student engines; instead, it shows whether the reduced-order model lands in the correct performance neighborhood once the public hardware is translated into the StanThrust input vocabulary.

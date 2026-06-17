@@ -1,9 +1,5 @@
 """Benchmark reconstruction and regression checks."""
 
-import sys
-
-sys.path.insert(0, r"E:/LIQUID_ENGINE")
-
 from liquid_engine_studio.benchmark_cases import (
     build_internal_baseline_rows,
     build_public_benchmark_reference_rows,

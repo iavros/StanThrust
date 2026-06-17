@@ -48,6 +48,17 @@ def write_csv(path: Path, fieldnames, rows) -> None:
             writer.writerow(row)
 
 
+def make_pgfplots_safe_rows(rows, text_fields):
+    safe_rows = []
+    for row in rows:
+        safe_row = dict(row)
+        for field in text_fields:
+            if field in safe_row and safe_row[field] is not None:
+                safe_row[field] = str(safe_row[field]).replace(",", ";")
+        safe_rows.append(safe_row)
+    return safe_rows
+
+
 def write_macros(path: Path, macros) -> None:
     lines = []
     for name, value in macros.items():
@@ -215,6 +226,79 @@ def build_render_geometry_rows(values):
                 }
             )
     return rows
+
+
+def build_internal_regression_summary_rows(rows):
+    def value_range(row, low_key, high_key, precision=1):
+        low = float(row.get(low_key, 0.0) or 0.0)
+        high = float(row.get(high_key, 0.0) or 0.0)
+        return "{0:.{2}f} to {1:.{2}f}".format(low, high, precision)
+
+    summary_rows = []
+    for row in rows:
+        summary_rows.append(
+            {
+                "label": row["label"],
+                "thrust_n": round(float(row["calculated_thrust_newtons_observed"]), 1),
+                "thrust_range_n": value_range(
+                    row,
+                    "calculated_thrust_newtons_min",
+                    "calculated_thrust_newtons_max",
+                    1,
+                ),
+                "chamber_pressure_kpa": round(float(row["chamber_pressure_kpa_observed"]), 1),
+                "chamber_pressure_range_kpa": value_range(
+                    row,
+                    "chamber_pressure_kpa_min",
+                    "chamber_pressure_kpa_max",
+                    1,
+                ),
+                "expansion_ratio": round(float(row["nozzle_expansion_ratio_observed"]), 2),
+                "expansion_ratio_range": value_range(
+                    row,
+                    "nozzle_expansion_ratio_min",
+                    "nozzle_expansion_ratio_max",
+                    1,
+                ),
+                "stack_length_mm": round(float(row["total_stack_length_mm_observed"]), 1),
+                "stack_length_range_mm": value_range(
+                    row,
+                    "total_stack_length_mm_min",
+                    "total_stack_length_mm_max",
+                    1,
+                ),
+            }
+        )
+    return summary_rows
+
+
+def build_individual_benchmark_run_rows(rows):
+    comparable_fields = [
+        "thrust_error_percent",
+        "chamber_pressure_error_percent",
+        "mass_flow_error_percent",
+        "isp_error_percent",
+    ]
+    solved_field_count = 9
+    summary_rows = []
+    for row in rows:
+        errors = []
+        for field in comparable_fields:
+            value = row.get(field, "")
+            if value not in ("", None):
+                errors.append(abs(float(value)))
+        summary_rows.append(
+            {
+                "engine": row["engine"],
+                "comparable_stats": len(errors),
+                "mean_abs_error_percent": "" if not errors else round(sum(errors) / len(errors), 2),
+                "max_abs_error_percent": "" if not errors else round(max(errors), 2),
+                "solved_expansion_ratio": round(float(row["generated_expansion_ratio"]), 2),
+                "solved_stack_length_mm": round(float(row["generated_total_length_mm"]), 1),
+                "solved_field_count": solved_field_count,
+            }
+        )
+    return summary_rows
 
 
 def build_propellant_breakdown_rows(values):
@@ -470,7 +554,7 @@ def main() -> None:
             "source_url",
             "assumptions_note",
         ],
-        public_reference_rows,
+        make_pgfplots_safe_rows(public_reference_rows, ["assumptions_note"]),
     )
     internal_baseline_rows = build_internal_baseline_rows()
     write_csv(
@@ -502,6 +586,21 @@ def main() -> None:
             "thermal_margin_index_max",
         ],
         internal_baseline_rows,
+    )
+    write_csv(
+        DATA_DIR / "internal_regression_summary.csv",
+        [
+            "label",
+            "thrust_n",
+            "thrust_range_n",
+            "chamber_pressure_kpa",
+            "chamber_pressure_range_kpa",
+            "expansion_ratio",
+            "expansion_ratio_range",
+            "stack_length_mm",
+            "stack_length_range_mm",
+        ],
+        build_internal_regression_summary_rows(internal_baseline_rows),
     )
     reconstructed_rows = build_reconstructed_benchmark_rows(
         assumptions,
@@ -541,7 +640,20 @@ def main() -> None:
             "source_label",
             "source_url",
         ],
-        reconstructed_rows,
+        make_pgfplots_safe_rows(reconstructed_rows, ["assumptions_note"]),
+    )
+    write_csv(
+        DATA_DIR / "individual_benchmark_runs.csv",
+        [
+            "engine",
+            "comparable_stats",
+            "mean_abs_error_percent",
+            "max_abs_error_percent",
+            "solved_expansion_ratio",
+            "solved_stack_length_mm",
+            "solved_field_count",
+        ],
+        build_individual_benchmark_run_rows(reconstructed_rows),
     )
 
     macros = {
