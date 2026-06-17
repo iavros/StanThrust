@@ -5,6 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 project_root = Path.cwd()
 icon_path = project_root / "app_icon.icns"
+APP_VERSION = "0.1.0"
 cantera_datas = collect_data_files("cantera")
 cantera_binaries = collect_dynamic_libs("cantera")
 
@@ -103,4 +104,9 @@ app = BUNDLE(
     name="StanThrust.app",
     icon=str(icon_path) if icon_path.exists() else None,
     bundle_identifier="edu.stanford.stanthrust",
+    info_plist={
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
+        "NSHumanReadableCopyright": "Copyright StanThrust",
+    },
 )

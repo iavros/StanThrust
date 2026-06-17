@@ -273,6 +273,8 @@ class TestQtInputPreservation:
             window.refresh_preview()
 
             original_state = window.collect_form_state()
+            assert window.widgets["packaging_bias"].currentText() == "Balanced"
+            assert original_state["packaging_bias"] == "balanced"
 
             fake_result = GeneticAlgorithmResult(
                 best_score=9.99,

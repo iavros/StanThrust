@@ -1,5 +1,6 @@
 import math
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -79,25 +80,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGO_PNG_PATH = PROJECT_ROOT / "Logo.png"
 
 QT_PALETTE = {
-    "bg": "#08090B",
-    "panel": "#101317",
-    "card": "#171B21",
-    "card_alt": "#1D232B",
-    "input": "#0C1015",
-    "border": "#2B323A",
-    "border_soft": "#20262D",
-    "text": "#F5F1EA",
-    "muted": "#AB9F93",
-    "muted_soft": "#746B63",
-    "accent": "#C51E35",
-    "accent_hover": "#DE324A",
-    "accent_dark": "#8B1524",
-    "success": "#7FCB8A",
-    "warning": "#D7A854",
-    "danger": "#E27566",
-    "fuel": "#D6A15D",
-    "oxidizer": "#E05564",
-    "cooling": "#E5C46D",
+    "bg": "#0D0F12",
+    "panel": "#15181D",
+    "card": "#1B2026",
+    "card_alt": "#20272E",
+    "input": "#11151A",
+    "border": "#343B44",
+    "border_soft": "#252B33",
+    "text": "#F2F5F3",
+    "muted": "#A9B2AD",
+    "muted_soft": "#747E7A",
+    "accent": "#2B8C7E",
+    "accent_hover": "#37A493",
+    "accent_dark": "#17685D",
+    "success": "#6FCF97",
+    "warning": "#E0A94B",
+    "danger": "#E76F51",
+    "fuel": "#E1A955",
+    "oxidizer": "#6DB4F2",
+    "cooling": "#55C2A2",
 }
 
 
@@ -148,6 +149,13 @@ FLOW_MODEL_DISPLAY_NAMES = {
 def _display_injector_name(value: str) -> str:
     normalized = str(value or "").strip().lower()
     return INJECTOR_DISPLAY_NAMES.get(normalized, str(value or ""))
+
+
+def _display_option_name(value: object) -> str:
+    text = str(value or "")
+    if text and text == text.lower():
+        return text.replace("_", " ").replace("-", " ").title()
+    return text
 
 
 def _as_float(value: object, fallback: float = 0.0) -> float:
@@ -230,6 +238,16 @@ class StatusBanner(QFrame):
         self.chip.style().polish(self.chip)
         self.title.setText(title)
         self.message.setText(message)
+
+
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        event.ignore()
 
 
 class EngineeringPlotCanvas(QWidget):
@@ -315,7 +333,7 @@ class EngineeringPlotCanvas(QWidget):
         painter.setRenderHint(QPainter.TextAntialiasing)
 
         outer = self.rect().adjusted(0, 0, -1, -1)
-        painter.fillRect(outer, QColor("#0C1015"))
+        painter.fillRect(outer, QColor("#11151A"))
 
         left_margin = 54
         right_margin = 58 if self._secondary_series else 18
@@ -504,16 +522,16 @@ class SchematicView(QGraphicsView):
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         self.setScene(QGraphicsScene(self))
         self.setObjectName("schematicView")
-        self.setMinimumHeight(420)
+        self.setMinimumHeight(460)
 
     def render_design(self, design) -> None:
         scene = self.scene()
         scene.clear()
-        scene.setSceneRect(0, 0, 1100, 560)
+        scene.setSceneRect(0, 0, 1100, 620)
 
-        bg = QGraphicsRectItem(QRectF(0, 0, 1100, 560))
-        bg.setBrush(QColor("#0A0D11"))
-        bg.setPen(QPen(QColor("#0A0D11")))
+        bg = QGraphicsRectItem(QRectF(0, 0, 1100, 620))
+        bg.setBrush(QColor("#0D0F12"))
+        bg.setPen(QPen(QColor("#0D0F12")))
         scene.addItem(bg)
 
         self._add_text(scene, 48, 28, "Propellant Stack", QT_PALETTE["text"], 12, True)
@@ -524,7 +542,7 @@ class SchematicView(QGraphicsView):
 
         self._add_round_rect(scene, 38, 82, 246, 352, QT_PALETTE["card_alt"])
         self._add_round_rect(scene, 312, 126, 188, 196, QT_PALETTE["card"])
-        self._add_round_rect(scene, 526, 82, 534, 352, QT_PALETTE["card"])
+        self._add_round_rect(scene, 526, 82, 534, 426, QT_PALETTE["card"])
 
         self._add_tag(scene, 58, 100, "OXIDIZER")
         self._add_tag(scene, 58, 242, "FUEL")
@@ -656,7 +674,7 @@ class SchematicView(QGraphicsView):
         cooling_color = QT_PALETTE["cooling"] if design.inputs.regen_cooling else QT_PALETTE["accent_hover"] if design.inputs.film_cooling else QT_PALETTE["muted"]
         self._add_metric_pill(scene, 852, 146, cooling_text, cooling_color, 176)
 
-        profile = self._draw_engine_profile(scene, design, 560, 208, 408, 138)
+        profile = self._draw_engine_profile(scene, design, 560, 244, 408, 150)
 
         ox_pen = QPen(QColor(QT_PALETTE["oxidizer"]), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         fuel_pen = QPen(QColor(QT_PALETTE["fuel"]), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -694,7 +712,7 @@ class SchematicView(QGraphicsView):
         self._add_metric_pill(
             scene,
             544,
-            388,
+            470,
             "Max dia {0} mm".format(_format_number(float(design.derived.maximum_diameter_mm), 2)),
             QT_PALETTE["text"],
             162,
@@ -702,7 +720,7 @@ class SchematicView(QGraphicsView):
         self._add_metric_pill(
             scene,
             718,
-            388,
+            470,
             "Thrust {0} N".format(_format_number(float(design.derived.engineering_values.get("calculated_thrust_newtons", 0.0)), 2)),
             QT_PALETTE["text"],
             170,
@@ -710,7 +728,7 @@ class SchematicView(QGraphicsView):
         self._add_metric_pill(
             scene,
             900,
-            388,
+            470,
             "Chamber {0} kPa".format(_format_number(float(design.derived.engineering_values.get("chamber_pressure_kpa", 0.0)), 2)),
             QT_PALETTE["text"],
             144,
@@ -788,7 +806,7 @@ class SchematicView(QGraphicsView):
         path = QPainterPath()
         path.addRoundedRect(QRectF(x, y, 102, 28), 12, 12)
         rect = QGraphicsPathItem(path)
-        rect.setBrush(QColor("#141920"))
+        rect.setBrush(QColor("#20272E"))
         rect.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
         scene.addItem(rect)
         self._add_text(scene, x + 16, y + 6, text, QT_PALETTE["muted"], 8, True)
@@ -822,7 +840,7 @@ class SchematicView(QGraphicsView):
         path = QPainterPath()
         path.addRoundedRect(QRectF(x, y, width, 34), 16, 16)
         item = QGraphicsPathItem(path)
-        item.setBrush(QColor("#12161C"))
+        item.setBrush(QColor("#11151A"))
         item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
         scene.addItem(item)
         accent = scene.addRect(x + 8, y + 8, 8, 18, QPen(QColor(color)), QBrush(QColor(color)))
@@ -912,7 +930,6 @@ class SchematicView(QGraphicsView):
         throat_pen = QPen(QColor(QT_PALETTE["accent_hover"]), 2, Qt.DashLine)
         throat_radius_px = (throat_diameter_mm / 2.0) * scale_y
         scene.addLine(throat_x, center_y - throat_radius_px - 16, throat_x, center_y + throat_radius_px + 16, throat_pen)
-        self._add_text(scene, throat_x + 10, center_y - throat_radius_px - 24, "Throat", QT_PALETTE["accent_hover"], 7, True, max_width=52)
 
         exit_x = chamber_end_x + nozzle_length_mm * scale_x
         self._add_dimension_line(scene, chamber_start_x, chamber_end_x, y + height + 10, "Chamber {0} mm".format(_format_number(chamber_length_mm, 2)))
@@ -939,8 +956,9 @@ class SchematicView(QGraphicsView):
 
 
 class Model3DView(QGraphicsView):
-    def __init__(self) -> None:
+    def __init__(self, view_mode: str = "chamber_nozzle") -> None:
         super().__init__()
+        self.view_mode = view_mode
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         self.setScene(QGraphicsScene(self))
         self.setObjectName("schematicView")
@@ -951,14 +969,25 @@ class Model3DView(QGraphicsView):
         scene.clear()
         scene.setSceneRect(0, 0, 1100, 560)
         bg = QGraphicsRectItem(QRectF(0, 0, 1100, 560))
-        bg.setBrush(QColor("#090C10"))
-        bg.setPen(QPen(QColor("#090C10")))
+        bg.setBrush(QColor("#0D0F12"))
+        bg.setPen(QPen(QColor("#0D0F12")))
         scene.addItem(bg)
 
-        title_item = scene.addText("3D Engine Model", QFont("Segoe UI", 13, QFont.Bold))
-        title_item.setDefaultTextColor(QColor(QT_PALETTE["text"]))
-        title_item.setPos(48, 28)
-        self._add_text(scene, 48, 52, "Live revolved preview from the solved chamber, throat, nozzle, and cooling envelope.", QT_PALETTE["muted"], 9, 520)
+        if self.view_mode == "pumps":
+            self._draw_pumps(scene, design)
+        elif self.view_mode == "injector":
+            self._draw_injector(scene, design)
+        elif self.view_mode == "tanks":
+            self._draw_tanks(scene, design)
+        else:
+            self._draw_chamber_nozzle(scene, design)
+
+    def _draw_chamber_nozzle(self, scene: QGraphicsScene, design) -> None:
+        self._component_title(
+            scene,
+            "Chamber And Nozzle",
+            "Solved combustion chamber, throat, MOC-informed bell contour, and cooling envelope.",
+        )
 
         profile = build_revolved_profile_points(design)
         if len(profile) < 2:
@@ -967,9 +996,9 @@ class Model3DView(QGraphicsView):
 
         max_x = max(point[0] for point in profile)
         max_radius = max(point[1] for point in profile)
-        scale = min(760.0 / max(1.0, max_x), 185.0 / max(1.0, max_radius))
-        origin_x = 150.0
-        origin_y = 310.0
+        scale = min(700.0 / max(1.0, max_x), 215.0 / max(1.0, max_radius))
+        origin_x = 86.0
+        origin_y = 318.0
         tilt_rad = math.radians(24.0)
         yaw_rad = math.radians(-28.0)
         cos_tilt = math.cos(tilt_rad)
@@ -1037,12 +1066,172 @@ class Model3DView(QGraphicsView):
         values = dict(design.derived.engineering_values)
         throat_diameter = _format_number(values.get("nozzle_throat_diameter_mm", "--"), 2)
         exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
-        length = _format_number(design.derived.total_stack_length_mm, 2)
+        length = _format_number(float(design.derived.chamber_length_mm) + float(design.derived.nozzle_length_mm), 2)
         contour = str(values.get("nozzle_contour_method_label", "Nozzle contour"))
         self._metric(scene, 790, 104, "Length", f"{length} mm")
         self._metric(scene, 790, 166, "Throat", f"{throat_diameter} mm")
         self._metric(scene, 790, 228, "Exit", f"{exit_diameter} mm")
         self._metric(scene, 790, 290, "Contour", contour)
+        cooling = "Regen" if design.inputs.regen_cooling else "Film" if design.inputs.film_cooling else "Passive"
+        self._metric(scene, 790, 352, "Cooling", cooling)
+
+        injector_x = origin_x - 18
+        injector_y = origin_y
+        flange_pen = QPen(QColor(QT_PALETTE["border"]), 2)
+        flange_brush = QBrush(QColor("#20272E"))
+        scene.addEllipse(injector_x - 18, injector_y - 52, 36, 104, flange_pen, flange_brush)
+        self._add_text(scene, injector_x - 20, injector_y + 74, "Injector flange", QT_PALETTE["muted"], 8, 118)
+
+    def _draw_tanks(self, scene: QGraphicsScene, design) -> None:
+        self._component_title(
+            scene,
+            "Propellant Tanks",
+            "Separate oxidizer and fuel tank envelopes with wall, diameter, and length references.",
+        )
+        values = dict(design.derived.engineering_values)
+        tank_diameter = float(design.inputs.tank_diameter_mm)
+        ox_length = float(design.derived.oxidizer_tank_length_mm)
+        fuel_length = float(design.derived.fuel_tank_length_mm)
+        max_length = max(1.0, ox_length, fuel_length)
+        max_diameter = max(1.0, tank_diameter)
+        scale_x = min(650.0 / max_length, 1.4)
+        scale_y = min(150.0 / max_diameter, 2.3)
+        diameter_px = max(42.0, tank_diameter * scale_y)
+        ox_width = max(140.0, ox_length * scale_x)
+        fuel_width = max(140.0, fuel_length * scale_x)
+
+        self._draw_cylinder(scene, 84, 176, ox_width, diameter_px, QT_PALETTE["oxidizer"])
+        self._draw_cylinder(scene, 84, 354, fuel_width, diameter_px, QT_PALETTE["fuel"])
+        self._add_text(scene, 84, 132, "Oxidizer Tank", QT_PALETTE["text"], 12, 260)
+        self._add_text(scene, 84, 310, "Fuel Tank", QT_PALETTE["text"], 12, 260)
+        self._metric(scene, 790, 104, "Ox Length", "{0} mm".format(_format_number(ox_length, 2)))
+        self._metric(scene, 790, 166, "Fuel Length", "{0} mm".format(_format_number(fuel_length, 2)))
+        self._metric(scene, 790, 228, "Diameter", "{0} mm".format(_format_number(tank_diameter, 2)))
+        self._metric(scene, 790, 290, "Fuel Wall", "{0} mm".format(_format_number(values.get("fuel_tank_wall_thickness_mm", "--"), 2)))
+        self._metric(scene, 790, 352, "Ox Wall", "{0} mm".format(_format_number(values.get("oxidizer_tank_wall_thickness_mm", "--"), 2)))
+
+    def _draw_pumps(self, scene: QGraphicsScene, design) -> None:
+        self._component_title(
+            scene,
+            "Feed Hardware",
+            "Pumps are isolated from tanks and injector so their architecture is easier to inspect.",
+        )
+        values = dict(design.derived.engineering_values)
+        if not design.inputs.use_pumps:
+            self._add_text(scene, 86, 176, "Pressure-fed architecture selected.", QT_PALETTE["text"], 15, 420)
+            self._draw_regulator(scene, 148, 278)
+            self._metric(scene, 790, 104, "Fuel Tank", "{0} kPa".format(_format_number(values.get("fuel_tank_pressure_kpa", "--"), 2)))
+            self._metric(scene, 790, 166, "Ox Tank", "{0} kPa".format(_format_number(values.get("oxidizer_tank_pressure_kpa", "--"), 2)))
+            self._metric(scene, 790, 228, "Mode", "Blowdown")
+            return
+
+        fuel_impeller = _safe_float(values.get("fuel_impeller_diameter_mm"), 42.0) or 42.0
+        ox_impeller = _safe_float(values.get("oxidizer_impeller_diameter_mm"), 45.0) or 45.0
+        fuel_radius = max(42.0, min(96.0, fuel_impeller * 1.1))
+        ox_radius = max(42.0, min(96.0, ox_impeller * 1.1))
+        self._draw_pump(scene, 210, 236, fuel_radius, QT_PALETTE["fuel"], "Fuel Pump")
+        self._draw_pump(scene, 482, 236, ox_radius, QT_PALETTE["oxidizer"], "Ox Pump")
+        self._add_round_rect(scene, QRectF(316, 344, 220, 78), 8, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#20272E")))
+        self._add_text(scene, 348, 368, "Electric Motor", QT_PALETTE["text"], 12, 160)
+        shaft_pen = QPen(QColor(QT_PALETTE["muted"]), 5, Qt.SolidLine, Qt.RoundCap)
+        scene.addLine(272, 306, 334, 370, shaft_pen)
+        scene.addLine(548, 306, 524, 370, shaft_pen)
+        self._metric(scene, 790, 104, "Fuel Impeller", "{0} mm".format(_format_number(fuel_impeller, 2)))
+        self._metric(scene, 790, 166, "Ox Impeller", "{0} mm".format(_format_number(ox_impeller, 2)))
+        self._metric(scene, 790, 228, "Pump Head", "{0} kPa".format(_format_number(values.get("pump_differential_pressure_kpa", "--"), 2)))
+        self._metric(scene, 790, 290, "Motor", "{0} kW".format(_format_number(values.get("electric_motor_power_kw", "--"), 3)))
+
+    def _draw_injector(self, scene: QGraphicsScene, design) -> None:
+        self._component_title(
+            scene,
+            "Injector",
+            "Standalone injector face preview from the selected injector family and mixture-ratio sizing.",
+        )
+        values = dict(design.derived.engineering_values)
+        center = QPointF(356, 292)
+        outer_radius = 148.0
+        scene.addEllipse(
+            center.x() - outer_radius,
+            center.y() - outer_radius,
+            outer_radius * 2.0,
+            outer_radius * 2.0,
+            QPen(QColor(QT_PALETTE["border"]), 3),
+            QBrush(QColor("#20272E")),
+        )
+        scene.addEllipse(
+            center.x() - 106,
+            center.y() - 106,
+            212,
+            212,
+            QPen(QColor(QT_PALETTE["border_soft"]), 1),
+            QBrush(QColor("#15181D")),
+        )
+        injector_type = str(design.inputs.injector_type).strip().lower()
+        if injector_type == "pintle":
+            scene.addEllipse(center.x() - 34, center.y() - 34, 68, 68, QPen(QColor(QT_PALETTE["fuel"]), 2), QBrush(QColor(QT_PALETTE["fuel"])))
+            for index in range(24):
+                angle = 2.0 * math.pi * index / 24.0
+                x = center.x() + math.cos(angle) * 86.0
+                y = center.y() + math.sin(angle) * 86.0
+                scene.addEllipse(x - 7, y - 7, 14, 14, QPen(QColor(QT_PALETTE["oxidizer"])), QBrush(QColor(QT_PALETTE["oxidizer"])))
+        else:
+            for ring_radius, count, color in (
+                (44.0, 10, QT_PALETTE["fuel"]),
+                (78.0, 18, QT_PALETTE["oxidizer"]),
+                (112.0, 26, QT_PALETTE["fuel"]),
+            ):
+                for index in range(count):
+                    angle = 2.0 * math.pi * index / float(count)
+                    x = center.x() + math.cos(angle) * ring_radius
+                    y = center.y() + math.sin(angle) * ring_radius
+                    scene.addEllipse(x - 5, y - 5, 10, 10, QPen(QColor(color)), QBrush(QColor(color)))
+        self._add_text(scene, 248, 466, _display_injector_name(injector_type), QT_PALETTE["text"], 13, 220)
+        self._metric(scene, 790, 104, "Injector", _display_injector_name(injector_type))
+        self._metric(scene, 790, 166, "Mixture Ratio", _format_number(float(design.inputs.mixture_ratio), 3))
+        self._metric(scene, 790, 228, "Chamber Pc", "{0} kPa".format(_format_number(values.get("chamber_pressure_kpa", "--"), 2)))
+        self._metric(scene, 790, 290, "Drop", "{0} kPa".format(_format_number(values.get("injector_pressure_drop_kpa", "--"), 2)))
+
+    def _component_title(self, scene: QGraphicsScene, title: str, subtitle: str) -> None:
+        title_item = scene.addText(title, QFont("Segoe UI", 13, QFont.Bold))
+        title_item.setDefaultTextColor(QColor(QT_PALETTE["text"]))
+        title_item.setPos(48, 28)
+        self._add_text(scene, 48, 54, subtitle, QT_PALETTE["muted"], 9, 640)
+
+    def _add_round_rect(self, scene: QGraphicsScene, rect: QRectF, radius: float, pen: QPen, brush: QBrush) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setBrush(brush)
+        scene.addItem(item)
+
+    def _draw_cylinder(self, scene: QGraphicsScene, x: float, y: float, width: float, height: float, color: str) -> None:
+        body_rect = QRectF(x + height * 0.25, y, width, height)
+        fill = QColor(color)
+        fill.setAlphaF(0.68)
+        self._add_round_rect(scene, body_rect, height * 0.16, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(fill))
+        scene.addEllipse(x, y, height * 0.5, height, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#15181D")))
+        scene.addEllipse(x + width, y, height * 0.5, height, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(fill))
+        highlight = QPen(QColor("#FFFFFF"), 1)
+        highlight.setColor(QColor(255, 255, 255, 42))
+        scene.addLine(x + height * 0.42, y + height * 0.22, x + width + height * 0.16, y + height * 0.22, highlight)
+
+    def _draw_pump(self, scene: QGraphicsScene, cx: float, cy: float, radius: float, color: str, label: str) -> None:
+        scene.addEllipse(cx - radius, cy - radius, radius * 2.0, radius * 2.0, QPen(QColor(QT_PALETTE["border"]), 3), QBrush(QColor("#20272E")))
+        scene.addEllipse(cx - radius * 0.54, cy - radius * 0.54, radius * 1.08, radius * 1.08, QPen(QColor(color), 2), QBrush(QColor("#15181D")))
+        blade_pen = QPen(QColor(color), 6, Qt.SolidLine, Qt.RoundCap)
+        for index in range(6):
+            angle = 2.0 * math.pi * index / 6.0
+            start = QPointF(cx + math.cos(angle) * radius * 0.18, cy + math.sin(angle) * radius * 0.18)
+            end = QPointF(cx + math.cos(angle + 0.55) * radius * 0.72, cy + math.sin(angle + 0.55) * radius * 0.72)
+            scene.addLine(QLineF(start, end), blade_pen)
+        self._add_text(scene, cx - 66, cy + radius + 18, label, QT_PALETTE["text"], 11, 150)
+
+    def _draw_regulator(self, scene: QGraphicsScene, x: float, y: float) -> None:
+        self._add_round_rect(scene, QRectF(x, y, 240, 88), 8, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#20272E")))
+        scene.addEllipse(x + 28, y + 20, 48, 48, QPen(QColor(QT_PALETTE["accent_hover"]), 2), QBrush(QColor("#15181D")))
+        scene.addLine(x + 76, y + 44, x + 194, y + 44, QPen(QColor(QT_PALETTE["muted"]), 3, Qt.SolidLine, Qt.RoundCap))
+        self._add_text(scene, x + 92, y + 30, "Regulated Feed", QT_PALETTE["text"], 11, 130)
 
     def _add_text(self, scene: QGraphicsScene, x: float, y: float, text: str, color: str, size: int, width: float) -> None:
         item = QGraphicsTextItem(text)
@@ -1057,7 +1246,7 @@ class Model3DView(QGraphicsView):
         path = QPainterPath()
         path.addRoundedRect(QRectF(x, y, 244, 46), 8, 8)
         item = QGraphicsPathItem(path)
-        item.setBrush(QColor("#11161D"))
+        item.setBrush(QColor("#11151A"))
         item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
         scene.addItem(item)
         self._add_text(scene, x + 14, y + 8, label, QT_PALETTE["muted"], 8, 70)
@@ -1096,12 +1285,18 @@ class StanThrustQtWindow(QMainWindow):
         self.status_banner: Optional[StatusBanner] = None
         self.schematic_view: Optional[SchematicView] = None
         self.model_3d_view: Optional[Model3DView] = None
+        self.model_3d_views: Dict[str, Model3DView] = {}
         self.ga_status_label: Optional[QLabel] = None
         self.cfd_status_label: Optional[QLabel] = None
         self.solver_stage_label: Optional[QLabel] = None
         self.solver_residual_label: Optional[QLabel] = None
         self.export_status_label: Optional[QLabel] = None
         self.progress_bar: Optional[QProgressBar] = None
+        self.step_progress_bars: Dict[str, QProgressBar] = {}
+        self.step_status_labels: Dict[str, QLabel] = {}
+        self.solver_log_lines: List[str] = []
+        self.diagnostic_snapshot_lines: List[str] = []
+        self.solver_error_counter = 0
         self.result_cards: Dict[str, MetricCard] = {}
         self.cfd_cards: Dict[str, MetricCard] = {}
         self.preview_timer = QTimer(self)
@@ -1117,57 +1312,54 @@ class StanThrustQtWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow, QWidget {
-                background: #08090B;
-                color: #F5F1EA;
+                background: #0D0F12;
+                color: #F2F5F3;
                 font-family: "Segoe UI";
                 font-size: 10pt;
             }
+            QLabel, QCheckBox, QRadioButton {
+                background: transparent;
+            }
             QFrame#panel, QFrame#card, QGroupBox {
-                background: #101317;
-                border: 1px solid #20262D;
-                border-radius: 20px;
+                background: #15181D;
+                border: 1px solid #252B33;
+                border-radius: 8px;
             }
             QFrame#card {
-                background: #171B21;
-                border: 1px solid #2B323A;
+                background: #1B2026;
+                border: 1px solid #343B44;
             }
             QFrame#heroBrand {
-                background: #171B21;
-                border: 1px solid #2B323A;
-                border-radius: 24px;
+                background: #1B2026;
+                border: 1px solid #343B44;
+                border-radius: 8px;
             }
             QLabel#logoTitle {
-                color: #F5F1EA;
+                color: #F2F5F3;
                 font-size: 24pt;
                 font-weight: 700;
             }
             QLabel#logoSubtitle {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 9pt;
                 font-weight: 700;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
             }
             QLabel#sectionKicker {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 8.5pt;
                 font-weight: 700;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
             }
             QLabel#eyebrow {
-                color: #E05564;
+                color: #55C2A2;
                 font-size: 9pt;
                 font-weight: 700;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
             }
             QLabel#heroTitle {
                 font-size: 28pt;
                 font-weight: 700;
             }
             QLabel#heroBody {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 10pt;
             }
             QLabel#sectionTitle {
@@ -1175,11 +1367,11 @@ class StanThrustQtWindow(QMainWindow):
                 font-weight: 700;
             }
             QLabel#sectionBody, QLabel#helperLabel {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 9pt;
             }
             QLabel#fieldLabel {
-                color: #F5F1EA;
+                color: #F2F5F3;
                 font-size: 9pt;
                 font-weight: 700;
                 padding-bottom: 2px;
@@ -1189,44 +1381,44 @@ class StanThrustQtWindow(QMainWindow):
                 font-weight: 700;
             }
             QLabel#statusMessage {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 10pt;
             }
             QLabel#statusChip[tone="ready"] {
-                background: #1D232B;
-                color: #AB9F93;
-                border-radius: 12px;
+                background: #20272E;
+                color: #A9B2AD;
+                border-radius: 6px;
                 padding: 4px 10px;
                 font-weight: 700;
             }
             QLabel#statusChip[tone="feasible"] {
-                background: rgba(127, 203, 138, 0.15);
-                color: #7FCB8A;
-                border-radius: 12px;
+                background: rgba(111, 207, 151, 0.16);
+                color: #6FCF97;
+                border-radius: 6px;
                 padding: 4px 10px;
                 font-weight: 700;
             }
             QLabel#statusChip[tone="warning"] {
-                background: rgba(215, 168, 84, 0.15);
-                color: #D7A854;
-                border-radius: 12px;
+                background: rgba(224, 169, 75, 0.16);
+                color: #E0A94B;
+                border-radius: 6px;
                 padding: 4px 10px;
                 font-weight: 700;
             }
             QLabel#statusChip[tone="needs-work"] {
-                background: rgba(226, 117, 102, 0.15);
-                color: #E27566;
-                border-radius: 12px;
+                background: rgba(231, 111, 81, 0.16);
+                color: #E76F51;
+                border-radius: 6px;
                 padding: 4px 10px;
                 font-weight: 700;
             }
             QFrame#metricCard {
-                background: #171B21;
-                border: 1px solid #2B323A;
-                border-radius: 16px;
+                background: #1B2026;
+                border: 1px solid #343B44;
+                border-radius: 8px;
             }
             QLabel#metricTitle {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 9pt;
                 font-weight: 700;
             }
@@ -1235,39 +1427,39 @@ class StanThrustQtWindow(QMainWindow):
                 font-weight: 700;
             }
             QLabel#metricUnit {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 10pt;
                 padding-top: 10px;
             }
             QLabel#metricDetail {
-                color: #AB9F93;
+                color: #A9B2AD;
                 font-size: 9pt;
             }
             QPushButton {
-                background: #171B21;
-                border: 1px solid #2B323A;
-                border-radius: 14px;
+                background: #1B2026;
+                border: 1px solid #343B44;
+                border-radius: 6px;
                 padding: 10px 14px;
                 font-weight: 700;
             }
             QPushButton:hover {
-                border-color: #DE324A;
+                border-color: #37A493;
             }
             QPushButton#primary {
-                background: #C51E35;
-                border-color: #C51E35;
+                background: #2B8C7E;
+                border-color: #2B8C7E;
                 color: #FFFFFF;
             }
             QPushButton#primary:hover {
-                background: #DE324A;
-                border-color: #DE324A;
+                background: #37A493;
+                border-color: #37A493;
             }
             QPushButton#modeButton {
                 min-height: 34px;
             }
             QPushButton#modeButton:checked {
-                background: #C51E35;
-                border-color: #C51E35;
+                background: #2B8C7E;
+                border-color: #2B8C7E;
                 color: #FFFFFF;
             }
             QPushButton#navButton {
@@ -1276,34 +1468,45 @@ class StanThrustQtWindow(QMainWindow):
                 padding: 10px 12px;
             }
             QPushButton#navButton:hover {
-                background: #1D232B;
+                background: #20272E;
             }
             QTabWidget::pane {
-                border: 1px solid #20262D;
-                border-radius: 18px;
-                background: #101317;
+                border: 1px solid #252B33;
+                border-radius: 8px;
+                background: #15181D;
                 top: -1px;
             }
             QTabBar::tab {
-                background: #0C1015;
-                color: #AB9F93;
+                background: #11151A;
+                color: #A9B2AD;
                 padding: 10px 16px;
-                margin-right: 6px;
-                border-top-left-radius: 12px;
-                border-top-right-radius: 12px;
+                margin-right: 4px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
                 min-width: 90px;
                 font-weight: 700;
             }
             QTabBar::tab:selected {
-                background: #171B21;
-                color: #F5F1EA;
+                background: #1B2026;
+                color: #F2F5F3;
+                border-bottom: 2px solid #37A493;
             }
             QLineEdit, QComboBox, QDoubleSpinBox, QPlainTextEdit, QTableWidget, QGraphicsView {
-                background: #0C1015;
-                border: 1px solid #2B323A;
-                border-radius: 14px;
+                background: #11151A;
+                border: 1px solid #343B44;
+                border-radius: 6px;
                 padding: 8px 10px;
-                selection-background-color: #C51E35;
+                selection-background-color: #2B8C7E;
+            }
+            QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
+                border: 1px solid #37A493;
+            }
+            QPlainTextEdit#terminalText {
+                background: #080A0D;
+                color: #DCE7E1;
+                border: 1px solid #343B44;
+                font-family: "Cascadia Mono", "Consolas";
+                font-size: 9.5pt;
             }
             QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
                 width: 18px;
@@ -1323,21 +1526,21 @@ class StanThrustQtWindow(QMainWindow):
                 font-weight: 700;
             }
             QProgressBar {
-                background: #0C1015;
-                border: 1px solid #2B323A;
-                border-radius: 8px;
+                background: #11151A;
+                border: 1px solid #343B44;
+                border-radius: 5px;
                 text-align: center;
                 min-height: 16px;
             }
             QProgressBar::chunk {
-                background: #C51E35;
-                border-radius: 7px;
+                background: #2B8C7E;
+                border-radius: 4px;
             }
             QHeaderView::section {
-                background: #171B21;
-                color: #F5F1EA;
+                background: #1B2026;
+                color: #F2F5F3;
                 border: none;
-                border-bottom: 1px solid #2B323A;
+                border-bottom: 1px solid #343B44;
                 padding: 8px;
                 font-weight: 700;
             }
@@ -1347,7 +1550,7 @@ class StanThrustQtWindow(QMainWindow):
                 margin: 4px;
             }
             QScrollBar::handle:vertical {
-                background: #2B323A;
+                background: #343B44;
                 border-radius: 6px;
                 min-height: 36px;
             }
@@ -1355,8 +1558,8 @@ class StanThrustQtWindow(QMainWindow):
                 height: 0px;
             }
             QStatusBar {
-                background: #101317;
-                color: #AB9F93;
+                background: #15181D;
+                color: #A9B2AD;
             }
             """
         )
@@ -1598,6 +1801,56 @@ class StanThrustQtWindow(QMainWindow):
             self.cfd_cards[key] = card
         snapshot_layout.addLayout(row)
         layout.addWidget(snapshot)
+
+        progress_card = QFrame()
+        progress_card.setObjectName("card")
+        progress_layout = QVBoxLayout(progress_card)
+        progress_layout.setContentsMargins(16, 14, 16, 14)
+        progress_layout.setSpacing(10)
+        title = QLabel("Solver Run")
+        title.setObjectName("sectionTitle")
+        progress_layout.addWidget(title)
+        self.solver_stage_label = QLabel("Coupled solver idle.")
+        self.solver_stage_label.setObjectName("sectionBody")
+        self.solver_stage_label.setWordWrap(True)
+        progress_layout.addWidget(self.solver_stage_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        progress_layout.addWidget(self.progress_bar)
+        self.solver_residual_label = QLabel("Residuals will appear after Solve.")
+        self.solver_residual_label.setObjectName("sectionBody")
+        self.solver_residual_label.setWordWrap(True)
+        progress_layout.addWidget(self.solver_residual_label)
+
+        steps_grid = QGridLayout()
+        steps_grid.setHorizontalSpacing(12)
+        steps_grid.setVerticalSpacing(8)
+        for row_index, (key, label_text) in enumerate(
+            (
+                ("preview", "Preview"),
+                ("optimization", "Optimization"),
+                ("feed", "Feed Transient"),
+                ("chamber_nozzle", "Chamber/Nozzle"),
+                ("structure", "Structure"),
+                ("convergence", "Convergence"),
+            )
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("fieldLabel")
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            status = QLabel("Waiting")
+            status.setObjectName("helperLabel")
+            self.step_progress_bars[key] = bar
+            self.step_status_labels[key] = status
+            steps_grid.addWidget(label, row_index, 0)
+            steps_grid.addWidget(bar, row_index, 1)
+            steps_grid.addWidget(status, row_index, 2)
+        steps_grid.setColumnStretch(1, 1)
+        progress_layout.addLayout(steps_grid)
+        layout.addWidget(progress_card)
         layout.addStretch(1)
         return tab
 
@@ -1621,8 +1874,22 @@ class StanThrustQtWindow(QMainWindow):
         title = QLabel("Live 3D Model")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        self.model_3d_view = Model3DView()
-        layout.addWidget(self.model_3d_view, 1)
+        component_tabs = QTabWidget()
+        component_tabs.tabBar().setUsesScrollButtons(True)
+        component_tabs.tabBar().setElideMode(Qt.ElideRight)
+        component_tabs.tabBar().setExpanding(False)
+        for key, label in (
+            ("chamber_nozzle", "Chamber/Nozzle"),
+            ("pumps", "Pumps"),
+            ("injector", "Injector"),
+            ("tanks", "Tanks"),
+        ):
+            view = Model3DView(key)
+            self.model_3d_views[key] = view
+            if key == "chamber_nozzle":
+                self.model_3d_view = view
+            component_tabs.addTab(view, label)
+        layout.addWidget(component_tabs, 1)
         return tab
 
     def _build_measurements_tab(self) -> QWidget:
@@ -1701,47 +1968,22 @@ class StanThrustQtWindow(QMainWindow):
         top.setObjectName("card")
         top_layout = QVBoxLayout(top)
         top_layout.setContentsMargins(16, 14, 16, 14)
-        title = QLabel("Solver Metadata")
+        title = QLabel("Diagnostics Terminal")
         title.setObjectName("sectionTitle")
         top_layout.addWidget(title)
         self.metadata_text = QPlainTextEdit()
+        self.metadata_text.setObjectName("terminalText")
         self.metadata_text.setReadOnly(True)
-        self.metadata_text.setMinimumHeight(220)
+        self.metadata_text.setMinimumHeight(520)
         top_layout.addWidget(self.metadata_text)
         layout.addWidget(top, 1)
 
-        feed = QFrame()
-        feed.setObjectName("card")
-        feed_layout = QVBoxLayout(feed)
-        feed_layout.setContentsMargins(16, 14, 16, 14)
-        title = QLabel("Live Status")
-        title.setObjectName("sectionTitle")
-        feed_layout.addWidget(title)
         self.ga_status_label = QLabel("GA idle.")
-        self.ga_status_label.setObjectName("sectionBody")
-        self.ga_status_label.setWordWrap(True)
-        feed_layout.addWidget(self.ga_status_label)
+        self.ga_status_label.setVisible(False)
         self.cfd_status_label = QLabel("Preview ready.")
-        self.cfd_status_label.setObjectName("sectionBody")
-        self.cfd_status_label.setWordWrap(True)
-        feed_layout.addWidget(self.cfd_status_label)
-        self.solver_stage_label = QLabel("Coupled solver idle.")
-        self.solver_stage_label.setObjectName("sectionBody")
-        self.solver_stage_label.setWordWrap(True)
-        feed_layout.addWidget(self.solver_stage_label)
-        self.solver_residual_label = QLabel("Residuals will appear after Solve.")
-        self.solver_residual_label.setObjectName("sectionBody")
-        self.solver_residual_label.setWordWrap(True)
-        feed_layout.addWidget(self.solver_residual_label)
+        self.cfd_status_label.setVisible(False)
         self.export_status_label = QLabel("")
-        self.export_status_label.setObjectName("sectionBody")
-        self.export_status_label.setWordWrap(True)
-        feed_layout.addWidget(self.export_status_label)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        feed_layout.addWidget(self.progress_bar)
-        layout.addWidget(feed)
+        self.export_status_label.setVisible(False)
         return tab
 
     def _build_status_bar(self) -> QStatusBar:
@@ -1965,11 +2207,11 @@ class StanThrustQtWindow(QMainWindow):
         return page
 
     def _combo(self, values, display_map: Optional[Dict[str, str]] = None) -> QComboBox:
-        combo = QComboBox()
+        combo = NoWheelComboBox()
         for value in values:
             text_value = str(value)
             if display_map is None:
-                combo.addItem(text_value)
+                combo.addItem(_display_option_name(text_value), text_value)
             else:
                 combo.addItem(display_map.get(text_value, text_value), text_value)
         combo.setMaxVisibleItems(14)
@@ -1993,7 +2235,7 @@ class StanThrustQtWindow(QMainWindow):
         combo.setCurrentText(str(value))
 
     def _spin(self, minimum: float, maximum: float, step: float, decimals: int, suffix: str = "") -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+        spin = NoWheelDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setSingleStep(step)
         spin.setDecimals(decimals)
@@ -2064,8 +2306,8 @@ class StanThrustQtWindow(QMainWindow):
         self.preview_timer.stop()
         self.is_expert_mode = False
         self._refresh_mode_controls()
-        self.widgets["fuel_name"].setCurrentText(DEFAULT_STATE.fuel_name)
-        self.widgets["oxidizer_name"].setCurrentText(DEFAULT_STATE.oxidizer_name)
+        self._set_combo_value(self.widgets["fuel_name"], DEFAULT_STATE.fuel_name)
+        self._set_combo_value(self.widgets["oxidizer_name"], DEFAULT_STATE.oxidizer_name)
         self._set_combo_value(self.widgets["injector_type"], DEFAULT_STATE.injector_type)
         self.widgets["target_thrust_newtons"].setValue(DEFAULT_STATE.target_thrust_newtons)
         self.widgets["target_impulse_newton_seconds"].setValue(DEFAULT_STATE.target_impulse_newton_seconds)
@@ -2075,16 +2317,16 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["chamber_diameter_mm"].setValue(DEFAULT_STATE.chamber_diameter_mm)
         self.widgets["nozzle_diameter_mm"].setValue(DEFAULT_STATE.nozzle_diameter_mm)
         self.widgets["mixture_ratio"].setValue(DEFAULT_STATE.mixture_ratio)
-        self.widgets["packaging_bias"].setCurrentText(DEFAULT_STATE.packaging_bias)
+        self._set_combo_value(self.widgets["packaging_bias"], DEFAULT_STATE.packaging_bias)
         self.widgets["feed_mode_pump"].setChecked(DEFAULT_STATE.use_pumps)
         self.widgets["feed_mode_blowdown"].setChecked(not DEFAULT_STATE.use_pumps)
         self.widgets["regen_cooling"].setChecked(DEFAULT_STATE.regen_cooling)
         self.widgets["film_cooling"].setChecked(DEFAULT_STATE.film_cooling)
-        self.widgets["fuel_tank_material"].setCurrentText(DEFAULT_STATE.fuel_tank_material)
-        self.widgets["oxidizer_tank_material"].setCurrentText(DEFAULT_STATE.oxidizer_tank_material)
-        self.widgets["feed_system_material"].setCurrentText(DEFAULT_STATE.feed_system_material)
-        self.widgets["chamber_material"].setCurrentText(DEFAULT_STATE.chamber_material)
-        self.widgets["nozzle_material"].setCurrentText(DEFAULT_STATE.nozzle_material)
+        self._set_combo_value(self.widgets["fuel_tank_material"], DEFAULT_STATE.fuel_tank_material)
+        self._set_combo_value(self.widgets["oxidizer_tank_material"], DEFAULT_STATE.oxidizer_tank_material)
+        self._set_combo_value(self.widgets["feed_system_material"], DEFAULT_STATE.feed_system_material)
+        self._set_combo_value(self.widgets["chamber_material"], DEFAULT_STATE.chamber_material)
+        self._set_combo_value(self.widgets["nozzle_material"], DEFAULT_STATE.nozzle_material)
         self.widgets["factor_of_safety"].setValue(DEFAULT_STATE.factor_of_safety)
         self.widgets["objective_thrust"].setValue(DEFAULT_OBJECTIVE_WEIGHTS["thrust"])
         self.widgets["objective_mass"].setValue(DEFAULT_OBJECTIVE_WEIGHTS["mass"])
@@ -2109,8 +2351,8 @@ class StanThrustQtWindow(QMainWindow):
     def collect_form_state(self) -> dict:
         return {
             "ui_mode": self.mode(),
-            "fuel_name": self.widgets["fuel_name"].currentText(),
-            "oxidizer_name": self.widgets["oxidizer_name"].currentText(),
+            "fuel_name": self._combo_value(self.widgets["fuel_name"]),
+            "oxidizer_name": self._combo_value(self.widgets["oxidizer_name"]),
             "target_thrust_newtons": float(self.widgets["target_thrust_newtons"].value()),
             "target_impulse_newton_seconds": float(self.widgets["target_impulse_newton_seconds"].value()),
             "target_diameter_mm": float(self.widgets["target_diameter_mm"].value()),
@@ -2121,12 +2363,12 @@ class StanThrustQtWindow(QMainWindow):
             "chamber_diameter_mm": float(self.widgets["chamber_diameter_mm"].value()),
             "nozzle_diameter_mm": float(self.widgets["nozzle_diameter_mm"].value()),
             "factor_of_safety": float(self.widgets["factor_of_safety"].value()),
-            "fuel_tank_material": self.widgets["fuel_tank_material"].currentText(),
-            "oxidizer_tank_material": self.widgets["oxidizer_tank_material"].currentText(),
-            "feed_system_material": self.widgets["feed_system_material"].currentText(),
-            "chamber_material": self.widgets["chamber_material"].currentText(),
-            "nozzle_material": self.widgets["nozzle_material"].currentText(),
-            "packaging_bias": self.widgets["packaging_bias"].currentText(),
+            "fuel_tank_material": self._combo_value(self.widgets["fuel_tank_material"]),
+            "oxidizer_tank_material": self._combo_value(self.widgets["oxidizer_tank_material"]),
+            "feed_system_material": self._combo_value(self.widgets["feed_system_material"]),
+            "chamber_material": self._combo_value(self.widgets["chamber_material"]),
+            "nozzle_material": self._combo_value(self.widgets["nozzle_material"]),
+            "packaging_bias": self._combo_value(self.widgets["packaging_bias"]),
             "use_pumps": self.widgets["feed_mode_pump"].isChecked(),
             "regen_cooling": self.widgets["regen_cooling"].isChecked(),
             "film_cooling": self.widgets["film_cooling"].isChecked(),
@@ -2179,11 +2421,16 @@ class StanThrustQtWindow(QMainWindow):
         self._render_plots()
         if self.schematic_view is not None:
             self.schematic_view.render_design(self.current_design)
-        if self.model_3d_view is not None:
-            self.model_3d_view.render_design(self.current_design)
+        self._render_model_views()
         self._set_solver_snapshot_defaults()
         self._render_coupled_convergence_status()
         self._set_status(status, "GA idle.", "")
+
+    def _render_model_views(self) -> None:
+        if self.current_design is None:
+            return
+        for view in self.model_3d_views.values():
+            view.render_design(self.current_design)
 
     def _set_status(self, cfd_text: str, ga_text: str, export_text: str) -> None:
         if self.cfd_status_label is not None:
@@ -2192,10 +2439,75 @@ class StanThrustQtWindow(QMainWindow):
             self.ga_status_label.setText(ga_text)
         if self.export_status_label is not None:
             self.export_status_label.setText(export_text)
-        if self.solver_stage_label is not None and not cfd_text.lower().startswith("running"):
+        if self.solver_stage_label is not None and cfd_text.lower().startswith(("preview", "project", "updating")):
             self.solver_stage_label.setText("Coupled solver idle.")
         if self.statusBar() is not None:
             self.statusBar().showMessage(cfd_text)
+
+    def _reset_solver_progress(self, clear_log: bool = False) -> None:
+        if clear_log:
+            self.solver_log_lines = []
+        if self.progress_bar is not None:
+            self.progress_bar.setValue(0)
+        if self.solver_stage_label is not None:
+            self.solver_stage_label.setText("Coupled solver idle.")
+        if self.solver_residual_label is not None:
+            self.solver_residual_label.setText("Residuals will appear after Solve.")
+        for key in self.step_progress_bars:
+            self._set_step_progress(key, 0, "Waiting")
+        self._refresh_diagnostics_terminal()
+
+    def _set_step_progress(self, key: str, progress: float, status: str) -> None:
+        bar = self.step_progress_bars.get(key)
+        if bar is not None:
+            bar.setValue(int(max(0.0, min(100.0, progress))))
+        label = self.step_status_labels.get(key)
+        if label is not None:
+            label.setText(status)
+
+    def _append_solver_log(self, message: str, code: str = "I-SOLVE-000", level: str = "INFO") -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.solver_log_lines.append("{0} [{1}] {2}: {3}".format(timestamp, code, level, message))
+        self.solver_log_lines = self.solver_log_lines[-400:]
+        self._refresh_diagnostics_terminal()
+
+    def _append_solver_warning_logs(self, warnings: List[object]) -> None:
+        for index, warning in enumerate(warnings[:12], start=1):
+            self._append_solver_log(str(warning), "W-SOLVE-{0:03d}".format(index), "WARN")
+
+    def _refresh_diagnostics_terminal(self) -> None:
+        if self.metadata_text is None:
+            return
+        lines = list(self.solver_log_lines)
+        if not lines:
+            lines = ["--:--:-- [I-PREVIEW-000] INFO: Preview model ready. Press Solve to run the coupled numerical solver."]
+        if self.diagnostic_snapshot_lines:
+            lines.extend(["", "# Current State"])
+            lines.extend(self.diagnostic_snapshot_lines)
+        self.metadata_text.setPlainText("\n".join(lines))
+        scrollbar = self.metadata_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _update_step_from_solver_message(self, progress: float, message: str) -> None:
+        lower = message.lower()
+        if "preparing design" in lower:
+            self._set_step_progress("preview", 100, "Ready")
+            self._set_step_progress("convergence", max(8, progress * 0.2), "Iterating")
+        elif "solving feed transient" in lower:
+            self._set_step_progress("feed", 55, "Solving")
+        elif "solving chamber and nozzle" in lower:
+            self._set_step_progress("feed", 100, "Solved")
+            self._set_step_progress("chamber_nozzle", 55, "Solving")
+        elif "checking structural margins" in lower:
+            self._set_step_progress("chamber_nozzle", 100, "Solved")
+            self._set_step_progress("structure", 70, "Checking")
+        elif "residual" in lower:
+            self._set_step_progress("structure", 100, "Checked")
+            self._set_step_progress("convergence", min(96, max(20, progress)), "Checking residual")
+        elif "assembling final" in lower:
+            for key in ("feed", "chamber_nozzle", "structure"):
+                self._set_step_progress(key, 100, "Solved")
+            self._set_step_progress("convergence", 96, "Assembling")
 
     def _set_solver_progress(self, progress: float, message: str) -> None:
         if self.progress_bar is not None:
@@ -2206,6 +2518,8 @@ class StanThrustQtWindow(QMainWindow):
             self.cfd_status_label.setText(message)
         if self.statusBar() is not None:
             self.statusBar().showMessage(message)
+        self._update_step_from_solver_message(progress, message)
+        self._append_solver_log(message, "I-SOLVE-STEP", "INFO")
         QApplication.processEvents()
 
     def _render_coupled_convergence_status(self) -> None:
@@ -2725,22 +3039,34 @@ class StanThrustQtWindow(QMainWindow):
         if self.current_design is not None:
             for stage in list(self.current_design.derived.calculation_stages)[:7]:
                 lines.append("calculation_stage = {0}".format(stage))
-        self.metadata_text.setPlainText("\n".join(lines))
+        self.diagnostic_snapshot_lines = lines
+        self._refresh_diagnostics_terminal()
 
     def run_solver(self) -> None:
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.solve_button.setEnabled(False)
         try:
+            self._reset_solver_progress(clear_log=True)
+            self._append_solver_log("Solve requested from desktop UI.", "I-SOLVE-001", "INFO")
+            self._set_step_progress("preview", 25, "Building")
             self.refresh_preview(status="Solving design...")
+            self._set_step_progress("preview", 100, "Ready")
             if self.progress_bar is not None:
                 self.progress_bar.setValue(5)
             if self.widgets["ga_enabled"].isChecked() or self.current_validation_report is None or not self.current_validation_report.passed:
+                self._set_step_progress("optimization", 20, "Running")
                 self.run_concept_ga()
+                self._set_step_progress("optimization", 100, "Solved")
             else:
                 self.current_ga_result = None
                 self.current_ga_candidate_state = None
+                self._set_step_progress("optimization", 100, "Skipped")
+                self._append_solver_log("Optimization skipped; current preview passed validation and Optimize on Solve is disabled.", "I-SOLVE-002", "INFO")
             self.run_combustion_solver()
         except Exception as exc:
+            self.solver_error_counter += 1
+            error_code = "E-SOLVE-{0:03d}".format(self.solver_error_counter)
+            self._append_solver_log("{0}: {1}".format(error_code, exc), error_code, "ERROR")
             QMessageBox.critical(self, "Solve failed", "StanThrust could not complete the solve.\n\n{0}".format(exc))
         finally:
             self.solve_button.setEnabled(True)
@@ -2749,6 +3075,7 @@ class StanThrustQtWindow(QMainWindow):
     def run_concept_ga(self) -> None:
         if not self.current_design:
             return
+        self._append_solver_log("Starting feasibility and objective optimization pass.", "I-GA-001", "INFO")
         self._set_status(self.cfd_status_label.text() if self.cfd_status_label else "Solving...", "Running design GA...", self.export_status_label.text() if self.export_status_label else "")
         QApplication.processEvents()
         seed = build_optimizer_seed(
@@ -2775,12 +3102,12 @@ class StanThrustQtWindow(QMainWindow):
             ga_text = "GA complete. Best score: {0:.4f}.".format(self.current_ga_result.best_score)
         if self.ga_status_label is not None:
             self.ga_status_label.setText(ga_text)
+        self._append_solver_log(ga_text, "I-GA-002", "INFO")
 
     def run_combustion_solver(self) -> None:
         if not self.current_design:
             return
-        if self.progress_bar is not None:
-            self.progress_bar.setValue(12)
+        self._set_solver_progress(12, "Coupled solve: initializing feed, chamber/nozzle, and structural loop")
         if self.cfd_status_label is not None:
             self.cfd_status_label.setText("Running coupled numerical solve...")
         QApplication.processEvents()
@@ -2800,6 +3127,13 @@ class StanThrustQtWindow(QMainWindow):
             max_iterations=resolution["iteration_limit"],
             progress_callback=self._set_solver_progress,
         )
+        if self.current_coupled_cycle_result.get("status") == "error":
+            self.solver_error_counter += 1
+            self._append_solver_log(
+                str(dict(self.current_coupled_cycle_result.get("payload", {})).get("error", "Coupled solver returned an error.")),
+                "E-SOLVE-{0:03d}".format(self.solver_error_counter),
+                "ERROR",
+            )
         coupled_payload = dict(self.current_coupled_cycle_result.get("payload", {}))
         final_feed_result = dict(coupled_payload.get("feed_solver_result", {}))
         final_combustion_result = dict(coupled_payload.get("combustion_solver_result", {}))
@@ -2830,8 +3164,7 @@ class StanThrustQtWindow(QMainWindow):
         self._render_plots()
         self._render_solver_snapshot()
         self._render_coupled_convergence_status()
-        if self.model_3d_view is not None:
-            self.model_3d_view.render_design(self.current_design)
+        self._render_model_views()
         thermo = {}
         if isinstance(self.current_combustion_result, dict):
             thermo = dict(dict(self.current_combustion_result.get("metadata", {})).get("thermochemistry", {}))
@@ -2850,6 +3183,10 @@ class StanThrustQtWindow(QMainWindow):
         )
         if self.progress_bar is not None:
             self.progress_bar.setValue(100)
+        for key in self.step_progress_bars:
+            self._set_step_progress(key, 100, "Complete")
+        self._append_solver_warning_logs(list(self.current_coupled_cycle_result.get("warnings", [])))
+        self._append_solver_log("Solve finished with status {0}.".format(self.current_coupled_cycle_result.get("status", "unknown")), "I-SOLVE-999", "INFO")
 
     def _collect_solver_resolution(self) -> dict:
         station_count = int(self.widgets["solver_station_count"].value())
@@ -2910,8 +3247,8 @@ class StanThrustQtWindow(QMainWindow):
         self.preview_timer.stop()
         self.is_expert_mode = str(state.get("ui_mode", "explorer")).lower() == "expert"
         self._refresh_mode_controls()
-        self.widgets["fuel_name"].setCurrentText(str(state.get("fuel_name", DEFAULT_STATE.fuel_name)))
-        self.widgets["oxidizer_name"].setCurrentText(str(state.get("oxidizer_name", DEFAULT_STATE.oxidizer_name)))
+        self._set_combo_value(self.widgets["fuel_name"], str(state.get("fuel_name", DEFAULT_STATE.fuel_name)))
+        self._set_combo_value(self.widgets["oxidizer_name"], str(state.get("oxidizer_name", DEFAULT_STATE.oxidizer_name)))
         self._set_combo_value(self.widgets["injector_type"], str(state.get("injector_type", DEFAULT_STATE.injector_type)))
         self.widgets["target_thrust_newtons"].setValue(float(state.get("target_thrust_newtons", DEFAULT_STATE.target_thrust_newtons)))
         self.widgets["target_impulse_newton_seconds"].setValue(float(state.get("target_impulse_newton_seconds", DEFAULT_STATE.target_impulse_newton_seconds)))
@@ -2922,12 +3259,12 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["chamber_diameter_mm"].setValue(float(state.get("chamber_diameter_mm", DEFAULT_STATE.chamber_diameter_mm)))
         self.widgets["nozzle_diameter_mm"].setValue(float(state.get("nozzle_diameter_mm", DEFAULT_STATE.nozzle_diameter_mm)))
         self.widgets["factor_of_safety"].setValue(float(state.get("factor_of_safety", DEFAULT_STATE.factor_of_safety)))
-        self.widgets["fuel_tank_material"].setCurrentText(str(state.get("fuel_tank_material", DEFAULT_STATE.fuel_tank_material)))
-        self.widgets["oxidizer_tank_material"].setCurrentText(str(state.get("oxidizer_tank_material", DEFAULT_STATE.oxidizer_tank_material)))
-        self.widgets["feed_system_material"].setCurrentText(str(state.get("feed_system_material", DEFAULT_STATE.feed_system_material)))
-        self.widgets["chamber_material"].setCurrentText(str(state.get("chamber_material", DEFAULT_STATE.chamber_material)))
-        self.widgets["nozzle_material"].setCurrentText(str(state.get("nozzle_material", DEFAULT_STATE.nozzle_material)))
-        self.widgets["packaging_bias"].setCurrentText(str(state.get("packaging_bias", DEFAULT_STATE.packaging_bias)))
+        self._set_combo_value(self.widgets["fuel_tank_material"], str(state.get("fuel_tank_material", DEFAULT_STATE.fuel_tank_material)))
+        self._set_combo_value(self.widgets["oxidizer_tank_material"], str(state.get("oxidizer_tank_material", DEFAULT_STATE.oxidizer_tank_material)))
+        self._set_combo_value(self.widgets["feed_system_material"], str(state.get("feed_system_material", DEFAULT_STATE.feed_system_material)))
+        self._set_combo_value(self.widgets["chamber_material"], str(state.get("chamber_material", DEFAULT_STATE.chamber_material)))
+        self._set_combo_value(self.widgets["nozzle_material"], str(state.get("nozzle_material", DEFAULT_STATE.nozzle_material)))
+        self._set_combo_value(self.widgets["packaging_bias"], str(state.get("packaging_bias", DEFAULT_STATE.packaging_bias)))
         use_pumps = bool(state.get("use_pumps", DEFAULT_STATE.use_pumps))
         self.widgets["feed_mode_pump"].setChecked(use_pumps)
         self.widgets["feed_mode_blowdown"].setChecked(not use_pumps)
@@ -2938,12 +3275,7 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["objective_mass"].setValue(float(objective_weights.get("mass", DEFAULT_OBJECTIVE_WEIGHTS["mass"])))
         self.widgets["objective_packaging"].setValue(float(objective_weights.get("packaging", DEFAULT_OBJECTIVE_WEIGHTS["packaging"])))
         self.widgets["objective_thermal"].setValue(float(objective_weights.get("thermal", DEFAULT_OBJECTIVE_WEIGHTS["thermal"])))
-        self.widgets["solver_flow_model"].setCurrentText(
-            FLOW_MODEL_DISPLAY_NAMES.get(
-                str(state.get("solver_flow_model", "fast")).strip().lower(),
-                FLOW_MODEL_DISPLAY_NAMES["fast"],
-            )
-        )
+        self._set_combo_value(self.widgets["solver_flow_model"], str(state.get("solver_flow_model", "fast")).strip().lower())
         self.widgets["solver_station_count"].setValue(float(state.get("solver_station_count", 25)))
         self.widgets["solver_convergence_tolerance"].setValue(float(state.get("solver_convergence_tolerance", 0.005)))
         self.widgets["solver_iteration_limit"].setValue(float(state.get("solver_iteration_limit", 50)))

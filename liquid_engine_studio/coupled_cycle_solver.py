@@ -312,11 +312,14 @@ def iterate_coupling_loop(
     convergence_tolerance_kpa: float = 5.0,
     max_iterations: int = 8,
     progress_callback: Optional[ProgressCallback] = None,
+    minimum_iterations: int = 3,
 ) -> Tuple[ConvergenceInfo, Optional[Dict[str, object]], Optional[Dict[str, object]], Optional[Dict[str, object]], List[Dict[str, object]]]:
     """Run the relaxed coupled feed/combustion/structure numerical loop."""
     state = dict(design_request)
     pressure_guess_kpa = _clamp(initial_chamber_pressure_kpa, 100.0, 10000.0)
     relaxation = 0.42
+    iteration_limit = max(1, max_iterations)
+    minimum_required_iterations = max(1, min(iteration_limit, minimum_iterations))
 
     final_feed_result = None
     final_combustion_result = None
@@ -336,9 +339,9 @@ def iterate_coupling_loop(
         notes=[],
     )
 
-    for iteration in range(1, max(1, max_iterations) + 1):
-        iteration_base = 8.0 + 84.0 * (iteration - 1) / max(1, max_iterations)
-        iteration_span = 84.0 / max(1, max_iterations)
+    for iteration in range(1, iteration_limit + 1):
+        iteration_base = 8.0 + 84.0 * (iteration - 1) / iteration_limit
+        iteration_span = 84.0 / iteration_limit
         if progress_callback is not None:
             progress_callback(iteration_base, "Coupled iteration {0}: preparing design state".format(iteration))
         design = _build_design_for_pressure(state, pressure_guess_kpa)
@@ -388,12 +391,13 @@ def iterate_coupling_loop(
         pressure_residual_kpa = abs(next_pressure_kpa - pressure_guess_kpa)
         thrust_error_fraction = _extract_thrust_error(combustion_result)
         minimum_structural_margin_ratio = _minimum_structural_margin(structural_result, design)
-        converged = (
+        criteria_met = (
             pressure_residual_kpa <= convergence_tolerance_kpa
             and thrust_error_fraction <= 0.035
             and minimum_feed_margin_kpa >= -convergence_tolerance_kpa
             and minimum_structural_margin_ratio > 1.0
         )
+        converged = criteria_met and iteration >= minimum_required_iterations
         notes = [
             "feed-supported Pc={0:.1f} kPa".format(feed_supported_pressure_kpa),
             "combustion-supported Pc={0:.1f} kPa".format(combustion_pressure_kpa),
@@ -415,6 +419,7 @@ def iterate_coupling_loop(
             "minimum_structural_margin_ratio": round(minimum_structural_margin_ratio, 4),
             "thrust_error_fraction": round(thrust_error_fraction, 6),
             "residual_kpa": round(pressure_residual_kpa, 3),
+            "criteria_met": criteria_met,
             "converged": converged,
             "notes": notes,
         }
@@ -482,6 +487,7 @@ def solve(
     convergence_tolerance_kpa: float = 5.0,
     max_iterations: int = 8,
     progress_callback: Optional[ProgressCallback] = None,
+    minimum_iterations: int = 3,
 ) -> Dict[str, object]:
     """Solve the coupled feed/combustion/structure cycle."""
     validation = validate_inputs(design_request)
@@ -504,6 +510,7 @@ def solve(
             convergence_tolerance_kpa,
             max_iterations,
             progress_callback,
+            minimum_iterations,
         )
     except Exception as exc:
         return _error_result(req, "Iteration loop failed: {0}".format(str(exc)), "Coupling loop raised exception")
@@ -515,6 +522,7 @@ def solve(
         "Convergence tolerance: {0:.2f} kPa, max iterations: {1}".format(
             convergence_tolerance_kpa, max_iterations
         ),
+        "Minimum coupled iterations before stopping: {0}".format(max(1, min(max(1, max_iterations), minimum_iterations))),
         "Solved feed transient, combustion/nozzle, and structural margins with relaxed pressure feedback.",
     ]
     warnings: List[str] = []
@@ -536,6 +544,7 @@ def solve(
             "request": req,
             "convergence": {
                 "iteration_count": conv_info.iteration,
+                "minimum_iteration_count": max(1, min(max(1, max_iterations), minimum_iterations)),
                 "converged": conv_info.converged,
                 "final_residual_kpa": round(conv_info.residual_kpa, 3),
                 "convergence_tolerance_kpa": float(convergence_tolerance_kpa),

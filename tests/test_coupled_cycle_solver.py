@@ -76,6 +76,7 @@ def test_convergence_structure():
     assert "converged" in conv, "Convergence should have converged flag"
     assert "final_residual_kpa" in conv, "Convergence should have final_residual_kpa"
     assert "convergence_tolerance_kpa" in conv, "Convergence should have convergence_tolerance_kpa"
+    assert "minimum_iteration_count" in conv, "Convergence should report the minimum coupled iteration count"
     assert "thrust_error_fraction" in conv, "Convergence should track thrust residual"
     assert "minimum_feed_margin_kpa" in conv, "Convergence should track feed margin"
     assert "minimum_structural_margin_ratio" in conv, "Convergence should track structural margin"
@@ -84,6 +85,7 @@ def test_convergence_structure():
     assert isinstance(conv["converged"], bool), "converged should be bool"
     assert isinstance(conv["final_residual_kpa"], float), "final_residual_kpa should be float"
     assert isinstance(conv["convergence_tolerance_kpa"], float), "convergence_tolerance_kpa should be float"
+    assert conv["iteration_count"] >= conv["minimum_iteration_count"], "solver should not stop before the minimum iteration count"
 
     print("✓ test_convergence_structure passed")
 

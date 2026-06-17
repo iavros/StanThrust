@@ -97,21 +97,30 @@ def _write_inno_script() -> Path:
             AppId={{{{9B7D66F5-61D7-4BD3-A3D3-70E73F79FD0B}}}}
             AppName={{#MyAppName}}
             AppVersion={{#MyAppVersion}}
+            AppVerName={{#MyAppName}} {{#MyAppVersion}}
             AppPublisher=StanThrust
             DefaultDirName={{autopf}}\\{{#MyAppName}}
             DefaultGroupName={{#MyAppName}}
             DisableProgramGroupPage=yes
+            UsePreviousAppDir=yes
+            CloseApplications=yes
+            RestartApplications=no
+            CreateUninstallRegKey=yes
+            UninstallDisplayName={{#MyAppName}}
+            UninstallDisplayIcon={{app}}\\{{#MyAppExeName}}
             OutputDir="{INSTALLER_OUTPUT_DIR}"
             OutputBaseFilename={Path(INSTALLER_EXE_NAME).stem}
+            VersionInfoVersion={{#MyAppVersion}}
             Compression=lzma
             SolidCompression=yes
             WizardStyle=modern
             ArchitecturesAllowed=x64compatible
             ArchitecturesInstallIn64BitMode=x64compatible
+            SetupMutex=StanThrustInstallerMutex
             {icon_line}
 
             [Files]
-            Source: "{EXE_PATH}"; DestDir: "{{app}}"; Flags: ignoreversion
+            Source: "{EXE_PATH}"; DestDir: "{{app}}"; Flags: ignoreversion restartreplace
 
             [Icons]
             Name: "{{autoprograms}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"
@@ -139,6 +148,7 @@ def _write_nsis_script() -> Path:
             Name "{APP_NAME}"
             OutFile "{INSTALLER_OUTPUT_DIR}\\{INSTALLER_EXE_NAME}"
             InstallDir "$PROGRAMFILES64\\{APP_NAME}"
+            InstallDirRegKey HKLM "Software\\{APP_NAME}" "InstallDir"
             RequestExecutionLevel admin
             {icon_line}
 
@@ -149,9 +159,14 @@ def _write_nsis_script() -> Path:
 
             Section "Install"
                 SetOutPath "$INSTDIR"
+                Delete "$INSTDIR\\{APP_NAME}.exe"
                 File "{EXE_PATH}"
                 CreateShortcut "$SMPROGRAMS\\{APP_NAME}.lnk" "$INSTDIR\\{APP_NAME}.exe"
                 CreateShortcut "$DESKTOP\\{APP_NAME}.lnk" "$INSTDIR\\{APP_NAME}.exe"
+                WriteRegStr HKLM "Software\\{APP_NAME}" "InstallDir" "$INSTDIR"
+                WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" "DisplayName" "{APP_NAME}"
+                WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" "DisplayVersion" "{APP_VERSION}"
+                WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}" "UninstallString" "$INSTDIR\\Uninstall.exe"
                 WriteUninstaller "$INSTDIR\\Uninstall.exe"
             SectionEnd
 
@@ -160,6 +175,8 @@ def _write_nsis_script() -> Path:
                 Delete "$INSTDIR\\Uninstall.exe"
                 Delete "$SMPROGRAMS\\{APP_NAME}.lnk"
                 Delete "$DESKTOP\\{APP_NAME}.lnk"
+                DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{APP_NAME}"
+                DeleteRegKey HKLM "Software\\{APP_NAME}"
                 RMDir "$INSTDIR"
             SectionEnd
             """

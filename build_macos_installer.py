@@ -14,6 +14,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_NAME = "StanThrust"
+APP_VERSION = "0.1.0"
 DIST_ROOT = PROJECT_ROOT / "dist"
 MACOS_DIST = DIST_ROOT / "macos"
 APP_PATH = MACOS_DIST / f"{APP_NAME}.app"
@@ -58,6 +59,14 @@ def _stage_dmg_contents() -> Path:
     applications_link = staging_dir / "Applications"
     if not applications_link.exists():
         os.symlink("/Applications", applications_link)
+    (staging_dir / "UPDATE_NOTES.txt").write_text(
+        (
+            f"{APP_NAME} {APP_VERSION}\n\n"
+            "To install an update, drag StanThrust.app into Applications and choose Replace when macOS asks.\n"
+            "The app bundle identifier is edu.stanford.stanthrust, so replacements target the same installed app.\n"
+        ),
+        encoding="utf-8",
+    )
     return staging_dir
 
 
