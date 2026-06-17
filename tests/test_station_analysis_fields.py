@@ -287,6 +287,43 @@ def test_impinging_injector_reports_full_orifice_pattern():
     assert orifice_count == element_count * 2
     assert float(values["impinging_orifice_diameter_mm"]) > 0.0
     assert float(values["impinging_pair_spacing_mm"]) > 0.0
+    assert float(values["injector_recess_diameter_mm"]) > 0.0
+    assert float(values["injector_element_ring_diameter_mm"]) > 0.0
+    assert float(values["impinging_convergence_height_mm"]) > 0.0
+
+
+def test_render_geometry_fields_are_calculated():
+    """Assert live 3D render dimensions come from solver-owned geometry fields."""
+    from liquid_engine_studio.concept_model import create_concept_design
+
+    design = create_concept_design({"use_pumps": True, "injector_type": "impinging"})
+    values = design.derived.engineering_values
+
+    required_positive_fields = [
+        "fuel_feed_tube_diameter_mm",
+        "oxidizer_feed_tube_diameter_mm",
+        "fuel_feed_tube_length_mm",
+        "oxidizer_feed_tube_length_mm",
+        "fuel_pump_casing_diameter_mm",
+        "oxidizer_pump_casing_diameter_mm",
+        "fuel_pump_casing_depth_mm",
+        "oxidizer_pump_casing_depth_mm",
+        "electric_motor_envelope_length_mm",
+        "electric_motor_envelope_height_mm",
+        "electric_motor_envelope_depth_mm",
+        "injector_recess_diameter_mm",
+        "injector_element_ring_diameter_mm",
+        "impinging_convergence_height_mm",
+    ]
+    for field in required_positive_fields:
+        assert float(values[field]) > 0.0, f"{field} should be calculated for the 3D render"
+
+    assert float(values["fuel_pump_casing_diameter_mm"]) > float(values["fuel_impeller_diameter_mm"])
+    assert float(values["oxidizer_pump_casing_diameter_mm"]) > float(values["oxidizer_impeller_diameter_mm"])
+    assert float(values["fuel_pump_casing_depth_mm"]) >= float(values["fuel_impeller_width_mm"])
+    assert float(values["oxidizer_pump_casing_depth_mm"]) >= float(values["oxidizer_impeller_width_mm"])
+    assert float(values["injector_recess_diameter_mm"]) <= float(values["injector_face_diameter_mm"])
+    assert float(values["injector_element_ring_diameter_mm"]) <= float(values["injector_face_diameter_mm"])
 
 
 def test_export_includes_nozzle_geometry_metadata():
@@ -322,6 +359,7 @@ if __name__ == "__main__":
         test_solver_provenance_tagging,
         test_nozzle_contour_metadata_and_shape,
         test_impinging_injector_reports_full_orifice_pattern,
+        test_render_geometry_fields_are_calculated,
         test_export_includes_nozzle_geometry_metadata,
     ]
     

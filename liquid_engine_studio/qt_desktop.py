@@ -1113,8 +1113,8 @@ class Model3DView(QGraphicsView):
         exit_point = self._project(max_x * 0.5, exit_radius, 0.0, origin, scale)
         self._draw_callout(scene, (chamber_mid[0], chamber_mid[1]), (176.0, 454.0), "Chamber length {0} mm".format(_format_number(chamber_length, 2)), QT_PALETTE["text"])
         self._draw_callout(scene, (throat_point[0], throat_point[1]), (520.0, 166.0), "Throat dia {0} mm".format(throat_diameter), QT_PALETTE["accent_hover"])
-        self._draw_callout(scene, (exit_point[0], exit_point[1]), (560.0, 438.0), "Exit dia {0} mm".format(exit_diameter), QT_PALETTE["text"])
-        self._draw_callout(scene, (origin[0] + 8.0, origin[1] + max_radius * scale * 0.86), (468.0, 502.0), "Nozzle length {0} mm".format(_format_number(nozzle_length, 2)), QT_PALETTE["muted"])
+        self._draw_callout(scene, (exit_point[0], exit_point[1]), (638.0, 500.0), "Exit dia {0} mm".format(exit_diameter), QT_PALETTE["text"])
+        self._draw_callout(scene, (origin[0] + 8.0, origin[1] + max_radius * scale * 0.86), (436.0, 526.0), "Nozzle length {0} mm".format(_format_number(nozzle_length, 2)), QT_PALETTE["muted"])
         self._metric(scene, 790, 104, "Length", f"{length} mm")
         self._metric(scene, 790, 166, "Throat", f"{throat_diameter} mm")
         self._metric(scene, 790, 228, "Exit", f"{exit_diameter} mm")
@@ -1129,37 +1129,45 @@ class Model3DView(QGraphicsView):
             "Calculated oxidizer and fuel tank envelopes.",
         )
         values = dict(design.derived.engineering_values)
-        tank_diameter = float(design.inputs.tank_diameter_mm)
+        ox_diameter = _safe_float(values.get("oxidizer_tank_outer_diameter_mm"), design.inputs.tank_diameter_mm) or design.inputs.tank_diameter_mm
+        fuel_diameter = _safe_float(values.get("fuel_tank_outer_diameter_mm"), design.inputs.tank_diameter_mm) or design.inputs.tank_diameter_mm
         ox_length = float(design.derived.oxidizer_tank_length_mm)
         fuel_length = float(design.derived.fuel_tank_length_mm)
+        ox_feed_length = _safe_float(values.get("oxidizer_feed_tube_length_mm"), design.derived.feed_system_bay_length_mm * 0.72) or design.derived.feed_system_bay_length_mm * 0.72
+        fuel_feed_length = _safe_float(values.get("fuel_feed_tube_length_mm"), design.derived.feed_system_bay_length_mm * 0.72) or design.derived.feed_system_bay_length_mm * 0.72
+        ox_feed_diameter = _safe_float(values.get("oxidizer_feed_tube_diameter_mm"), max(3.0, ox_diameter * 0.04)) or max(3.0, ox_diameter * 0.04)
+        fuel_feed_diameter = _safe_float(values.get("fuel_feed_tube_diameter_mm"), max(3.0, fuel_diameter * 0.04)) or max(3.0, fuel_diameter * 0.04)
         max_length = max(1.0, ox_length, fuel_length)
-        max_diameter = max(1.0, tank_diameter)
-        scale = min(430.0 / max_length, 102.0 / max_diameter)
+        max_feed_length = max(1.0, ox_feed_length, fuel_feed_length)
+        max_diameter = max(1.0, ox_diameter, fuel_diameter)
+        scale = min(520.0 / (max_length + max_feed_length), 102.0 / max_diameter)
         ox_origin = (356.0, 210.0)
         fuel_origin = (356.0, 420.0)
-        self._draw_axial_cylinder_mesh(scene, ox_length, tank_diameter * 0.5, ox_origin, scale, QT_PALETTE["oxidizer"], "#9FD2F7")
-        self._draw_axial_cylinder_mesh(scene, fuel_length, tank_diameter * 0.5, fuel_origin, scale, QT_PALETTE["fuel"], "#F3C26E")
+        self._draw_axial_cylinder_mesh(scene, ox_length, ox_diameter * 0.5, ox_origin, scale, QT_PALETTE["oxidizer"], "#9FD2F7")
+        self._draw_axial_cylinder_mesh(scene, fuel_length, fuel_diameter * 0.5, fuel_origin, scale, QT_PALETTE["fuel"], "#F3C26E")
         self._add_text(scene, 74, 154, "Oxidizer Tank", QT_PALETTE["text"], 11, 180)
         self._add_text(scene, 74, 364, "Fuel Tank", QT_PALETTE["text"], 11, 180)
-        ox_outlet = (640.0, 228.0)
-        fuel_outlet = (640.0, 438.0)
-        ox_front = self._project(ox_length * 0.5, tank_diameter * 0.18, 0.0, ox_origin, scale)
-        ox_body = self._project(0.0, -tank_diameter * 0.52, 0.0, ox_origin, scale)
+        ox_front = self._project(ox_length * 0.5, ox_diameter * 0.18, 0.0, ox_origin, scale)
+        ox_body = self._project(0.0, -ox_diameter * 0.52, 0.0, ox_origin, scale)
         ox_tube_start = self._project(ox_length * 0.5, 0.0, 0.0, ox_origin, scale)
-        fuel_front = self._project(fuel_length * 0.5, tank_diameter * 0.18, 0.0, fuel_origin, scale)
-        fuel_body = self._project(0.0, -tank_diameter * 0.52, 0.0, fuel_origin, scale)
+        fuel_front = self._project(fuel_length * 0.5, fuel_diameter * 0.18, 0.0, fuel_origin, scale)
+        fuel_body = self._project(0.0, -fuel_diameter * 0.52, 0.0, fuel_origin, scale)
         fuel_tube_start = self._project(fuel_length * 0.5, 0.0, 0.0, fuel_origin, scale)
-        self._draw_feed_connector(scene, (ox_tube_start[0], ox_tube_start[1]), (ox_outlet[0] - 28.0, ox_outlet[1]), QT_PALETTE["oxidizer"])
-        self._draw_feed_connector(scene, (fuel_tube_start[0], fuel_tube_start[1]), (fuel_outlet[0] - 28.0, fuel_outlet[1]), QT_PALETTE["fuel"])
-        self._draw_small_nozzle(scene, ox_outlet, QT_PALETTE["oxidizer"])
-        self._draw_small_nozzle(scene, fuel_outlet, QT_PALETTE["fuel"])
+        ox_outlet = (ox_tube_start[0] + ox_feed_length * scale, ox_tube_start[1])
+        fuel_outlet = (fuel_tube_start[0] + fuel_feed_length * scale, fuel_tube_start[1])
+        ox_tube_width = max(1.6, ox_feed_diameter * scale)
+        fuel_tube_width = max(1.6, fuel_feed_diameter * scale)
+        self._draw_feed_connector(scene, (ox_tube_start[0], ox_tube_start[1]), ox_outlet, QT_PALETTE["oxidizer"], ox_tube_width)
+        self._draw_feed_connector(scene, (fuel_tube_start[0], fuel_tube_start[1]), fuel_outlet, QT_PALETTE["fuel"], fuel_tube_width)
+        self._draw_small_nozzle(scene, ox_outlet, QT_PALETTE["oxidizer"], ox_tube_width)
+        self._draw_small_nozzle(scene, fuel_outlet, QT_PALETTE["fuel"], fuel_tube_width)
         self._draw_callout(scene, (ox_front[0], ox_front[1]), (552.0, 128.0), "Ox length {0} mm".format(_format_number(ox_length, 2)), QT_PALETTE["oxidizer"])
-        self._draw_callout(scene, (ox_body[0], ox_body[1]), (154.0, 286.0), "Diameter {0} mm".format(_format_number(tank_diameter, 2)), QT_PALETTE["text"])
+        self._draw_callout(scene, (ox_body[0], ox_body[1]), (154.0, 286.0), "Ox dia {0} mm".format(_format_number(ox_diameter, 2)), QT_PALETTE["text"])
         self._draw_callout(scene, (fuel_front[0], fuel_front[1]), (552.0, 344.0), "Fuel length {0} mm".format(_format_number(fuel_length, 2)), QT_PALETTE["fuel"])
-        self._draw_callout(scene, (fuel_body[0], fuel_body[1]), (154.0, 500.0), "Fuel dia {0} mm".format(_format_number(tank_diameter, 2)), QT_PALETTE["text"])
+        self._draw_callout(scene, (fuel_body[0], fuel_body[1]), (154.0, 500.0), "Fuel dia {0} mm".format(_format_number(fuel_diameter, 2)), QT_PALETTE["text"])
         self._metric(scene, 790, 104, "Ox Length", "{0} mm".format(_format_number(ox_length, 2)))
         self._metric(scene, 790, 166, "Fuel Length", "{0} mm".format(_format_number(fuel_length, 2)))
-        self._metric(scene, 790, 228, "Diameter", "{0} mm".format(_format_number(tank_diameter, 2)))
+        self._metric(scene, 790, 228, "Feed Tube", "{0} / {1} mm".format(_format_number(ox_feed_diameter, 2), _format_number(fuel_feed_diameter, 2)))
         self._metric(scene, 790, 290, "Fuel Wall", "{0} mm".format(_format_number(values.get("fuel_tank_wall_thickness_mm", "--"), 2)))
         self._metric(scene, 790, 352, "Ox Wall", "{0} mm".format(_format_number(values.get("oxidizer_tank_wall_thickness_mm", "--"), 2)))
 
@@ -1180,19 +1188,28 @@ class Model3DView(QGraphicsView):
 
         fuel_geometry = self._pump_geometry(values, "fuel", 42.0)
         ox_geometry = self._pump_geometry(values, "oxidizer", 45.0)
-        max_impeller_diameter = max(1.0, fuel_geometry["diameter_mm"], ox_geometry["diameter_mm"])
-        display_scale = min(2.85, 188.0 / max_impeller_diameter)
+        max_casing_diameter = max(1.0, fuel_geometry["casing_diameter_mm"], ox_geometry["casing_diameter_mm"])
+        motor_length_mm = max(1.0, _safe_float(values.get("electric_motor_envelope_length_mm"), 80.0) or 80.0)
+        motor_height_mm = max(1.0, _safe_float(values.get("electric_motor_envelope_height_mm"), 44.0) or 44.0)
+        motor_depth_mm = max(1.0, _safe_float(values.get("electric_motor_envelope_depth_mm"), 48.0) or 48.0)
+        display_scale = min(2.85, 188.0 / max_casing_diameter, 300.0 / motor_length_mm)
         fuel_geometry["display_scale"] = display_scale
         ox_geometry["display_scale"] = display_scale
 
         fuel_radius = self._pump_outer_radius(fuel_geometry)
         ox_radius = self._pump_outer_radius(ox_geometry)
-        motor_power_kw = _safe_float(values.get("electric_motor_power_kw"), 0.25) or 0.25
-        motor_torque_nm = _safe_float(values.get("electric_motor_torque_nm"), 0.0) or 0.0
-        motor_width = 210.0 + min(84.0, max(0.0, motor_power_kw) * 8.0)
-        motor_depth = 70.0 + min(36.0, max(0.0, motor_torque_nm) * 2.0)
+        motor_width = motor_length_mm * display_scale
         motor_origin = (390.0, 412.0)
-        self._draw_box_mesh(scene, motor_origin, motor_width, 82.0, motor_depth, 1.0, "#26313A", QT_PALETTE["muted"])
+        self._draw_box_mesh(
+            scene,
+            motor_origin,
+            motor_length_mm,
+            motor_height_mm,
+            motor_depth_mm,
+            display_scale,
+            "#26313A",
+            QT_PALETTE["muted"],
+        )
         self._add_text(scene, motor_origin[0] + 22.0, motor_origin[1] + 8.0, "Electric Motor", QT_PALETTE["text"], 10, 160)
         fuel_origin = (236.0, 256.0)
         ox_origin = (542.0, 256.0)
@@ -1241,7 +1258,17 @@ class Model3DView(QGraphicsView):
                 _format_number(ox_geometry["blade_angle_deg"], 1),
             ),
         )
-        self._metric(scene, 790, 414, "Head / Motor", "{0} kPa / {1} kW".format(
+        self._metric(
+            scene,
+            790,
+            414,
+            "Casing Dia",
+            "{0} / {1} mm".format(
+                _format_number(fuel_geometry["casing_diameter_mm"], 2),
+                _format_number(ox_geometry["casing_diameter_mm"], 2),
+            ),
+        )
+        self._metric(scene, 790, 476, "Head / Motor", "{0} kPa / {1} kW".format(
             _format_number(values.get("pump_differential_pressure_kpa", "--"), 1),
             _format_number(values.get("electric_motor_power_kw", "--"), 2),
         ))
@@ -1256,13 +1283,15 @@ class Model3DView(QGraphicsView):
         injector_type = str(design.inputs.injector_type).strip().lower()
         face_diameter = _safe_float(values.get("injector_face_diameter_mm"), design.inputs.chamber_diameter_mm) or design.inputs.chamber_diameter_mm
         face_thickness = _safe_float(values.get("injector_face_thickness_mm"), face_diameter * 0.075) or face_diameter * 0.075
+        recess_diameter = _safe_float(values.get("injector_recess_diameter_mm"), face_diameter * 0.72) or face_diameter * 0.72
         face_radius = max(0.5, face_diameter * 0.5)
         display_scale = min(3.7, 260.0 / max(1.0, face_diameter))
         origin = (360.0, 308.0)
         face_radius_px = face_radius * display_scale
+        recess_radius_px = max(1.0, recess_diameter * 0.5 * display_scale)
         face_thickness_px = max(9.0, face_thickness * display_scale)
         self._draw_disc_mesh(scene, face_radius_px, face_thickness_px, origin, 1.0, "#26313A", QT_PALETTE["muted"], center=(0.0, 0.0, 0.0))
-        self._draw_disc_mesh(scene, face_radius_px * 0.72, face_thickness_px * 1.12, origin, 1.0, "#11151A", QT_PALETTE["border"], center=(0.0, 0.0, face_thickness_px * 0.18))
+        self._draw_disc_mesh(scene, recess_radius_px, face_thickness_px * 1.12, origin, 1.0, "#11151A", QT_PALETTE["border"], center=(0.0, 0.0, face_thickness_px * 0.18))
         if injector_type == "pintle":
             tip_diameter = _safe_float(values.get("pintle_tip_diameter_mm"), face_diameter * 0.24) or face_diameter * 0.24
             stem_diameter = _safe_float(values.get("pintle_stem_diameter_mm"), tip_diameter * 0.62) or tip_diameter * 0.62
@@ -1285,20 +1314,18 @@ class Model3DView(QGraphicsView):
             orifice_diameter = _safe_float(values.get("impinging_orifice_diameter_mm"), 1.0) or 1.0
             impinging_angle = _safe_float(values.get("impinging_angle_deg"), 30.0) or 30.0
             pair_spacing = _safe_float(values.get("impinging_pair_spacing_mm"), face_diameter * 0.085) or face_diameter * 0.085
+            ring_diameter = _safe_float(values.get("injector_element_ring_diameter_mm"), face_diameter * 0.72) or face_diameter * 0.72
+            convergence_height = _safe_float(values.get("impinging_convergence_height_mm"), face_diameter * 0.12) or face_diameter * 0.12
             element_count = max(2, int(round(_safe_float(values.get("impinging_element_count"), 2.0) or 2.0)))
             orifice_count = max(element_count * 2, int(round(_safe_float(values.get("impinging_orifice_count"), element_count * 2) or element_count * 2)))
             port_radius_px = max(2.6, orifice_diameter * 0.5 * display_scale)
             spacing_px = pair_spacing * display_scale
-            ring_radius_px = max(
-                face_radius_px * 0.34,
-                min(face_radius_px * 0.62, face_radius_px - spacing_px - port_radius_px * 3.0),
-            )
+            ring_radius_px = max(1.0, ring_diameter * 0.5 * display_scale)
             jet_pen = QPen(QColor(QT_PALETTE["oxidizer"]), 1.0, Qt.SolidLine, Qt.RoundCap)
             jet_pen.setCosmetic(True)
             first_port_point = None
             orifice_positions: List[Tuple[float, float, float]] = []
-            half_angle = math.radians(max(6.0, min(80.0, impinging_angle)) * 0.5)
-            convergence_lift = min(face_radius_px * 0.32, max(8.0, spacing_px * 0.5 / max(0.18, math.tan(half_angle))))
+            convergence_lift = max(1.0, convergence_height * display_scale)
             for pair_index in range(element_count):
                 base_angle = self._spin_phase() + 2.0 * math.pi * pair_index / element_count
                 center_x = ring_radius_px * math.cos(base_angle)
@@ -1319,6 +1346,8 @@ class Model3DView(QGraphicsView):
                 self._draw_projected_orifice(scene, origin, port_x, port_y, port_z, port_radius_px, QT_PALETTE["oxidizer"])
             port_point = first_port_point or self._project(ring_radius_px, 0.0, face_thickness_px, origin, 1.0)
             self._draw_callout(scene, (port_point[0], port_point[1]), (552.0, 172.0), "Orifice dia {0} mm".format(_format_number(orifice_diameter, 2)), QT_PALETTE["oxidizer"])
+            ring_point = self._project(-ring_radius_px * 0.65, -ring_radius_px * 0.76, face_thickness_px * 0.88, origin, 1.0)
+            self._draw_callout(scene, (ring_point[0], ring_point[1]), (132.0, 438.0), "Ring dia {0} mm".format(_format_number(ring_diameter, 2)), QT_PALETTE["muted"])
             self._metric(scene, 790, 290, "Orifice", "{0} mm".format(_format_number(orifice_diameter, 2)))
             self._metric(
                 scene,
@@ -1328,6 +1357,7 @@ class Model3DView(QGraphicsView):
                 "{0} deg / {1} mm".format(_format_number(impinging_angle, 1), _format_number(pair_spacing, 2)),
             )
             self._metric(scene, 790, 476, "Holes", str(orifice_count))
+            self._metric(scene, 790, 538, "Ring Dia", "{0} mm".format(_format_number(ring_diameter, 2)))
         face_point = self._project(face_radius_px, 0.0, 0.0, origin, 1.0)
         thickness_point = self._project(0.0, face_radius_px * 0.70, face_thickness_px * 0.56, origin, 1.0)
         self._draw_callout(scene, (face_point[0], face_point[1]), (552.0, 392.0), "Face dia {0} mm".format(_format_number(face_diameter, 2)), QT_PALETTE["text"])
@@ -1543,6 +1573,22 @@ class Model3DView(QGraphicsView):
         blade_angle = _safe_float(values.get(f"{prefix}_impeller_blade_angle_deg"), 22.0) or 22.0
         blade_thickness = max(0.1, _safe_float(values.get(f"{prefix}_impeller_blade_thickness_mm"), width * 0.18) or width * 0.18)
         tip_clearance = max(0.0, _safe_float(values.get(f"{prefix}_impeller_tip_clearance_mm"), diameter * 0.0075) or 0.0)
+        casing_diameter = max(
+            diameter + 2.0 * tip_clearance,
+            _safe_float(
+                values.get(f"{prefix}_pump_casing_diameter_mm"),
+                diameter + 2.0 * tip_clearance + max(4.0, width * 0.35),
+            )
+            or diameter + 2.0 * tip_clearance,
+        )
+        casing_depth = max(
+            width,
+            _safe_float(
+                values.get(f"{prefix}_pump_casing_depth_mm"),
+                width + 2.0 * max(tip_clearance, blade_thickness),
+            )
+            or width,
+        )
         return {
             "diameter_mm": diameter,
             "width_mm": width,
@@ -1552,12 +1598,14 @@ class Model3DView(QGraphicsView):
             "blade_angle_deg": blade_angle,
             "blade_thickness_mm": blade_thickness,
             "tip_clearance_mm": tip_clearance,
+            "casing_diameter_mm": casing_diameter,
+            "casing_depth_mm": casing_depth,
             "display_scale": 1.0,
         }
 
     def _pump_outer_radius(self, geometry: Dict[str, float]) -> float:
         scale = geometry.get("display_scale", 1.0)
-        return (geometry["diameter_mm"] * 0.5 + geometry["tip_clearance_mm"]) * scale
+        return geometry["casing_diameter_mm"] * 0.5 * scale
 
     def _draw_pump_assembly(
         self,
@@ -1568,12 +1616,11 @@ class Model3DView(QGraphicsView):
         label: str,
     ) -> None:
         scale = geometry["display_scale"]
-        impeller_radius = geometry["diameter_mm"] * 0.5 * scale
         casing_radius = self._pump_outer_radius(geometry)
-        casing_depth = max(24.0, geometry["width_mm"] * scale * 1.2)
+        casing_depth = max(4.0, geometry["casing_depth_mm"] * scale)
         self._draw_disc_mesh(
             scene,
-            casing_radius * 1.05,
+            casing_radius,
             casing_depth,
             origin,
             1.0,
@@ -1595,36 +1642,47 @@ class Model3DView(QGraphicsView):
     ) -> None:
         scale = geometry["display_scale"]
         radius = geometry["diameter_mm"] * 0.5 * scale
+        casing_radius = geometry["casing_diameter_mm"] * 0.5 * scale
         width = geometry["width_mm"] * scale
         eye_radius = geometry["eye_diameter_mm"] * 0.5 * scale
+        casing_point = self._project(casing_radius, 0.0, max(8.0, geometry["casing_depth_mm"] * scale * 0.24), origin, 1.0)
         dia_point = self._project(radius, 0.0, max(8.0, width * 0.55), origin, 1.0)
         eye_point = self._project(eye_radius, 0.0, max(12.0, width * 1.1), origin, 1.0)
         if left_side:
-            dia_label = (74.0, 128.0)
-            eye_label = (78.0, 378.0)
+            casing_label = (28.0, 118.0)
+            dia_label = (28.0, 352.0)
+            eye_label = (28.0, 414.0)
         else:
-            dia_label = (552.0, 128.0)
-            eye_label = (552.0, 378.0)
+            casing_label = (552.0, 118.0)
+            dia_label = (552.0, 352.0)
+            eye_label = (552.0, 414.0)
+        self._draw_callout(
+            scene,
+            (casing_point[0], casing_point[1]),
+            casing_label,
+            "Casing {0} mm".format(_format_number(geometry["casing_diameter_mm"], 2)),
+            color,
+        )
         self._draw_callout(
             scene,
             (dia_point[0], dia_point[1]),
             dia_label,
-            "Impeller dia {0} mm".format(_format_number(geometry["diameter_mm"], 2)),
+            "Impeller {0} mm".format(_format_number(geometry["diameter_mm"], 2)),
             color,
         )
         self._draw_callout(
             scene,
             (eye_point[0], eye_point[1]),
             eye_label,
-            "Eye dia {0} mm".format(_format_number(geometry["eye_diameter_mm"], 2)),
+            "Eye {0} mm".format(_format_number(geometry["eye_diameter_mm"], 2)),
             QT_PALETTE["text"],
         )
-        width_label_y = 476.0 if left_side else 456.0
+        width_label_y = 508.0
         self._draw_callout(
             scene,
             (origin[0], origin[1] + radius * 0.72),
             (dia_label[0], width_label_y),
-            "Width {0} mm, {1} blades".format(_format_number(geometry["width_mm"], 2), geometry["blade_count"]),
+            "Width {0} mm / {1}".format(_format_number(geometry["width_mm"], 2), geometry["blade_count"]),
             QT_PALETTE["muted"],
         )
 
@@ -1833,11 +1891,14 @@ class Model3DView(QGraphicsView):
         self._draw_disc_mesh(scene, 36.0, 24.0, (origin[0] - 76.0, origin[1] - 2.0), scale, QT_PALETTE["accent"], QT_PALETTE["accent_hover"], center=(0.0, 0.0, 36.0))
         self._add_text(scene, origin[0] - 40, origin[1] - 14, "Regulated Feed", QT_PALETTE["text"], 11, 160)
 
-    def _draw_small_nozzle(self, scene: QGraphicsScene, origin: Tuple[float, float], color: str) -> None:
-        pen = QPen(QColor(color), 4, Qt.SolidLine, Qt.RoundCap)
-        scene.addLine(origin[0] - 28, origin[1], origin[0] + 34, origin[1], pen)
-        scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] - 12, pen)
-        scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] + 12, pen)
+    def _draw_small_nozzle(self, scene: QGraphicsScene, origin: Tuple[float, float], color: str, line_width: float = 4.0) -> None:
+        width = max(1.2, line_width)
+        stem = max(20.0, width * 7.0)
+        branch = max(10.0, width * 3.0)
+        pen = QPen(QColor(color), width, Qt.SolidLine, Qt.RoundCap)
+        scene.addLine(origin[0] - stem * 0.45, origin[1], origin[0] + stem * 0.55, origin[1], pen)
+        scene.addLine(origin[0] + stem * 0.55, origin[1], origin[0] + stem * 0.55 + branch, origin[1] - branch * 0.70, pen)
+        scene.addLine(origin[0] + stem * 0.55, origin[1], origin[0] + stem * 0.55 + branch, origin[1] + branch * 0.70, pen)
 
     def _draw_feed_connector(
         self,
@@ -1845,8 +1906,9 @@ class Model3DView(QGraphicsView):
         start: Tuple[float, float],
         end: Tuple[float, float],
         color: str,
+        line_width: float = 4.0,
     ) -> None:
-        pen = QPen(QColor(color), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        pen = QPen(QColor(color), max(1.2, line_width), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         path = QPainterPath()
         path.moveTo(start[0], start[1])
         bend_x = start[0] + (end[0] - start[0]) * 0.54
@@ -1856,7 +1918,7 @@ class Model3DView(QGraphicsView):
         scene.addPath(path, pen)
         highlight = QColor("#FFFFFF")
         highlight.setAlpha(62)
-        scene.addPath(path, QPen(highlight, 1.1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        scene.addPath(path, QPen(highlight, max(0.6, line_width * 0.24), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
 
     def _draw_callout(
         self,
@@ -1872,7 +1934,7 @@ class Model3DView(QGraphicsView):
         font = QFont("Segoe UI", 8)
         metrics = QFontMetrics(font)
         width = max(90.0, float(metrics.horizontalAdvance(label)) + 22.0)
-        label_x = min(max(56.0, label_pos[0]), 770.0 - width)
+        label_x = min(max(24.0, label_pos[0]), 770.0 - width)
         label_y = max(96.0, min(526.0, label_pos[1]))
         elbow_x = start[0] + (label_x - start[0]) * 0.55
         elbow_y = label_y

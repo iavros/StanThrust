@@ -1036,6 +1036,8 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
         ("Fuel tank propellant mass", "fuel_mass_kg", "kg", "--"),
         ("Fuel tank propellant volume", "fuel_volume_l", "L", "--"),
         ("Fuel tank feed mass flow", "fuel_mass_flow_kg_s", "kg/s", "--"),
+        ("Fuel feed tube diameter", "fuel_feed_tube_diameter_mm", "mm", "--"),
+        ("Fuel feed tube length", "fuel_feed_tube_length_mm", "mm", "--"),
         ("Fuel tank pressurization (modeled)", "fuel_tank_pressure_kpa", "kPa", "--"),
         ("Oxidizer tank outer diameter", "oxidizer_tank_outer_diameter_mm", "mm", inputs.tank_diameter_mm),
         ("Oxidizer tank inner diameter", "oxidizer_tank_inner_diameter_mm", "mm", "--"),
@@ -1044,6 +1046,8 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
         ("Oxidizer tank propellant mass", "oxidizer_mass_kg", "kg", "--"),
         ("Oxidizer tank propellant volume", "oxidizer_volume_l", "L", "--"),
         ("Oxidizer tank feed mass flow", "oxidizer_mass_flow_kg_s", "kg/s", "--"),
+        ("Oxidizer feed tube diameter", "oxidizer_feed_tube_diameter_mm", "mm", "--"),
+        ("Oxidizer feed tube length", "oxidizer_feed_tube_length_mm", "mm", "--"),
         ("Oxidizer tank pressurization (modeled)", "oxidizer_tank_pressure_kpa", "kPa", "--"),
         ("Chamber inner diameter", "chamber_inner_diameter_mm", "mm", inputs.chamber_diameter_mm),
         ("Chamber outer diameter", "chamber_outer_diameter_mm", "mm", inputs.chamber_diameter_mm),
@@ -1132,6 +1136,8 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
             ("Fuel impeller blade angle", "fuel_impeller_blade_angle_deg", "deg", "--"),
             ("Fuel impeller blade thickness", "fuel_impeller_blade_thickness_mm", "mm", "--"),
             ("Fuel impeller tip clearance", "fuel_impeller_tip_clearance_mm", "mm", "--"),
+            ("Fuel pump casing diameter", "fuel_pump_casing_diameter_mm", "mm", "--"),
+            ("Fuel pump casing depth", "fuel_pump_casing_depth_mm", "mm", "--"),
             ("Oxidizer impeller diameter", "oxidizer_impeller_diameter_mm", "mm", "--"),
             ("Oxidizer impeller hub diameter", "oxidizer_impeller_hub_diameter_mm", "mm", "--"),
             ("Oxidizer impeller eye diameter", "oxidizer_impeller_eye_diameter_mm", "mm", "--"),
@@ -1139,9 +1145,14 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
             ("Oxidizer impeller blade angle", "oxidizer_impeller_blade_angle_deg", "deg", "--"),
             ("Oxidizer impeller blade thickness", "oxidizer_impeller_blade_thickness_mm", "mm", "--"),
             ("Oxidizer impeller tip clearance", "oxidizer_impeller_tip_clearance_mm", "mm", "--"),
+            ("Oxidizer pump casing diameter", "oxidizer_pump_casing_diameter_mm", "mm", "--"),
+            ("Oxidizer pump casing depth", "oxidizer_pump_casing_depth_mm", "mm", "--"),
             ("Electric motor power", "electric_motor_power_kw", "kW", "--"),
             ("Electric motor torque", "electric_motor_torque_nm", "N*m", "--"),
             ("Electric motor speed", "electric_motor_speed_rpm", "rpm", "--"),
+            ("Electric motor envelope length", "electric_motor_envelope_length_mm", "mm", "--"),
+            ("Electric motor envelope height", "electric_motor_envelope_height_mm", "mm", "--"),
+            ("Electric motor envelope depth", "electric_motor_envelope_depth_mm", "mm", "--"),
         ]
         _add_measurement_rows(rows, values, pump_rows)
 
@@ -1180,6 +1191,8 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
             ("Impinging injector pair spacing", "impinging_pair_spacing_mm", "mm", "--"),
             ("Impinging injector element count", "impinging_element_count", "", "--"),
             ("Impinging injector orifice count", "impinging_orifice_count", "", "--"),
+            ("Impinging element ring diameter", "injector_element_ring_diameter_mm", "mm", "--"),
+            ("Impinging convergence height", "impinging_convergence_height_mm", "mm", "--"),
         ]
     _add_measurement_rows(rows, values, injector_rows)
     return rows
@@ -1416,12 +1429,12 @@ class ConceptSolver:
     @staticmethod
     def _build_subsystem_placeholders(inputs: DesignInputs) -> List[SubsystemPlaceholder]:
         drive_note = (
-            "Electric drive envelope reserved beside the pump cartridge. Motor class, winding, cooling, and power electronics are not sized in concept mode."
+            "Electric drive envelope is sized from the pump power and torque estimate. Motor class, winding, cooling, and power electronics remain concept-level selections."
             if inputs.use_pumps
             else "Drive module removed in blowdown mode; pressurant packaging envelope retained instead."
         )
         pump_note = (
-            "Impeller pump cartridge envelope reserved for fuel and oxidizer paths. Rotor geometry, inducer detail, blade count, and shaft speed are intentionally not calculated."
+            "Impeller diameter, hub, eye, blade count, blade angle, casing envelope, and shaft speed are sized for the fuel and oxidizer feed paths."
             if inputs.use_pumps
             else "No pump cartridge in blowdown mode."
         )
@@ -1644,11 +1657,19 @@ class ConceptSolver:
 
         injector_face_thickness_mm = injector_plate_thickness_mm
         injector_face_diameter_mm = injector_plate_diameter_mm
+        injector_recess_diameter_mm = clamp(injector_face_diameter_mm * 0.72, 18.0, injector_face_diameter_mm * 0.88)
         if inputs.injector_type == "pintle":
             pintle_tip_diameter_mm = clamp(inputs.chamber_diameter_mm * 0.24, 7.5, 26.0)
             pintle_stem_diameter_mm = clamp(pintle_tip_diameter_mm * 0.62, 5.0, 18.0)
             pintle_annulus_gap_mm = clamp(0.95 + propellant_mass_flow_kg_s * 2.4, 0.8, 4.2)
             pintle_projection_length_mm = clamp(inputs.chamber_diameter_mm * 0.55, 12.0, 62.0)
+            injector_element_ring_diameter_mm = pintle_tip_diameter_mm + 2.0 * pintle_annulus_gap_mm
+            injector_recess_diameter_mm = clamp(
+                injector_element_ring_diameter_mm + 2.0 * max(pintle_annulus_gap_mm, 1.2),
+                18.0,
+                injector_face_diameter_mm * 0.88,
+            )
+            impinging_convergence_height_mm = 0.0
             impinging_orifice_diameter_mm = 0.0
             impinging_angle_deg = 0.0
             impinging_pair_spacing_mm = 0.0
@@ -1667,6 +1688,7 @@ class ConceptSolver:
             impinging_angle_deg = clamp(28.0 + mixture_bias * 16.0, 22.0, 56.0)
             impinging_pair_spacing_mm = clamp(inputs.chamber_diameter_mm * 0.085, 3.0, 12.0)
             usable_face_radius_mm = injector_face_diameter_mm * 0.36
+            injector_element_ring_diameter_mm = usable_face_radius_mm * 2.0
             element_pitch_mm = max(
                 impinging_pair_spacing_mm * 2.15,
                 impinging_orifice_diameter_mm * 4.0,
@@ -1675,6 +1697,24 @@ class ConceptSolver:
             ring_capacity = max(2, int(math.floor(2.0 * math.pi * usable_face_radius_mm / element_pitch_mm)))
             impinging_element_count = float(max(2, ring_capacity))
             impinging_orifice_count = impinging_element_count * 2.0
+            injector_recess_diameter_mm = clamp(
+                2.0
+                * (
+                    usable_face_radius_mm
+                    + impinging_pair_spacing_mm * 0.5
+                    + impinging_orifice_diameter_mm
+                ),
+                18.0,
+                injector_face_diameter_mm * 0.88,
+            )
+            impinging_convergence_height_mm = min(
+                injector_face_diameter_mm * 0.16,
+                max(
+                    2.0,
+                    (impinging_pair_spacing_mm * 0.5)
+                    / max(0.18, math.tan(math.radians(impinging_angle_deg) * 0.5)),
+                ),
+            )
 
         chamber_pressure_kpa = clamp(
             680.0
@@ -1695,6 +1735,18 @@ class ConceptSolver:
         oxidizer_tank_pressure_kpa = pressure_solution.oxidizer_tank_pressure_kpa
         pump_differential_pressure_kpa = pressure_solution.pump_differential_pressure_kpa
         solver_iterations = pressure_solution.iterations
+        fuel_feed_tube_diameter_mm = clamp(
+            math.sqrt(max(1e-9, 4.0 * fuel_volume_flow_m3_s / (math.pi * 4.0))) * 1000.0,
+            3.0,
+            inputs.tank_diameter_mm * 0.28,
+        )
+        oxidizer_feed_tube_diameter_mm = clamp(
+            math.sqrt(max(1e-9, 4.0 * oxidizer_volume_flow_m3_s / (math.pi * 4.0))) * 1000.0,
+            3.0,
+            inputs.tank_diameter_mm * 0.28,
+        )
+        fuel_feed_tube_length_mm = clamp(feed_system_bay_length_mm * (0.72 if inputs.use_pumps else 0.58), 22.0, 240.0)
+        oxidizer_feed_tube_length_mm = clamp(feed_system_bay_length_mm * (0.72 if inputs.use_pumps else 0.58), 22.0, 240.0)
 
         fuel_tank_wall_thickness_mm = _estimate_wall_thickness_mm(
             fuel_tank_pressure_kpa,
@@ -1751,6 +1803,22 @@ class ConceptSolver:
             oxidizer_impeller_blade_thickness_mm = clamp(
                 oxidizer_impeller_width_mm * 0.18, 1.2, 4.8
             )
+            fuel_pump_casing_diameter_mm = (
+                fuel_impeller_diameter_mm
+                + 2.0 * fuel_impeller_tip_clearance_mm
+                + max(4.0, fuel_impeller_width_mm * 0.35)
+            )
+            oxidizer_pump_casing_diameter_mm = (
+                oxidizer_impeller_diameter_mm
+                + 2.0 * oxidizer_impeller_tip_clearance_mm
+                + max(4.0, oxidizer_impeller_width_mm * 0.35)
+            )
+            fuel_pump_casing_depth_mm = fuel_impeller_width_mm + 2.0 * max(
+                fuel_impeller_tip_clearance_mm, fuel_impeller_blade_thickness_mm
+            )
+            oxidizer_pump_casing_depth_mm = oxidizer_impeller_width_mm + 2.0 * max(
+                oxidizer_impeller_tip_clearance_mm, oxidizer_impeller_blade_thickness_mm
+            )
             electric_motor_power_kw = clamp(
                 (
                     pump_differential_pressure_kpa
@@ -1770,6 +1838,9 @@ class ConceptSolver:
             electric_motor_torque_nm = electric_motor_power_kw * 9550.0 / max(
                 1000.0, electric_motor_speed_rpm
             )
+            electric_motor_envelope_length_mm = clamp(74.0 + electric_motor_power_kw * 7.5, 64.0, 180.0)
+            electric_motor_envelope_height_mm = clamp(42.0 + electric_motor_torque_nm * 1.8, 38.0, 104.0)
+            electric_motor_envelope_depth_mm = clamp(46.0 + electric_motor_power_kw * 2.8, 42.0, 112.0)
         else:
             pump_differential_pressure_kpa = 0.0
             pump_efficiency = 0.0
@@ -1789,9 +1860,16 @@ class ConceptSolver:
             oxidizer_impeller_tip_clearance_mm = 0.0
             fuel_impeller_blade_thickness_mm = 0.0
             oxidizer_impeller_blade_thickness_mm = 0.0
+            fuel_pump_casing_diameter_mm = 0.0
+            oxidizer_pump_casing_diameter_mm = 0.0
+            fuel_pump_casing_depth_mm = 0.0
+            oxidizer_pump_casing_depth_mm = 0.0
             electric_motor_power_kw = 0.0
             electric_motor_speed_rpm = 0.0
             electric_motor_torque_nm = 0.0
+            electric_motor_envelope_length_mm = 0.0
+            electric_motor_envelope_height_mm = 0.0
+            electric_motor_envelope_depth_mm = 0.0
 
         chamber_structural_wall_thickness_mm = _estimate_wall_thickness_mm(
             chamber_pressure_kpa,
@@ -2107,6 +2185,10 @@ class ConceptSolver:
                 "pressure_solution_status": pressure_solution.status,
                 "pump_differential_pressure_kpa": rounded(pump_differential_pressure_kpa),
                 "pump_efficiency": round(pump_efficiency, 3),
+                "fuel_feed_tube_diameter_mm": rounded(fuel_feed_tube_diameter_mm),
+                "oxidizer_feed_tube_diameter_mm": rounded(oxidizer_feed_tube_diameter_mm),
+                "fuel_feed_tube_length_mm": rounded(fuel_feed_tube_length_mm),
+                "oxidizer_feed_tube_length_mm": rounded(oxidizer_feed_tube_length_mm),
                 "fuel_impeller_diameter_mm": rounded(fuel_impeller_diameter_mm),
                 "oxidizer_impeller_diameter_mm": rounded(oxidizer_impeller_diameter_mm),
                 "fuel_impeller_width_mm": rounded(fuel_impeller_width_mm),
@@ -2123,9 +2205,16 @@ class ConceptSolver:
                 "oxidizer_impeller_tip_clearance_mm": rounded(oxidizer_impeller_tip_clearance_mm),
                 "fuel_impeller_blade_thickness_mm": rounded(fuel_impeller_blade_thickness_mm),
                 "oxidizer_impeller_blade_thickness_mm": rounded(oxidizer_impeller_blade_thickness_mm),
+                "fuel_pump_casing_diameter_mm": rounded(fuel_pump_casing_diameter_mm),
+                "oxidizer_pump_casing_diameter_mm": rounded(oxidizer_pump_casing_diameter_mm),
+                "fuel_pump_casing_depth_mm": rounded(fuel_pump_casing_depth_mm),
+                "oxidizer_pump_casing_depth_mm": rounded(oxidizer_pump_casing_depth_mm),
                 "electric_motor_power_kw": round(electric_motor_power_kw, 3),
                 "electric_motor_speed_rpm": round(electric_motor_speed_rpm, 1),
                 "electric_motor_torque_nm": round(electric_motor_torque_nm, 3),
+                "electric_motor_envelope_length_mm": rounded(electric_motor_envelope_length_mm),
+                "electric_motor_envelope_height_mm": rounded(electric_motor_envelope_height_mm),
+                "electric_motor_envelope_depth_mm": rounded(electric_motor_envelope_depth_mm),
                 "nozzle_throat_diameter_mm": rounded(nozzle_throat_diameter_mm),
                 "nozzle_inner_diameter_mm": rounded(inputs.nozzle_diameter_mm),
                 "nozzle_outer_diameter_mm": rounded(nozzle_regen_outer_diameter_mm),
@@ -2203,6 +2292,8 @@ class ConceptSolver:
                 "film_injection_velocity_m_s": rounded(film_injection_velocity_m_s),
                 "injector_face_diameter_mm": rounded(injector_face_diameter_mm),
                 "injector_face_thickness_mm": rounded(injector_face_thickness_mm),
+                "injector_recess_diameter_mm": rounded(injector_recess_diameter_mm),
+                "injector_element_ring_diameter_mm": rounded(injector_element_ring_diameter_mm),
                 "pintle_tip_diameter_mm": rounded(pintle_tip_diameter_mm),
                 "pintle_stem_diameter_mm": rounded(pintle_stem_diameter_mm),
                 "pintle_annulus_gap_mm": rounded(pintle_annulus_gap_mm),
@@ -2212,6 +2303,7 @@ class ConceptSolver:
                 "impinging_pair_spacing_mm": rounded(impinging_pair_spacing_mm),
                 "impinging_element_count": impinging_element_count,
                 "impinging_orifice_count": impinging_orifice_count,
+                "impinging_convergence_height_mm": rounded(impinging_convergence_height_mm),
                 "solver_iterations": float(solver_iterations),
                 "total_stack_length_mm": rounded(total_stack_length_mm),
                 "fuel_tank_allowable_stress_mpa": section_margin_values["fuel_tank"]["allowable_stress_mpa"],
