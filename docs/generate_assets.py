@@ -5,7 +5,7 @@ import site
 import sys
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = REPORT_ROOT / "data"
 

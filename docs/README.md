@@ -34,7 +34,7 @@ The desktop app now exposes the same reduced-order histories in its Qt results w
 From the project root:
 
 ```powershell
-python docs\overleaf_solver_report\generate_assets.py
+python docs\generate_assets.py
 ```
 
 The script writes:
@@ -68,7 +68,7 @@ The transient feed CSV files are generated from the same solver-interface path u
 ## Use in Overleaf
 
 1. Create a new blank Overleaf project.
-2. Upload the full `overleaf_solver_report` folder contents.
+2. Upload the full `docs` folder contents.
 3. Set `main.tex` as the main document if Overleaf does not detect it automatically.
 4. Compile with `pdfLaTeX`.
 

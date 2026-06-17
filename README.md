@@ -39,14 +39,14 @@ Python 3.11 is the supported development runtime. Cantera is required; the solve
 
 The technical solver writeup lives in:
 
-- `docs/overleaf_solver_report/main.tex`
-- `docs/overleaf_solver_report/StanThrust_Solver_Report.pdf`
-- `docs/overleaf_solver_report/data/`
+- `docs/main.tex`
+- `docs/StanThrust_Solver_Report.pdf`
+- `docs/data/`
 
 Regenerate the report datasets with:
 
 ```powershell
-python docs\overleaf_solver_report\generate_assets.py
+python docs\generate_assets.py
 ```
 
 The report source is Overleaf-ready and uses generated CSV tables from the same solver code used by the desktop app.
@@ -57,7 +57,7 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 - `stanshock/`: application package and solver code
 - `stanshock/data/`: bundled thermochemistry mechanism files
 - `assets/`: icons and application artwork
-- `docs/overleaf_solver_report/`: solver report source, PDF, and generated datasets
+- `docs/`: solver report source, PDF, and generated datasets
 - `packaging/`: CI-facing Windows and macOS packaging scripts
 - `tests/`: regression tests used by CI and release builds
 
