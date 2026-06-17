@@ -523,6 +523,8 @@ class SchematicView(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setObjectName("schematicView")
         self.setMinimumHeight(460)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def render_design(self, design) -> None:
         scene = self.scene()
@@ -678,14 +680,33 @@ class SchematicView(QGraphicsView):
 
         ox_pen = QPen(QColor(QT_PALETTE["oxidizer"]), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         fuel_pen = QPen(QColor(QT_PALETTE["fuel"]), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        feed_bus_x = 516
+        ox_route_y = 112
+        fuel_route_y = 452
         ox_path = QPainterPath()
         ox_path.moveTo(284, 178)
-        ox_path.cubicTo(314, 178, 320, 178, 344, 202)
-        ox_path.cubicTo(378, 234, 458, 226, profile["injector_x"] + 18, profile["injector_top_y"])
+        ox_path.cubicTo(306, 178, 300, ox_route_y, 336, ox_route_y)
+        ox_path.lineTo(feed_bus_x, ox_route_y)
+        ox_path.cubicTo(
+            feed_bus_x + 14,
+            ox_route_y,
+            feed_bus_x + 16,
+            profile["injector_top_y"],
+            profile["injector_x"] + 18,
+            profile["injector_top_y"],
+        )
         fuel_path = QPainterPath()
         fuel_path.moveTo(284, 320)
-        fuel_path.cubicTo(314, 320, 320, 320, 344, 296)
-        fuel_path.cubicTo(378, 266, 458, 274, profile["injector_x"] + 18, profile["injector_bottom_y"])
+        fuel_path.cubicTo(306, 320, 300, fuel_route_y, 336, fuel_route_y)
+        fuel_path.lineTo(feed_bus_x, fuel_route_y)
+        fuel_path.cubicTo(
+            feed_bus_x + 14,
+            fuel_route_y,
+            feed_bus_x + 16,
+            profile["injector_bottom_y"],
+            profile["injector_x"] + 18,
+            profile["injector_bottom_y"],
+        )
         scene.addPath(ox_path, ox_pen)
         scene.addPath(fuel_path, fuel_pen)
 
@@ -733,6 +754,12 @@ class SchematicView(QGraphicsView):
             QT_PALETTE["text"],
             144,
         )
+        self.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self.scene() is not None:
+            self.fitInView(self.scene().sceneRect(), Qt.KeepAspectRatio)
 
     def _add_round_rect(self, scene: QGraphicsScene, x: float, y: float, w: float, h: float, fill: str):
         path = QPainterPath()
@@ -959,12 +986,54 @@ class Model3DView(QGraphicsView):
     def __init__(self, view_mode: str = "chamber_nozzle") -> None:
         super().__init__()
         self.view_mode = view_mode
+        self._design = None
+        self._angle_deg = -28.0
+        self._dragging = False
+        self._last_drag_x = 0
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         self.setScene(QGraphicsScene(self))
         self.setObjectName("schematicView")
         self.setMinimumHeight(420)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setMouseTracking(True)
+        self._spin_timer = QTimer(self)
+        self._spin_timer.setInterval(45)
+        self._spin_timer.timeout.connect(self._tick_spin)
+        self._spin_timer.start()
 
     def render_design(self, design) -> None:
+        self._design = design
+        self._redraw_model()
+
+    def _tick_spin(self) -> None:
+        if self._design is None or self._dragging or not self.isVisible():
+            return
+        self._angle_deg = (self._angle_deg + 0.9) % 360.0
+        self._redraw_model()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._last_drag_x = event.x()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._dragging and self._design is not None:
+            delta_x = event.x() - self._last_drag_x
+            self._last_drag_x = event.x()
+            self._angle_deg = (self._angle_deg + delta_x * 0.55) % 360.0
+            self._redraw_model()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+    def _redraw_model(self) -> None:
+        design = self._design
+        if design is None:
+            return
         scene = self.scene()
         scene.clear()
         scene.setSceneRect(0, 0, 1100, 560)
@@ -981,12 +1050,18 @@ class Model3DView(QGraphicsView):
             self._draw_tanks(scene, design)
         else:
             self._draw_chamber_nozzle(scene, design)
+        self.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self.scene() is not None:
+            self.fitInView(self.scene().sceneRect(), Qt.KeepAspectRatio)
 
     def _draw_chamber_nozzle(self, scene: QGraphicsScene, design) -> None:
         self._component_title(
             scene,
             "Chamber And Nozzle",
-            "Solved combustion chamber, throat, MOC-informed bell contour, and cooling envelope.",
+            "Auto-rotating chamber, throat, MOC-informed bell nozzle, and injector flange.",
         )
 
         profile = build_revolved_profile_points(design)
@@ -996,74 +1071,32 @@ class Model3DView(QGraphicsView):
 
         max_x = max(point[0] for point in profile)
         max_radius = max(point[1] for point in profile)
-        scale = min(700.0 / max(1.0, max_x), 215.0 / max(1.0, max_radius))
-        origin_x = 86.0
-        origin_y = 318.0
-        tilt_rad = math.radians(24.0)
-        yaw_rad = math.radians(-28.0)
-        cos_tilt = math.cos(tilt_rad)
-        sin_tilt = math.sin(tilt_rad)
-        cos_yaw = math.cos(yaw_rad)
-        sin_yaw = math.sin(yaw_rad)
-
-        def project(x_mm: float, radial_y_mm: float, radial_z_mm: float) -> Tuple[float, float, float]:
-            y1 = radial_y_mm * cos_yaw - radial_z_mm * sin_yaw
-            z1 = radial_y_mm * sin_yaw + radial_z_mm * cos_yaw
-            y2 = y1 * cos_tilt - z1 * sin_tilt
-            z2 = y1 * sin_tilt + z1 * cos_tilt
-            return (
-                origin_x + x_mm * scale + z2 * scale * 0.24,
-                origin_y - y2 * scale + z2 * scale * 0.08,
-                z2,
-            )
-
+        scale = min(660.0 / max(1.0, max_x), 205.0 / max(1.0, max_radius))
+        origin = (405.0, 312.0)
         segments = 28
         rings: List[List[Tuple[float, float, float]]] = []
         for x_mm, radius_mm in profile:
             ring: List[Tuple[float, float, float]] = []
             for index in range(segments):
                 theta = 2.0 * math.pi * index / segments
-                ring.append(project(x_mm, radius_mm * math.cos(theta), radius_mm * math.sin(theta)))
+                ring.append((x_mm - max_x * 0.5, radius_mm * math.cos(theta), radius_mm * math.sin(theta)))
             rings.append(ring)
-
-        surfaces = []
-        for point_index in range(len(rings) - 1):
-            for segment_index in range(segments):
-                p0 = rings[point_index][segment_index]
-                p1 = rings[point_index][(segment_index + 1) % segments]
-                p2 = rings[point_index + 1][(segment_index + 1) % segments]
-                p3 = rings[point_index + 1][segment_index]
-                depth = (p0[2] + p1[2] + p2[2] + p3[2]) * 0.25
-                surfaces.append((depth, p0, p1, p2, p3))
-
-        min_depth = min(surface[0] for surface in surfaces)
-        max_depth = max(surface[0] for surface in surfaces)
-        depth_span = max(1e-6, max_depth - min_depth)
-        for depth, p0, p1, p2, p3 in sorted(surfaces, key=lambda item: item[0]):
-            shade = int(72 + 82 * ((depth - min_depth) / depth_span))
-            color = QColor(shade + 38, max(28, shade // 2), max(34, shade // 2 + 4))
-            polygon = QPolygonF([QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]), QPointF(p2[0], p2[1]), QPointF(p3[0], p3[1])])
-            scene.addPolygon(polygon, QPen(QColor("#28181D"), 0.35), QBrush(color))
-
-        wire_pen = QPen(QColor("#E16A76"), 1.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        wire_pen.setCosmetic(True)
-        for ring_index, ring in enumerate(rings):
-            if ring_index % 3 != 0 and ring_index not in (0, len(rings) - 1):
-                continue
-            for segment_index in range(segments):
-                a = ring[segment_index]
-                b = ring[(segment_index + 1) % segments]
-                scene.addLine(a[0], a[1], b[0], b[1], wire_pen)
-        for segment_index in range(0, segments, 4):
-            path = QPainterPath()
-            first = rings[0][segment_index]
-            path.moveTo(first[0], first[1])
-            for ring in rings[1:]:
-                point = ring[segment_index]
-                path.lineTo(point[0], point[1])
-            scene.addPath(path, wire_pen)
+        self._draw_ring_mesh(scene, rings, origin, scale, "#AA2735", "#E16A76", cap_ends=True)
 
         values = dict(design.derived.engineering_values)
+        chamber_length = float(design.derived.chamber_length_mm)
+        flange_radius = max_radius * 1.12
+        self._draw_disc_mesh(
+            scene,
+            radius_mm=flange_radius,
+            depth_mm=max(10.0, chamber_length * 0.06),
+            origin=origin,
+            scale=scale,
+            color="#303841",
+            wire_color=QT_PALETTE["muted"],
+            center=(-max_x * 0.5 - 8.0, 0.0, 0.0),
+        )
+
         throat_diameter = _format_number(values.get("nozzle_throat_diameter_mm", "--"), 2)
         exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
         length = _format_number(float(design.derived.chamber_length_mm) + float(design.derived.nozzle_length_mm), 2)
@@ -1075,18 +1108,11 @@ class Model3DView(QGraphicsView):
         cooling = "Regen" if design.inputs.regen_cooling else "Film" if design.inputs.film_cooling else "Passive"
         self._metric(scene, 790, 352, "Cooling", cooling)
 
-        injector_x = origin_x - 18
-        injector_y = origin_y
-        flange_pen = QPen(QColor(QT_PALETTE["border"]), 2)
-        flange_brush = QBrush(QColor("#20272E"))
-        scene.addEllipse(injector_x - 18, injector_y - 52, 36, 104, flange_pen, flange_brush)
-        self._add_text(scene, injector_x - 20, injector_y + 74, "Injector flange", QT_PALETTE["muted"], 8, 118)
-
     def _draw_tanks(self, scene: QGraphicsScene, design) -> None:
         self._component_title(
             scene,
             "Propellant Tanks",
-            "Separate oxidizer and fuel tank envelopes with wall, diameter, and length references.",
+            "Rotating 3D tank envelopes with separate oxidizer and fuel vessels.",
         )
         values = dict(design.derived.engineering_values)
         tank_diameter = float(design.inputs.tank_diameter_mm)
@@ -1094,16 +1120,15 @@ class Model3DView(QGraphicsView):
         fuel_length = float(design.derived.fuel_tank_length_mm)
         max_length = max(1.0, ox_length, fuel_length)
         max_diameter = max(1.0, tank_diameter)
-        scale_x = min(650.0 / max_length, 1.4)
-        scale_y = min(150.0 / max_diameter, 2.3)
-        diameter_px = max(42.0, tank_diameter * scale_y)
-        ox_width = max(140.0, ox_length * scale_x)
-        fuel_width = max(140.0, fuel_length * scale_x)
-
-        self._draw_cylinder(scene, 84, 176, ox_width, diameter_px, QT_PALETTE["oxidizer"])
-        self._draw_cylinder(scene, 84, 354, fuel_width, diameter_px, QT_PALETTE["fuel"])
-        self._add_text(scene, 84, 132, "Oxidizer Tank", QT_PALETTE["text"], 12, 260)
-        self._add_text(scene, 84, 310, "Fuel Tank", QT_PALETTE["text"], 12, 260)
+        scale = min(560.0 / max_length, 172.0 / max_diameter)
+        ox_origin = (372.0, 205.0)
+        fuel_origin = (372.0, 392.0)
+        self._draw_axial_cylinder_mesh(scene, ox_length, tank_diameter * 0.5, ox_origin, scale, QT_PALETTE["oxidizer"], "#9FD2F7")
+        self._draw_axial_cylinder_mesh(scene, fuel_length, tank_diameter * 0.5, fuel_origin, scale, QT_PALETTE["fuel"], "#F3C26E")
+        self._add_text(scene, 82, 126, "Oxidizer Tank", QT_PALETTE["text"], 12, 260)
+        self._add_text(scene, 82, 314, "Fuel Tank", QT_PALETTE["text"], 12, 260)
+        self._draw_small_nozzle(scene, (ox_origin[0] + 220.0, ox_origin[1] + 52.0), QT_PALETTE["oxidizer"])
+        self._draw_small_nozzle(scene, (fuel_origin[0] + 220.0, fuel_origin[1] + 52.0), QT_PALETTE["fuel"])
         self._metric(scene, 790, 104, "Ox Length", "{0} mm".format(_format_number(ox_length, 2)))
         self._metric(scene, 790, 166, "Fuel Length", "{0} mm".format(_format_number(fuel_length, 2)))
         self._metric(scene, 790, 228, "Diameter", "{0} mm".format(_format_number(tank_diameter, 2)))
@@ -1114,66 +1139,98 @@ class Model3DView(QGraphicsView):
         self._component_title(
             scene,
             "Feed Hardware",
-            "Pumps are isolated from tanks and injector so their architecture is easier to inspect.",
+            "Rotating impeller housings, shafts, and motor block sized from the feed solve.",
         )
         values = dict(design.derived.engineering_values)
         if not design.inputs.use_pumps:
             self._add_text(scene, 86, 176, "Pressure-fed architecture selected.", QT_PALETTE["text"], 15, 420)
-            self._draw_regulator(scene, 148, 278)
+            self._draw_regulator_3d(scene, (324.0, 302.0), 1.0)
             self._metric(scene, 790, 104, "Fuel Tank", "{0} kPa".format(_format_number(values.get("fuel_tank_pressure_kpa", "--"), 2)))
             self._metric(scene, 790, 166, "Ox Tank", "{0} kPa".format(_format_number(values.get("oxidizer_tank_pressure_kpa", "--"), 2)))
             self._metric(scene, 790, 228, "Mode", "Blowdown")
             return
 
-        fuel_impeller = _safe_float(values.get("fuel_impeller_diameter_mm"), 42.0) or 42.0
-        ox_impeller = _safe_float(values.get("oxidizer_impeller_diameter_mm"), 45.0) or 45.0
-        fuel_radius = max(42.0, min(96.0, fuel_impeller * 1.1))
-        ox_radius = max(42.0, min(96.0, ox_impeller * 1.1))
-        self._draw_pump(scene, 210, 236, fuel_radius, QT_PALETTE["fuel"], "Fuel Pump")
-        self._draw_pump(scene, 482, 236, ox_radius, QT_PALETTE["oxidizer"], "Ox Pump")
-        self._add_round_rect(scene, QRectF(316, 344, 220, 78), 8, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#20272E")))
-        self._add_text(scene, 348, 368, "Electric Motor", QT_PALETTE["text"], 12, 160)
-        shaft_pen = QPen(QColor(QT_PALETTE["muted"]), 5, Qt.SolidLine, Qt.RoundCap)
-        scene.addLine(272, 306, 334, 370, shaft_pen)
-        scene.addLine(548, 306, 524, 370, shaft_pen)
-        self._metric(scene, 790, 104, "Fuel Impeller", "{0} mm".format(_format_number(fuel_impeller, 2)))
-        self._metric(scene, 790, 166, "Ox Impeller", "{0} mm".format(_format_number(ox_impeller, 2)))
-        self._metric(scene, 790, 228, "Pump Head", "{0} kPa".format(_format_number(values.get("pump_differential_pressure_kpa", "--"), 2)))
-        self._metric(scene, 790, 290, "Motor", "{0} kW".format(_format_number(values.get("electric_motor_power_kw", "--"), 3)))
+        fuel_geometry = self._pump_geometry(values, "fuel", 42.0)
+        ox_geometry = self._pump_geometry(values, "oxidizer", 45.0)
+        max_impeller_diameter = max(1.0, fuel_geometry["diameter_mm"], ox_geometry["diameter_mm"])
+        display_scale = min(3.8, 232.0 / max_impeller_diameter)
+        fuel_geometry["display_scale"] = display_scale
+        ox_geometry["display_scale"] = display_scale
+
+        fuel_radius = self._pump_outer_radius(fuel_geometry)
+        ox_radius = self._pump_outer_radius(ox_geometry)
+        motor_power_kw = _safe_float(values.get("electric_motor_power_kw"), 0.25) or 0.25
+        motor_torque_nm = _safe_float(values.get("electric_motor_torque_nm"), 0.0) or 0.0
+        motor_width = 210.0 + min(84.0, max(0.0, motor_power_kw) * 8.0)
+        motor_depth = 70.0 + min(36.0, max(0.0, motor_torque_nm) * 2.0)
+        motor_origin = (402.0, 382.0)
+        self._draw_box_mesh(scene, motor_origin, motor_width, 82.0, motor_depth, 1.0, "#26313A", QT_PALETTE["muted"])
+        self._add_text(scene, 432, 400, "Electric Motor", QT_PALETTE["text"], 12, 160)
+        self._draw_shaft(
+            scene,
+            (240.0 + fuel_radius * 0.76, 258.0 + fuel_radius * 0.57),
+            (motor_origin[0] - motor_width * 0.46, motor_origin[1] + 6.0),
+            QT_PALETTE["muted"],
+        )
+        self._draw_shaft(
+            scene,
+            (548.0 - ox_radius * 0.66, 258.0 + ox_radius * 0.57),
+            (motor_origin[0] + motor_width * 0.46, motor_origin[1] + 6.0),
+            QT_PALETTE["muted"],
+        )
+        self._draw_pump_assembly(scene, (240.0, 258.0), fuel_geometry, QT_PALETTE["fuel"], "Fuel Pump")
+        self._draw_pump_assembly(scene, (548.0, 258.0), ox_geometry, QT_PALETTE["oxidizer"], "Ox Pump")
+        self._metric(scene, 790, 104, "Fuel Dia", "{0} mm".format(_format_number(fuel_geometry["diameter_mm"], 2)))
+        self._metric(scene, 790, 166, "Ox Dia", "{0} mm".format(_format_number(ox_geometry["diameter_mm"], 2)))
+        self._metric(
+            scene,
+            790,
+            228,
+            "Width",
+            "{0} / {1} mm".format(
+                _format_number(fuel_geometry["width_mm"], 2),
+                _format_number(ox_geometry["width_mm"], 2),
+            ),
+        )
+        self._metric(
+            scene,
+            790,
+            290,
+            "Blades",
+            "Fuel {0} / Ox {1}".format(fuel_geometry["blade_count"], ox_geometry["blade_count"]),
+        )
+        self._metric(
+            scene,
+            790,
+            352,
+            "Blade Angle",
+            "{0} / {1} deg".format(
+                _format_number(fuel_geometry["blade_angle_deg"], 1),
+                _format_number(ox_geometry["blade_angle_deg"], 1),
+            ),
+        )
+        self._metric(scene, 790, 414, "Head / Motor", "{0} kPa / {1} kW".format(
+            _format_number(values.get("pump_differential_pressure_kpa", "--"), 1),
+            _format_number(values.get("electric_motor_power_kw", "--"), 2),
+        ))
 
     def _draw_injector(self, scene: QGraphicsScene, design) -> None:
         self._component_title(
             scene,
             "Injector",
-            "Standalone injector face preview from the selected injector family and mixture-ratio sizing.",
+            "Rotating injector body with ports and pintle geometry derived from the current design.",
         )
         values = dict(design.derived.engineering_values)
-        center = QPointF(356, 292)
-        outer_radius = 148.0
-        scene.addEllipse(
-            center.x() - outer_radius,
-            center.y() - outer_radius,
-            outer_radius * 2.0,
-            outer_radius * 2.0,
-            QPen(QColor(QT_PALETTE["border"]), 3),
-            QBrush(QColor("#20272E")),
-        )
-        scene.addEllipse(
-            center.x() - 106,
-            center.y() - 106,
-            212,
-            212,
-            QPen(QColor(QT_PALETTE["border_soft"]), 1),
-            QBrush(QColor("#15181D")),
-        )
+        origin = (360.0, 292.0)
+        scale = 1.0
         injector_type = str(design.inputs.injector_type).strip().lower()
+        self._draw_disc_mesh(scene, 146.0, 42.0, origin, scale, "#26313A", QT_PALETTE["muted"], center=(0.0, 0.0, 0.0))
+        self._draw_disc_mesh(scene, 104.0, 48.0, origin, scale, "#11151A", QT_PALETTE["border"], center=(0.0, 0.0, 8.0))
         if injector_type == "pintle":
-            scene.addEllipse(center.x() - 34, center.y() - 34, 68, 68, QPen(QColor(QT_PALETTE["fuel"]), 2), QBrush(QColor(QT_PALETTE["fuel"])))
+            self._draw_disc_mesh(scene, 34.0, 84.0, origin, scale, QT_PALETTE["fuel"], "#F3C26E", center=(0.0, 0.0, 44.0))
             for index in range(24):
                 angle = 2.0 * math.pi * index / 24.0
-                x = center.x() + math.cos(angle) * 86.0
-                y = center.y() + math.sin(angle) * 86.0
-                scene.addEllipse(x - 7, y - 7, 14, 14, QPen(QColor(QT_PALETTE["oxidizer"])), QBrush(QColor(QT_PALETTE["oxidizer"])))
+                self._draw_projected_port(scene, origin, 86.0, angle, 7.0, QT_PALETTE["oxidizer"])
         else:
             for ring_radius, count, color in (
                 (44.0, 10, QT_PALETTE["fuel"]),
@@ -1182,9 +1239,7 @@ class Model3DView(QGraphicsView):
             ):
                 for index in range(count):
                     angle = 2.0 * math.pi * index / float(count)
-                    x = center.x() + math.cos(angle) * ring_radius
-                    y = center.y() + math.sin(angle) * ring_radius
-                    scene.addEllipse(x - 5, y - 5, 10, 10, QPen(QColor(color)), QBrush(QColor(color)))
+                    self._draw_projected_port(scene, origin, ring_radius, angle, 5.5, color)
         self._add_text(scene, 248, 466, _display_injector_name(injector_type), QT_PALETTE["text"], 13, 220)
         self._metric(scene, 790, 104, "Injector", _display_injector_name(injector_type))
         self._metric(scene, 790, 166, "Mixture Ratio", _format_number(float(design.inputs.mixture_ratio), 3))
@@ -1205,33 +1260,389 @@ class Model3DView(QGraphicsView):
         item.setBrush(brush)
         scene.addItem(item)
 
-    def _draw_cylinder(self, scene: QGraphicsScene, x: float, y: float, width: float, height: float, color: str) -> None:
-        body_rect = QRectF(x + height * 0.25, y, width, height)
-        fill = QColor(color)
-        fill.setAlphaF(0.68)
-        self._add_round_rect(scene, body_rect, height * 0.16, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(fill))
-        scene.addEllipse(x, y, height * 0.5, height, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#15181D")))
-        scene.addEllipse(x + width, y, height * 0.5, height, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(fill))
-        highlight = QPen(QColor("#FFFFFF"), 1)
-        highlight.setColor(QColor(255, 255, 255, 42))
-        scene.addLine(x + height * 0.42, y + height * 0.22, x + width + height * 0.16, y + height * 0.22, highlight)
+    def _project(self, x: float, y: float, z: float, origin: Tuple[float, float], scale: float) -> Tuple[float, float, float]:
+        yaw = math.radians(self._angle_deg)
+        tilt = math.radians(22.0)
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        x1 = x * cos_yaw + z * sin_yaw
+        z1 = -x * sin_yaw + z * cos_yaw
+        y2 = y * math.cos(tilt) - z1 * math.sin(tilt)
+        z2 = y * math.sin(tilt) + z1 * math.cos(tilt)
+        return (
+            origin[0] + x1 * scale + z2 * scale * 0.10,
+            origin[1] - y2 * scale + z2 * scale * 0.05,
+            z2,
+        )
 
-    def _draw_pump(self, scene: QGraphicsScene, cx: float, cy: float, radius: float, color: str, label: str) -> None:
-        scene.addEllipse(cx - radius, cy - radius, radius * 2.0, radius * 2.0, QPen(QColor(QT_PALETTE["border"]), 3), QBrush(QColor("#20272E")))
-        scene.addEllipse(cx - radius * 0.54, cy - radius * 0.54, radius * 1.08, radius * 1.08, QPen(QColor(color), 2), QBrush(QColor("#15181D")))
-        blade_pen = QPen(QColor(color), 6, Qt.SolidLine, Qt.RoundCap)
-        for index in range(6):
-            angle = 2.0 * math.pi * index / 6.0
-            start = QPointF(cx + math.cos(angle) * radius * 0.18, cy + math.sin(angle) * radius * 0.18)
-            end = QPointF(cx + math.cos(angle + 0.55) * radius * 0.72, cy + math.sin(angle + 0.55) * radius * 0.72)
-            scene.addLine(QLineF(start, end), blade_pen)
-        self._add_text(scene, cx - 66, cy + radius + 18, label, QT_PALETTE["text"], 11, 150)
+    def _draw_ring_mesh(
+        self,
+        scene: QGraphicsScene,
+        rings: List[List[Tuple[float, float, float]]],
+        origin: Tuple[float, float],
+        scale: float,
+        color: str,
+        wire_color: str,
+        cap_ends: bool = False,
+    ) -> None:
+        if len(rings) < 2:
+            return
+        projected = [[self._project(x, y, z, origin, scale) for x, y, z in ring] for ring in rings]
+        surfaces = []
+        for ring_index in range(len(projected) - 1):
+            for segment_index in range(len(projected[ring_index])):
+                p0 = projected[ring_index][segment_index]
+                p1 = projected[ring_index][(segment_index + 1) % len(projected[ring_index])]
+                p2 = projected[ring_index + 1][(segment_index + 1) % len(projected[ring_index + 1])]
+                p3 = projected[ring_index + 1][segment_index]
+                depth = (p0[2] + p1[2] + p2[2] + p3[2]) * 0.25
+                surfaces.append((depth, [p0, p1, p2, p3]))
+        if cap_ends:
+            for ring in (projected[0], projected[-1]):
+                surfaces.append((sum(point[2] for point in ring) / max(1, len(ring)), ring))
+        depths = [item[0] for item in surfaces]
+        min_depth = min(depths)
+        span = max(1e-6, max(depths) - min_depth)
+        base = QColor(color)
+        for depth, points in sorted(surfaces, key=lambda item: item[0]):
+            ratio = (depth - min_depth) / span
+            shade = self._shade(base, ratio)
+            polygon = QPolygonF([QPointF(point[0], point[1]) for point in points])
+            scene.addPolygon(polygon, QPen(QColor(wire_color), 0.35), QBrush(shade))
+        wire_pen = QPen(QColor(wire_color), 0.9, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        wire_pen.setCosmetic(True)
+        for ring_index, ring in enumerate(projected):
+            if ring_index % 3 != 0 and ring_index not in (0, len(projected) - 1):
+                continue
+            for segment_index in range(len(ring)):
+                p0 = ring[segment_index]
+                p1 = ring[(segment_index + 1) % len(ring)]
+                scene.addLine(p0[0], p0[1], p1[0], p1[1], wire_pen)
 
-    def _draw_regulator(self, scene: QGraphicsScene, x: float, y: float) -> None:
-        self._add_round_rect(scene, QRectF(x, y, 240, 88), 8, QPen(QColor(QT_PALETTE["border"]), 2), QBrush(QColor("#20272E")))
-        scene.addEllipse(x + 28, y + 20, 48, 48, QPen(QColor(QT_PALETTE["accent_hover"]), 2), QBrush(QColor("#15181D")))
-        scene.addLine(x + 76, y + 44, x + 194, y + 44, QPen(QColor(QT_PALETTE["muted"]), 3, Qt.SolidLine, Qt.RoundCap))
-        self._add_text(scene, x + 92, y + 30, "Regulated Feed", QT_PALETTE["text"], 11, 130)
+    def _shade(self, base: QColor, ratio: float) -> QColor:
+        factor = 0.56 + 0.52 * max(0.0, min(1.0, ratio))
+        return QColor(
+            min(255, int(base.red() * factor)),
+            min(255, int(base.green() * factor)),
+            min(255, int(base.blue() * factor)),
+        )
+
+    def _axial_cylinder_rings(self, length: float, radius: float, slices: int = 10, segments: int = 30) -> List[List[Tuple[float, float, float]]]:
+        rings = []
+        for slice_index in range(slices + 1):
+            x = -length * 0.5 + length * slice_index / max(1, slices)
+            ring = []
+            for segment_index in range(segments):
+                theta = 2.0 * math.pi * segment_index / segments
+                ring.append((x, radius * math.cos(theta), radius * math.sin(theta)))
+            rings.append(ring)
+        return rings
+
+    def _draw_axial_cylinder_mesh(
+        self,
+        scene: QGraphicsScene,
+        length: float,
+        radius: float,
+        origin: Tuple[float, float],
+        scale: float,
+        color: str,
+        wire_color: str,
+    ) -> None:
+        self._draw_ring_mesh(scene, self._axial_cylinder_rings(length, radius), origin, scale, color, wire_color, cap_ends=True)
+
+    def _disc_rings(
+        self,
+        radius_mm: float,
+        depth_mm: float,
+        center: Tuple[float, float, float],
+        segments: int = 32,
+    ) -> List[List[Tuple[float, float, float]]]:
+        rings = []
+        for z in (-depth_mm * 0.5, depth_mm * 0.5):
+            ring = []
+            for index in range(segments):
+                theta = 2.0 * math.pi * index / segments
+                ring.append((center[0] + radius_mm * math.cos(theta), center[1] + radius_mm * math.sin(theta), center[2] + z))
+            rings.append(ring)
+        return rings
+
+    def _draw_disc_mesh(
+        self,
+        scene: QGraphicsScene,
+        radius_mm: float,
+        depth_mm: float,
+        origin: Tuple[float, float],
+        scale: float,
+        color: str,
+        wire_color: str,
+        center: Tuple[float, float, float],
+    ) -> None:
+        self._draw_ring_mesh(scene, self._disc_rings(radius_mm, depth_mm, center), origin, scale, color, wire_color, cap_ends=True)
+
+    def _draw_box_mesh(
+        self,
+        scene: QGraphicsScene,
+        origin: Tuple[float, float],
+        width: float,
+        height: float,
+        depth: float,
+        scale: float,
+        color: str,
+        wire_color: str,
+    ) -> None:
+        hw, hh, hd = width * 0.5, height * 0.5, depth * 0.5
+        vertices = {
+            "lbf": (-hw, -hh, -hd),
+            "rbf": (hw, -hh, -hd),
+            "rtf": (hw, hh, -hd),
+            "ltf": (-hw, hh, -hd),
+            "lbb": (-hw, -hh, hd),
+            "rbb": (hw, -hh, hd),
+            "rtb": (hw, hh, hd),
+            "ltb": (-hw, hh, hd),
+        }
+        faces = [
+            ("front", ("lbf", "rbf", "rtf", "ltf")),
+            ("back", ("lbb", "rbb", "rtb", "ltb")),
+            ("top", ("ltf", "rtf", "rtb", "ltb")),
+            ("bottom", ("lbf", "rbf", "rbb", "lbb")),
+            ("left", ("lbf", "ltf", "ltb", "lbb")),
+            ("right", ("rbf", "rtf", "rtb", "rbb")),
+        ]
+        projected = {key: self._project(*point, origin, scale) for key, point in vertices.items()}
+        depths = []
+        surfaces = []
+        for _name, keys in faces:
+            points = [projected[key] for key in keys]
+            depth_value = sum(point[2] for point in points) / len(points)
+            depths.append(depth_value)
+            surfaces.append((depth_value, points))
+        base = QColor(color)
+        span = max(1e-6, max(depths) - min(depths))
+        for depth_value, points in sorted(surfaces, key=lambda item: item[0]):
+            shade = self._shade(base, (depth_value - min(depths)) / span)
+            scene.addPolygon(QPolygonF([QPointF(point[0], point[1]) for point in points]), QPen(QColor(wire_color), 0.6), QBrush(shade))
+
+    def _pump_geometry(self, values: Dict[str, object], prefix: str, fallback_diameter: float) -> Dict[str, float]:
+        diameter = max(1.0, _safe_float(values.get(f"{prefix}_impeller_diameter_mm"), fallback_diameter) or fallback_diameter)
+        width = max(0.5, _safe_float(values.get(f"{prefix}_impeller_width_mm"), diameter * 0.18) or diameter * 0.18)
+        hub_diameter = max(0.5, _safe_float(values.get(f"{prefix}_impeller_hub_diameter_mm"), diameter * 0.42) or diameter * 0.42)
+        eye_diameter = max(0.5, _safe_float(values.get(f"{prefix}_impeller_eye_diameter_mm"), diameter * 0.48) or diameter * 0.48)
+        blade_count = int(round(_safe_float(values.get(f"{prefix}_impeller_blade_count"), 6.0) or 6.0))
+        blade_angle = _safe_float(values.get(f"{prefix}_impeller_blade_angle_deg"), 22.0) or 22.0
+        blade_thickness = max(0.1, _safe_float(values.get(f"{prefix}_impeller_blade_thickness_mm"), width * 0.18) or width * 0.18)
+        tip_clearance = max(0.0, _safe_float(values.get(f"{prefix}_impeller_tip_clearance_mm"), diameter * 0.0075) or 0.0)
+        return {
+            "diameter_mm": diameter,
+            "width_mm": width,
+            "hub_diameter_mm": hub_diameter,
+            "eye_diameter_mm": eye_diameter,
+            "blade_count": max(1, blade_count),
+            "blade_angle_deg": blade_angle,
+            "blade_thickness_mm": blade_thickness,
+            "tip_clearance_mm": tip_clearance,
+            "display_scale": 1.0,
+        }
+
+    def _pump_outer_radius(self, geometry: Dict[str, float]) -> float:
+        scale = geometry.get("display_scale", 1.0)
+        return (geometry["diameter_mm"] * 0.5 + geometry["tip_clearance_mm"]) * scale
+
+    def _draw_pump_assembly(
+        self,
+        scene: QGraphicsScene,
+        origin: Tuple[float, float],
+        geometry: Dict[str, float],
+        color: str,
+        label: str,
+    ) -> None:
+        scale = geometry["display_scale"]
+        impeller_radius = geometry["diameter_mm"] * 0.5 * scale
+        casing_radius = self._pump_outer_radius(geometry)
+        casing_depth = max(24.0, geometry["width_mm"] * scale * 1.2)
+        self._draw_disc_mesh(
+            scene,
+            casing_radius * 1.05,
+            casing_depth,
+            origin,
+            1.0,
+            "#26313A",
+            QT_PALETTE["border"],
+            center=(0.0, 0.0, -casing_depth * 0.20),
+        )
+        self._draw_projected_ring(scene, origin, casing_radius, casing_depth * 0.12, QColor(QT_PALETTE["border"]), 96, 1.2)
+        self._draw_impeller_mesh(scene, origin, geometry, color)
+        self._add_text(scene, origin[0] - 74, origin[1] + impeller_radius + 68, label, QT_PALETTE["text"], 11, 160)
+
+    def _draw_impeller_mesh(
+        self,
+        scene: QGraphicsScene,
+        origin: Tuple[float, float],
+        geometry: Dict[str, float],
+        accent_color: str,
+    ) -> None:
+        scale = geometry["display_scale"]
+        radius = geometry["diameter_mm"] * 0.5 * scale
+        width = max(8.0, geometry["width_mm"] * scale)
+        hub_radius = geometry["hub_diameter_mm"] * 0.5 * scale
+        eye_radius = geometry["eye_diameter_mm"] * 0.5 * scale
+        blade_count = int(geometry["blade_count"])
+        blade_angle_rad = math.radians(geometry["blade_angle_deg"])
+        blade_thickness = max(1.8, geometry["blade_thickness_mm"] * scale)
+        tip_clearance = max(0.8, geometry["tip_clearance_mm"] * scale)
+        base_depth = max(16.0, width * 0.72)
+        front_z = base_depth * 0.92
+
+        self._draw_disc_mesh(scene, radius, base_depth, origin, 1.0, "#7A8079", "#D8D8D0", center=(0.0, 0.0, front_z * 0.30))
+        groove_start = max(eye_radius * 1.08, hub_radius * 1.04, radius * 0.34)
+        groove_span = max(1.0, radius * 0.94 - groove_start)
+        for groove_index in range(7):
+            groove_radius = groove_start + groove_span * groove_index / 6.0
+            alpha = 34 + groove_index * 6
+            self._draw_projected_ring(scene, origin, groove_radius, front_z * 0.98, QColor(235, 236, 224, alpha), 96)
+
+        surfaces = []
+        blade_spin = math.radians(self._angle_deg * 2.0)
+        inner_radius = min(radius * 0.84, max(hub_radius * 1.04, eye_radius * 1.02))
+        outer_radius = max(inner_radius + blade_thickness * 2.0, radius - tip_clearance)
+        pitch = 2.0 * math.pi / max(1, blade_count)
+        angular_width = min(pitch * 0.42, max(pitch * 0.18, blade_thickness / max(1.0, inner_radius)))
+        blade_lift = max(7.0, width * 0.34)
+        for blade_index in range(blade_count):
+            base_angle = blade_spin + 2.0 * math.pi * blade_index / blade_count
+            surfaces.extend(
+                self._impeller_blade_surfaces(
+                    origin,
+                    inner_radius,
+                    outer_radius,
+                    base_angle,
+                    angular_width=angular_width,
+                    twist=-blade_angle_rad,
+                    z_front=front_z,
+                    blade_lift=blade_lift,
+                    blade_thickness=blade_thickness,
+                    metal="#C8C5B9",
+                )
+            )
+
+        if surfaces:
+            depths = [depth for depth, _points, _color in surfaces]
+            min_depth = min(depths)
+            span = max(1e-6, max(depths) - min_depth)
+            for depth, points, color in sorted(surfaces, key=lambda item: item[0]):
+                shade = self._shade(QColor(color), (depth - min_depth) / span)
+                scene.addPolygon(
+                    QPolygonF([QPointF(point[0], point[1]) for point in points]),
+                    QPen(QColor("#F1F0E8"), 0.45),
+                    QBrush(shade),
+                )
+
+        recess = QColor("#08090B")
+        recess.setAlpha(170)
+        self._draw_projected_ring(scene, origin, eye_radius, front_z + blade_lift * 0.60, recess, 96, max(2.2, blade_thickness * 0.42))
+        self._draw_disc_mesh(
+            scene,
+            hub_radius,
+            max(10.0, width * 0.84),
+            origin,
+            1.0,
+            "#D6D3C7",
+            "#FFFFFF",
+            center=(0.0, 0.0, front_z + blade_lift * 0.78),
+        )
+        self._draw_projected_ring(scene, origin, eye_radius, front_z + blade_lift * 1.12, QColor("#F6F4EA"), 96, 1.8)
+        bore = self._project(0.0, 0.0, front_z + blade_lift * 1.18, origin, 1.0)
+        bore_radius = max(5.0, min(hub_radius * 0.42, eye_radius * 0.34))
+        scene.addEllipse(
+            bore[0] - bore_radius,
+            bore[1] - bore_radius * 0.70,
+            bore_radius * 2.0,
+            bore_radius * 1.40,
+            QPen(QColor("#050608"), 2),
+            QBrush(QColor("#050608")),
+        )
+        accent = QColor(accent_color)
+        accent.setAlpha(150)
+        self._draw_projected_ring(scene, origin, radius, front_z * 1.02, accent, 96, 2.0)
+
+    def _impeller_blade_surfaces(
+        self,
+        origin: Tuple[float, float],
+        inner_radius: float,
+        outer_radius: float,
+        base_angle: float,
+        angular_width: float,
+        twist: float,
+        z_front: float,
+        blade_lift: float,
+        blade_thickness: float,
+        metal: str,
+    ) -> List[Tuple[float, List[Tuple[float, float, float]], str]]:
+        surfaces = []
+        segments = 6
+        for segment_index in range(segments):
+            t0 = segment_index / segments
+            t1 = (segment_index + 1) / segments
+            r0 = inner_radius + (outer_radius - inner_radius) * t0
+            r1 = inner_radius + (outer_radius - inner_radius) * t1
+            a0 = base_angle + twist * t0
+            a1 = base_angle + twist * t1
+            w0 = angular_width * (0.66 + 0.28 * t0)
+            w1 = angular_width * (0.66 + 0.28 * t1)
+            blade_lift_0 = z_front + blade_lift * t0
+            blade_lift_1 = z_front + blade_lift * t1
+            raw_points = [
+                (r0 * math.cos(a0), r0 * math.sin(a0), blade_lift_0),
+                (r1 * math.cos(a1), r1 * math.sin(a1), blade_lift_1),
+                (r1 * math.cos(a1 + w1), r1 * math.sin(a1 + w1), blade_lift_1 + blade_thickness),
+                (r0 * math.cos(a0 + w0), r0 * math.sin(a0 + w0), blade_lift_0 + blade_thickness * 0.72),
+            ]
+            points = [self._project(x, y, z, origin, 1.0) for x, y, z in raw_points]
+            depth = sum(point[2] for point in points) / len(points)
+            surfaces.append((depth, points, metal))
+        return surfaces
+
+    def _draw_projected_ring(
+        self,
+        scene: QGraphicsScene,
+        origin: Tuple[float, float],
+        radius: float,
+        z: float,
+        color: QColor,
+        segments: int,
+        width: float = 0.8,
+    ) -> None:
+        path = QPainterPath()
+        first = self._project(radius, 0.0, z, origin, 1.0)
+        path.moveTo(first[0], first[1])
+        for index in range(1, segments + 1):
+            theta = 2.0 * math.pi * index / segments
+            point = self._project(radius * math.cos(theta), radius * math.sin(theta), z, origin, 1.0)
+            path.lineTo(point[0], point[1])
+        scene.addPath(path, QPen(color, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+
+    def _draw_projected_port(self, scene: QGraphicsScene, origin: Tuple[float, float], ring_radius: float, angle: float, port_radius: float, color: str) -> None:
+        projected = self._project(ring_radius * math.cos(angle), ring_radius * math.sin(angle), 42.0, origin, 1.0)
+        apparent = max(4.0, port_radius * (0.78 + 0.18 * math.cos(math.radians(self._angle_deg))))
+        scene.addEllipse(projected[0] - apparent, projected[1] - apparent, apparent * 2.0, apparent * 2.0, QPen(QColor(color)), QBrush(QColor(color)))
+
+    def _draw_shaft(self, scene: QGraphicsScene, start: Tuple[float, float], end: Tuple[float, float], color: str) -> None:
+        pen = QPen(QColor(color), 5, Qt.SolidLine, Qt.RoundCap)
+        scene.addLine(start[0], start[1], end[0], end[1], pen)
+        shine = QColor("#FFFFFF")
+        shine.setAlpha(65)
+        scene.addLine(start[0] + 2, start[1] - 2, end[0] + 2, end[1] - 2, QPen(shine, 1.4, Qt.SolidLine, Qt.RoundCap))
+
+    def _draw_regulator_3d(self, scene: QGraphicsScene, origin: Tuple[float, float], scale: float) -> None:
+        self._draw_box_mesh(scene, origin, 250.0, 88.0, 74.0, scale, "#26313A", QT_PALETTE["muted"])
+        self._draw_disc_mesh(scene, 36.0, 24.0, (origin[0] - 76.0, origin[1] - 2.0), scale, QT_PALETTE["accent"], QT_PALETTE["accent_hover"], center=(0.0, 0.0, 36.0))
+        self._add_text(scene, origin[0] - 40, origin[1] - 14, "Regulated Feed", QT_PALETTE["text"], 11, 160)
+
+    def _draw_small_nozzle(self, scene: QGraphicsScene, origin: Tuple[float, float], color: str) -> None:
+        pen = QPen(QColor(color), 4, Qt.SolidLine, Qt.RoundCap)
+        scene.addLine(origin[0] - 28, origin[1], origin[0] + 34, origin[1], pen)
+        scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] - 12, pen)
+        scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] + 12, pen)
 
     def _add_text(self, scene: QGraphicsScene, x: float, y: float, text: str, color: str, size: int, width: float) -> None:
         item = QGraphicsTextItem(text)
