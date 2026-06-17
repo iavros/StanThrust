@@ -7,7 +7,7 @@ StanThrust is a desktop engineering tool for preliminary liquid-engine sizing, c
 
 ## Download
 
-Installers are published on the [latest GitHub Release](https://github.com/iavros/StanThrust/releases/latest):
+Installers are published on the [GitHub Releases page](https://github.com/iavros/StanThrust/releases):
 
 - Windows: `StanThrust-Installer.exe`
 - macOS: `StanThrust-macOS.dmg`

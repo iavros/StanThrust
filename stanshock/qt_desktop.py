@@ -85,7 +85,7 @@ except ImportError as exc:  # pragma: no cover - exercised only when Qt is absen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGO_PNG_PATH = PROJECT_ROOT / "assets" / "Logo.png"
-UPDATE_RELEASE_API = "https://api.github.com/repos/iavros/StanThrust/releases/latest"
+UPDATE_RELEASE_API = "https://api.github.com/repos/iavros/StanThrust/releases"
 
 QT_PALETTE = {
     "bg": "#0D0F12",
@@ -3897,7 +3897,13 @@ class StanThrustQtWindow(QMainWindow):
             },
         )
         with urllib.request.urlopen(request, timeout=15) as response:
-            return dict(json.loads(response.read().decode("utf-8")))
+            payload = json.loads(response.read().decode("utf-8"))
+        if isinstance(payload, list):
+            for release in payload:
+                if isinstance(release, dict) and not release.get("draft"):
+                    return dict(release)
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
 
     def _select_release_asset(self, release: Dict[str, object]) -> Optional[Dict[str, object]]:
         raw_assets = release.get("assets", [])
