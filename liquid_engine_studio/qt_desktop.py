@@ -3,6 +3,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 from liquid_engine_studio.concept_model import INJECTOR_TYPES, create_concept_design
 from liquid_engine_studio.coupled_cycle_solver import solve as solve_coupled_cycle
 from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
