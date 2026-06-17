@@ -523,7 +523,7 @@ def main() -> None:
         "SampleThroatDiameter": "{0:.1f}".format(values.get("nozzle_throat_diameter_mm", 0.0)),
         "SampleExitDiameter": "{0:.1f}".format(values.get("nozzle_inner_diameter_mm", 0.0)),
         "SampleExpansionRatio": "{0:.3f}".format(values.get("nozzle_expansion_ratio", 0.0)),
-        "SampleContourMethod": str(values.get("nozzle_contour_method_label", "Rao-style quadratic bell contour")),
+        "SampleContourMethod": str(values.get("nozzle_contour_method_label", "MOC-informed bell contour")),
         "SampleReferenceConicalLength": "{0:.1f}".format(values.get("nozzle_reference_conical_length_mm", 0.0)),
         "SampleBellLengthFraction": "{0:.3f}".format(values.get("nozzle_bell_length_fraction", 0.0)),
         "SampleBellEntranceAngle": "{0:.2f}".format(values.get("nozzle_bell_entrance_angle_deg", 0.0)),

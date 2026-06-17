@@ -13,7 +13,7 @@ This folder is an Overleaf-ready LaTeX report describing the current StanThrust 
 The current report documents:
 
 - input normalization and geometry closure
-- Rao-style nozzle contour construction
+- MOC-informed nozzle contour construction
 - thrust, impulse, mass-flow, and propellant closure
 - section-based structural and thermal margin relations
 - transient pressure-fed and pump-fed feed-system behavior

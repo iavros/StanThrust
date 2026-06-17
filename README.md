@@ -58,20 +58,20 @@ StanThrust also carries a reduced-order transient feed model for explicit solves
 The current solved stack includes:
 
 - section-based structural and thermal margins for tanks, chamber, throat, and nozzle
-- a Rao-style bell nozzle contour with explicit contour metadata and exportable contour points
+- a MOC-informed bell nozzle contour with explicit Prandtl-Meyer metadata and renderable contour points
 - a hard overall diameter cap, with both capped geometry and uncapped required envelope reported in diagnostics
 - fast and refined quasi-1D chamber/nozzle flow modes
 - transient feed-system histories for pressure-fed and pump-fed architectures
+- a Stage 3.2 coupled numerical loop that relaxes chamber pressure across feed, chamber/nozzle, and structural-margin solvers
 - desktop engineering plots driven from the transient feed history, axial station field, and chamber-iteration trace
 - benchmark and regression datasets shared across the app, exports, tests, and report
 
-## CAD Export
+## Model Rendering And Export
 
-StanThrust can export the current solved engine geometry in formats that are directly useful for CAD workflows.
+StanThrust renders the current solved engine geometry directly inside the desktop app.
 
+- `3D Model`: live revolved model preview generated from the solved chamber, throat, nozzle, and cooling envelope
 - `Profile DXF`: 2D axisymmetric profile sketch suitable for revolve workflows
-- `Solid STEP`: faceted neutral solid for CAD import
-- `Solid STL`: revolved mesh solid
 - `Measurements CSV`: scalar sizing and solver outputs
 - `Stations CSV`: axial station data
 
@@ -81,9 +81,29 @@ The export logic lives in:
 
 Current note:
 
-- the `STEP` export is a faceted solid generated from the solved revolved profile
-- it is intended as a practical import format for tools like Onshape
-- it is not yet a full analytic B-rep export from a dedicated CAD kernel
+- the desktop UI no longer exposes 3D STEP/STL export actions; the solved revolved geometry is rendered in-app for review
+- the `Profile DXF` export remains available for users who want a lightweight 2D CAD sketch
+- CSV exports remain the supported interchange path for sizing and solver data
+
+## Installers
+
+Create the installer on the same operating system you want to distribute. PyInstaller builds are platform-specific, so Windows and macOS need separate artifacts.
+
+For Windows, run this on Windows:
+
+```powershell
+python build_windows_installer.py
+```
+
+This creates `dist/installer/StanThrust-Installer.exe`, which is the file to send to Windows users. They do not need Python.
+
+For macOS, run this on macOS:
+
+```bash
+python build_macos_installer.py
+```
+
+This creates `dist/installer/StanThrust-macOS.dmg`, which is the file to send to Mac users. They do not need Python.
 
 ## Solver Report
 
@@ -99,7 +119,7 @@ That package contains:
 
 The report currently documents:
 
-- geometry closure and Rao-style nozzle contour construction
+- geometry closure and MOC-informed nozzle contour construction
 - propellant and performance closure
 - section-based structural and thermal margin equations
 - transient feed-system equations and burn-time plots

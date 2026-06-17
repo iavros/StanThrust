@@ -1,6 +1,5 @@
 import csv
 import json
-import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -289,9 +288,13 @@ def _build_stage_0_geometry_metadata(design: ConceptDesign) -> Dict[str, object]
         "bell_length_fraction": values.get("nozzle_bell_length_fraction"),
         "bell_entrance_angle_deg": values.get("nozzle_bell_entrance_angle_deg"),
         "bell_exit_angle_deg": values.get("nozzle_bell_exit_angle_deg"),
+        "moc_gamma": values.get("nozzle_moc_gamma"),
+        "moc_exit_mach": values.get("nozzle_moc_exit_mach"),
+        "moc_prandtl_meyer_exit_deg": values.get("nozzle_moc_prandtl_meyer_exit_deg"),
+        "moc_turn_angle_deg": values.get("nozzle_moc_turn_angle_deg"),
         "throat_entry_blend_radius_mm": values.get("nozzle_throat_entry_blend_radius_mm"),
         "throat_exit_blend_radius_mm": values.get("nozzle_throat_exit_blend_radius_mm"),
-        "note": "The exported nozzle contour uses a Rao-style quadratic bell profile with explicit throat blend radii and bell-angle metadata.",
+        "note": "The exported nozzle contour uses a Prandtl-Meyer method-of-characteristics angle closure with explicit throat blend radii and bell-angle metadata.",
     }
 
 
@@ -702,72 +705,6 @@ def build_revolved_profile_points(design: ConceptDesign) -> List[Tuple[float, fl
     return _dedupe_profile_points(top_profile)
 
 
-def _build_revolved_facets(
-    design: ConceptDesign,
-    segments: int = 72,
-) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]]:
-    profile = build_revolved_profile_points(design)
-    if len(profile) < 2:
-        raise ValueError("Not enough profile points to export a revolved model.")
-
-    segments = max(12, int(segments))
-    two_pi = 2.0 * math.pi
-
-    def _vertex(x_mm: float, radius_mm: float, theta: float) -> Tuple[float, float, float]:
-        return (
-            float(x_mm),
-            float(radius_mm) * math.cos(theta),
-            float(radius_mm) * math.sin(theta),
-        )
-
-    facets: List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]] = []
-
-    for point_index in range(len(profile) - 1):
-        x0_mm, r0_mm = profile[point_index]
-        x1_mm, r1_mm = profile[point_index + 1]
-        for segment_index in range(segments):
-            theta0 = two_pi * segment_index / segments
-            theta1 = two_pi * (segment_index + 1) / segments
-            v00 = _vertex(x0_mm, r0_mm, theta0)
-            v01 = _vertex(x0_mm, r0_mm, theta1)
-            v10 = _vertex(x1_mm, r1_mm, theta0)
-            v11 = _vertex(x1_mm, r1_mm, theta1)
-            facets.append((v00, v10, v11))
-            facets.append((v00, v11, v01))
-
-    start_x_mm, start_radius_mm = profile[0]
-    end_x_mm, end_radius_mm = profile[-1]
-    start_center = (start_x_mm, 0.0, 0.0)
-    end_center = (end_x_mm, 0.0, 0.0)
-    for segment_index in range(segments):
-        theta0 = two_pi * segment_index / segments
-        theta1 = two_pi * (segment_index + 1) / segments
-        s0 = _vertex(start_x_mm, start_radius_mm, theta0)
-        s1 = _vertex(start_x_mm, start_radius_mm, theta1)
-        e0 = _vertex(end_x_mm, end_radius_mm, theta0)
-        e1 = _vertex(end_x_mm, end_radius_mm, theta1)
-        facets.append((start_center, s1, s0))
-        facets.append((end_center, e0, e1))
-
-    return facets
-
-
-def _triangle_normal(
-    v1: Tuple[float, float, float],
-    v2: Tuple[float, float, float],
-    v3: Tuple[float, float, float],
-) -> Tuple[float, float, float]:
-    ax, ay, az = (v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2])
-    bx, by, bz = (v3[0] - v1[0], v3[1] - v1[1], v3[2] - v1[2])
-    nx = ay * bz - az * by
-    ny = az * bx - ax * bz
-    nz = ax * by - ay * bx
-    magnitude = math.sqrt(nx * nx + ny * ny + nz * nz)
-    if magnitude <= 1e-12:
-        return (0.0, 0.0, 1.0)
-    return (nx / magnitude, ny / magnitude, nz / magnitude)
-
-
 def export_profile_dxf(path: Path, design: ConceptDesign) -> None:
     top_profile = build_revolved_profile_points(design)
     if len(top_profile) < 2:
@@ -807,98 +744,4 @@ def export_profile_dxf(path: Path, design: ConceptDesign) -> None:
     )
     content.extend(["0", "ENDSEC", "0", "EOF"])
     path.write_text("\n".join(content) + "\n", encoding="utf-8")
-
-
-def export_revolved_stl(path: Path, design: ConceptDesign, segments: int = 72) -> None:
-    raw_facets = _build_revolved_facets(design, segments)
-
-    lines = ["solid stanthrust_engine"]
-    for v1, v2, v3 in raw_facets:
-        normal = _triangle_normal(v1, v2, v3)
-        lines.append(
-            "  facet normal {0:.6e} {1:.6e} {2:.6e}".format(normal[0], normal[1], normal[2])
-        )
-        lines.append("    outer loop")
-        lines.append("      vertex {0:.6e} {1:.6e} {2:.6e}".format(v1[0], v1[1], v1[2]))
-        lines.append("      vertex {0:.6e} {1:.6e} {2:.6e}".format(v2[0], v2[1], v2[2]))
-        lines.append("      vertex {0:.6e} {1:.6e} {2:.6e}".format(v3[0], v3[1], v3[2]))
-        lines.append("    endloop")
-        lines.append("  endfacet")
-    lines.append("endsolid stanthrust_engine")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def export_revolved_step(path: Path, design: ConceptDesign, segments: int = 48) -> None:
-    facets = _build_revolved_facets(design, segments)
-    if not facets:
-        raise ValueError("No facets were generated for STEP export.")
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    records: List[str] = []
-    next_id = 1
-
-    def add(entity: str) -> int:
-        nonlocal next_id
-        entity_id = next_id
-        records.append("#{0} = {1};".format(entity_id, entity))
-        next_id += 1
-        return entity_id
-
-    app_context = add("APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies')")
-    add("APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,#{0})".format(app_context))
-    product_context = add("PRODUCT_CONTEXT('',#{0},'mechanical')".format(app_context))
-    product = add("PRODUCT('StanThrust Engine','StanThrust Engine','',(#{}))".format(product_context))
-    pdf = add("PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('1','',#{0},.NOT_KNOWN.)".format(product))
-    pdc = add("PRODUCT_DEFINITION_CONTEXT('part definition',#{0},'design')".format(app_context))
-    pd = add("PRODUCT_DEFINITION('design','',#{0},#{1})".format(pdf, pdc))
-    pds = add("PRODUCT_DEFINITION_SHAPE('','',#{0})".format(pd))
-    length_unit = add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))")
-    plane_unit = add("(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.))")
-    solid_unit = add("(NAMED_UNIT(*) SOLID_ANGLE_UNIT() SI_UNIT($,.STERADIAN.))")
-    uncertainty = add("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-6),#{0},'distance_accuracy_value','conf')".format(length_unit))
-    context = add(
-        "GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{0})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{1},#{2},#{3})) REPRESENTATION_CONTEXT('','')".format(
-            uncertainty, length_unit, plane_unit, solid_unit
-        )
-    )
-
-    face_ids: List[int] = []
-    for v1, v2, v3 in facets:
-        n = _triangle_normal(v1, v2, v3)
-        edge = (v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2])
-        edge_mag = math.sqrt(edge[0] * edge[0] + edge[1] * edge[1] + edge[2] * edge[2])
-        if edge_mag <= 1e-12:
-            edge_dir = (1.0, 0.0, 0.0)
-        else:
-            edge_dir = (edge[0] / edge_mag, edge[1] / edge_mag, edge[2] / edge_mag)
-
-        p1 = add("CARTESIAN_POINT('',({0:.6f},{1:.6f},{2:.6f}))".format(v1[0], v1[1], v1[2]))
-        p2 = add("CARTESIAN_POINT('',({0:.6f},{1:.6f},{2:.6f}))".format(v2[0], v2[1], v2[2]))
-        p3 = add("CARTESIAN_POINT('',({0:.6f},{1:.6f},{2:.6f}))".format(v3[0], v3[1], v3[2]))
-        loop = add("POLY_LOOP('',(#{0},#{1},#{2}))".format(p1, p2, p3))
-        bound = add("FACE_OUTER_BOUND('',#{0},.T.)".format(loop))
-        origin = add("CARTESIAN_POINT('',({0:.6f},{1:.6f},{2:.6f}))".format(v1[0], v1[1], v1[2]))
-        axis = add("DIRECTION('',({0:.9f},{1:.9f},{2:.9f}))".format(n[0], n[1], n[2]))
-        ref = add("DIRECTION('',({0:.9f},{1:.9f},{2:.9f}))".format(edge_dir[0], edge_dir[1], edge_dir[2]))
-        placement = add("AXIS2_PLACEMENT_3D('',#{0},#{1},#{2})".format(origin, axis, ref))
-        plane = add("PLANE('',#{0})".format(placement))
-        face_ids.append(add("ADVANCED_FACE('',(#{0}),#{1},.T.)".format(bound, plane)))
-
-    shell = add("CLOSED_SHELL('',({0}))".format(",".join("#{0}".format(face_id) for face_id in face_ids)))
-    brep = add("MANIFOLD_SOLID_BREP('StanThrust Engine',#{0})".format(shell))
-    shape = add("SHAPE_REPRESENTATION('',(#{0}),#{1})".format(brep, context))
-    add("SHAPE_DEFINITION_REPRESENTATION(#{0},#{1})".format(pds, shape))
-
-    lines = [
-        "ISO-10303-21;",
-        "HEADER;",
-        "FILE_DESCRIPTION(('StanThrust faceted solid export'),'2;1');",
-        "FILE_NAME('{0}','{1}',('StanThrust'),('StanThrust'),'StanThrust','StanThrust','');".format(path.name, timestamp),
-        "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));",
-        "ENDSEC;",
-        "DATA;",
-    ]
-    lines.extend(records)
-    lines.extend(["ENDSEC;", "END-ISO-10303-21;"])
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

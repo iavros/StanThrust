@@ -1,5 +1,5 @@
 """
-Tests for Stage 3.1 Coupled Cycle Loop Solver.
+Tests for Stage 3.2 Coupled Cycle Loop Solver.
 
 Covers convergence behavior, input validation, payload structure,
 station field provenance, and edge cases.
@@ -39,8 +39,8 @@ def test_coupled_solver_basic_convergence():
     # Check metadata
     metadata = result["metadata"]
     assert metadata["solver_name"] == "Coupled Cycle Loop Solver"
-    assert metadata["solver_version"] == "0.1"
-    assert metadata["solver_mode"] == "stage-3-coupled-cycle-v1"
+    assert metadata["solver_version"] == "0.2"
+    assert metadata["solver_mode"] == "stage-3-coupled-cycle-v2"
 
     # Check status
     assert result["status"] in ["ok", "converged-degraded"], f"Status should be ok or converged-degraded, got {result['status']}"
@@ -51,6 +51,7 @@ def test_coupled_solver_basic_convergence():
     assert "results" in payload, "Payload should have results"
     assert "iteration_trace" in payload, "Payload should have iteration_trace"
     assert "station_field_updates" in payload, "Payload should have station_field_updates"
+    assert "structural_solver_result" in payload, "Payload should include structural solver result"
 
     print("✓ test_coupled_solver_basic_convergence passed")
 
@@ -75,6 +76,9 @@ def test_convergence_structure():
     assert "converged" in conv, "Convergence should have converged flag"
     assert "final_residual_kpa" in conv, "Convergence should have final_residual_kpa"
     assert "convergence_tolerance_kpa" in conv, "Convergence should have convergence_tolerance_kpa"
+    assert "thrust_error_fraction" in conv, "Convergence should track thrust residual"
+    assert "minimum_feed_margin_kpa" in conv, "Convergence should track feed margin"
+    assert "minimum_structural_margin_ratio" in conv, "Convergence should track structural margin"
 
     assert isinstance(conv["iteration_count"], int), "iteration_count should be int"
     assert isinstance(conv["converged"], bool), "converged should be bool"
@@ -112,9 +116,8 @@ def test_convergence_results_structure():
     assert 100 < results["oxidizer_tank_pressure_kpa"] < 10000, \
         f"oxidizer_tank_pressure {results['oxidizer_tank_pressure_kpa']} out of range"
 
-    # Note: At Stage 3.1 proof-of-concept, tank/chamber pressure relationships are
-    # still being refined as solvers integrate feedback. This test validates the
-    # structure exists and has reasonable magnitude, not strict physical ordering.
+    # Stage 3.2 solves a relaxed coupled pressure state. This test validates
+    # reasonable magnitude rather than enforcing one architecture-specific ordering.
 
     print("✓ test_convergence_results_structure passed")
 
@@ -144,6 +147,10 @@ def test_iteration_trace_structure():
         assert "fuel_tank_pressure_kpa" in entry
         assert "oxidizer_tank_pressure_kpa" in entry
         assert "residual_kpa" in entry
+        assert "feed_supported_pressure_kpa" in entry
+        assert "combustion_supported_pressure_kpa" in entry
+        assert "thrust_error_fraction" in entry
+        assert "minimum_feed_margin_kpa" in entry
         assert "converged" in entry
         assert "notes" in entry
         assert isinstance(entry["notes"], list), "notes should be list"
@@ -334,7 +341,7 @@ def test_trace_lines_structure():
 
     # Check for expected content
     trace_str = " ".join(trace)
-    assert "Stage 3.1" in trace_str, "Should mention Stage 3.1"
+    assert "Stage 3.2" in trace_str, "Should mention Stage 3.2"
 
     print("✓ test_trace_lines_structure passed")
 
@@ -405,7 +412,7 @@ def run_all_tests():
     errors = []
 
     print("\n" + "=" * 70)
-    print("Running Stage 3.1 Coupled Cycle Solver Tests")
+    print("Running Stage 3.2 Coupled Cycle Solver Tests")
     print("=" * 70 + "\n")
 
     for test in tests:

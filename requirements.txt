@@ -1,4 +1,6 @@
 pytest
+PyQt5
+pyinstaller
 numpy
 scipy
 scikit-learn

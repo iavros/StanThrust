@@ -119,6 +119,36 @@ def _estimate_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 
     return float(clamp(mach_number, 1.0, 10.0))
 
 
+def _prandtl_meyer_angle_deg(mach_number: float, gamma: float = 1.22) -> float:
+    mach_number = max(1.0 + 1e-6, float(mach_number))
+    gm1 = gamma - 1.0
+    gp1 = gamma + 1.0
+    angle_rad = math.sqrt(gp1 / gm1) * math.atan(math.sqrt(gm1 / gp1 * (mach_number * mach_number - 1.0)))
+    angle_rad -= math.atan(math.sqrt(mach_number * mach_number - 1.0))
+    return math.degrees(max(0.0, angle_rad))
+
+
+def _moc_nozzle_angle_metadata(
+    expansion_ratio: float,
+    bell_length_fraction: float,
+    gamma: float = 1.22,
+) -> Dict[str, float]:
+    exit_mach = _estimate_supersonic_mach_from_area_ratio(expansion_ratio, gamma=gamma)
+    prandtl_meyer_exit_deg = _prandtl_meyer_angle_deg(exit_mach, gamma=gamma)
+    ideal_turn_angle_deg = prandtl_meyer_exit_deg * 0.5
+    entrance_angle_deg = clamp(ideal_turn_angle_deg, 18.0, 34.0)
+    truncation_fraction = clamp(1.0 - bell_length_fraction, 0.0, 0.45)
+    exit_angle_deg = clamp(ideal_turn_angle_deg * (0.13 + truncation_fraction * 0.28), 3.0, 10.5)
+    return {
+        "gamma": gamma,
+        "exit_mach": exit_mach,
+        "prandtl_meyer_exit_deg": prandtl_meyer_exit_deg,
+        "ideal_turn_angle_deg": ideal_turn_angle_deg,
+        "entrance_angle_deg": entrance_angle_deg,
+        "exit_angle_deg": exit_angle_deg,
+    }
+
+
 def _build_section_margin_metrics(
     pressure_kpa: float,
     diameter_mm: float,
@@ -357,15 +387,16 @@ def _build_nozzle_contour_points(
         else math.degrees(math.atan2(chamber_radius - throat_radius, max(1.0, converging_length_mm)))
     )
     reference_exit_angle_deg = 14.5 - 1.25 * math.log(max(expansion_ratio, 1.0))
+    moc_angles = _moc_nozzle_angle_metadata(expansion_ratio, actual_bell_length_fraction)
     bell_exit_angle_deg = clamp(
-        diverging_angle_deg if diverging_angle_deg is not None else reference_exit_angle_deg,
-        6.0,
-        14.0,
+        diverging_angle_deg if diverging_angle_deg is not None else moc_angles["exit_angle_deg"],
+        3.0,
+        max(10.5, reference_exit_angle_deg),
     )
     bell_entrance_angle_deg = clamp(
-        29.0 - 0.35 * max(expansion_ratio - 8.0, 0.0) + (0.82 - actual_bell_length_fraction) * 18.0,
-        24.0,
-        33.0,
+        moc_angles["entrance_angle_deg"],
+        max(18.0, bell_exit_angle_deg + 10.0),
+        34.0,
     )
     bell_entrance_angle_rad = math.radians(bell_entrance_angle_deg)
     bell_exit_angle_rad = math.radians(bell_exit_angle_deg)
@@ -453,6 +484,7 @@ def _build_nozzle_contour_points(
     for index in range(1, bezier_samples):
         t_value = index / float(bezier_samples - 1)
         one_minus_t = 1.0 - t_value
+        moc_relax = 0.5 - 0.5 * math.cos(math.pi * t_value)
         axial_mm = converging_length_mm + (
             one_minus_t * one_minus_t * downstream_arc_end_x_mm
             + 2.0 * one_minus_t * t_value * bell_control_x_mm
@@ -463,6 +495,8 @@ def _build_nozzle_contour_points(
             + 2.0 * one_minus_t * t_value * bell_control_radius_mm
             + t_value * t_value * exit_radius
         )
+        ideal_radius_mm = downstream_arc_end_radius_mm + (exit_radius - downstream_arc_end_radius_mm) * moc_relax
+        radius_mm = radius_mm * 0.68 + ideal_radius_mm * 0.32
         _append_contour_sample(
             samples,
             axial_mm,
@@ -698,6 +732,10 @@ class GeometrySizing:
     nozzle_bell_length_fraction: float
     nozzle_bell_exit_angle_deg: float
     nozzle_bell_entrance_angle_deg: float
+    nozzle_moc_gamma: float
+    nozzle_moc_exit_mach: float
+    nozzle_moc_prandtl_meyer_exit_deg: float
+    nozzle_moc_turn_angle_deg: float
     nozzle_throat_entry_blend_radius_mm: float
     nozzle_throat_exit_blend_radius_mm: float
     injector_plate_diameter_mm: float
@@ -794,15 +832,6 @@ def _calculate_geometry_sizing(
         6.0,
         22.0,
     )
-    nozzle_contour_points = _build_nozzle_contour_points(
-        inputs.chamber_diameter_mm,
-        nozzle_throat_diameter_mm,
-        inputs.nozzle_diameter_mm,
-        nozzle_converging_length_mm,
-        nozzle_diverging_length_mm,
-        converging_angle_deg=nozzle_converging_angle_deg,
-        diverging_angle_deg=nozzle_diverging_angle_deg,
-    )
     nozzle_equivalent_conical_length_mm = max(
         nozzle_diverging_length_mm,
         (
@@ -815,15 +844,25 @@ def _calculate_geometry_sizing(
         0.55,
         1.1,
     )
+    moc_angles = _moc_nozzle_angle_metadata(nozzle_expansion_ratio, nozzle_bell_length_fraction)
     nozzle_bell_exit_angle_deg = clamp(
-        14.5 - 1.25 * math.log(max(nozzle_expansion_ratio, 1.0)),
-        6.0,
-        14.0,
+        moc_angles["exit_angle_deg"],
+        3.0,
+        10.5,
     )
     nozzle_bell_entrance_angle_deg = clamp(
-        29.0 - 0.35 * max(nozzle_expansion_ratio - 8.0, 0.0) + (0.82 - nozzle_bell_length_fraction) * 18.0,
-        24.0,
-        33.0,
+        moc_angles["entrance_angle_deg"],
+        max(18.0, nozzle_bell_exit_angle_deg + 10.0),
+        34.0,
+    )
+    nozzle_contour_points = _build_nozzle_contour_points(
+        inputs.chamber_diameter_mm,
+        nozzle_throat_diameter_mm,
+        inputs.nozzle_diameter_mm,
+        nozzle_converging_length_mm,
+        nozzle_diverging_length_mm,
+        converging_angle_deg=nozzle_converging_angle_deg,
+        diverging_angle_deg=None,
     )
     nozzle_throat_entry_blend_radius_mm = max(
         1.25 * nozzle_throat_diameter_mm / 2.0,
@@ -908,6 +947,10 @@ def _calculate_geometry_sizing(
         nozzle_bell_length_fraction=nozzle_bell_length_fraction,
         nozzle_bell_exit_angle_deg=nozzle_bell_exit_angle_deg,
         nozzle_bell_entrance_angle_deg=nozzle_bell_entrance_angle_deg,
+        nozzle_moc_gamma=moc_angles["gamma"],
+        nozzle_moc_exit_mach=moc_angles["exit_mach"],
+        nozzle_moc_prandtl_meyer_exit_deg=moc_angles["prandtl_meyer_exit_deg"],
+        nozzle_moc_turn_angle_deg=moc_angles["ideal_turn_angle_deg"],
         nozzle_throat_entry_blend_radius_mm=nozzle_throat_entry_blend_radius_mm,
         nozzle_throat_exit_blend_radius_mm=nozzle_throat_exit_blend_radius_mm,
         injector_plate_diameter_mm=injector_plate_diameter_mm,
@@ -1168,7 +1211,7 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
             thermal=rounded(derived.thermal_margin_index),
             mass=rounded(derived.dry_mass_index),
         ),
-        "Pump, impeller, electric motor, injector geometry, and the Rao-style bell nozzle contour remain reduced-order sizing outputs in this app; they are intended for preliminary iteration rather than detailed hardware release.",
+        "Pump, impeller, electric motor, injector geometry, and the MOC-informed bell nozzle contour remain reduced-order sizing outputs in this app; they are intended for preliminary iteration rather than detailed hardware release.",
         "Station exports include conceptual geometry and explicit not-calculated markers for thermofluid fields that are outside concept mode.",
         "Materials are now used for section-based structural stress and wall-temperature margin estimates for the tanks, chamber, throat, and nozzle.",
         "Selected injector family: {0}.".format(values.get("injector_type", inputs.injector_type)),
@@ -1424,6 +1467,10 @@ class ConceptSolver:
         nozzle_bell_length_fraction = geometry.nozzle_bell_length_fraction
         nozzle_bell_exit_angle_deg = geometry.nozzle_bell_exit_angle_deg
         nozzle_bell_entrance_angle_deg = geometry.nozzle_bell_entrance_angle_deg
+        nozzle_moc_gamma = geometry.nozzle_moc_gamma
+        nozzle_moc_exit_mach = geometry.nozzle_moc_exit_mach
+        nozzle_moc_prandtl_meyer_exit_deg = geometry.nozzle_moc_prandtl_meyer_exit_deg
+        nozzle_moc_turn_angle_deg = geometry.nozzle_moc_turn_angle_deg
         nozzle_throat_entry_blend_radius_mm = geometry.nozzle_throat_entry_blend_radius_mm
         nozzle_throat_exit_blend_radius_mm = geometry.nozzle_throat_exit_blend_radius_mm
         injector_plate_diameter_mm = geometry.injector_plate_diameter_mm
@@ -1996,7 +2043,7 @@ class ConceptSolver:
                 "1) Inputs normalized and bounded for concept-mode solving.",
                 "2) Propellant catalog factors resolved for density and thermal behavior.",
                 "3) Geometry envelope solved using thrust, impulse, and architecture inputs.",
-                "4) Feed-module impeller, electric motor, Rao-style bell nozzle contour, and injector family dimensions estimated with reduced-order engineering closures.",
+                "4) Feed-module impeller, electric motor, MOC-informed bell nozzle contour, and injector family dimensions estimated with reduced-order engineering closures.",
                 "5) Flow, pressure, regenerative-cooling, and propellant sizing solved with architecture-aware pressure closure and explicit reserve margins.",
                 "6) Section-based structural and thermal margins evaluated for tanks, chamber, throat, and nozzle.",
                 "7) Stations, measurements, notes, and export bundles prepared.",
@@ -2079,8 +2126,12 @@ class ConceptSolver:
                 "nozzle_expansion_ratio": round(nozzle_expansion_ratio, 3),
                 "nozzle_converging_angle_deg": round(nozzle_converging_angle_deg, 2),
                 "nozzle_diverging_angle_deg": round(nozzle_diverging_angle_deg, 2),
-                "nozzle_contour_method": "rao_quadratic_bell",
-                "nozzle_contour_method_label": "Rao-style quadratic bell contour",
+                "nozzle_contour_method": "moc_bell",
+                "nozzle_contour_method_label": "MOC-informed bell contour",
+                "nozzle_moc_gamma": round(nozzle_moc_gamma, 3),
+                "nozzle_moc_exit_mach": round(nozzle_moc_exit_mach, 4),
+                "nozzle_moc_prandtl_meyer_exit_deg": round(nozzle_moc_prandtl_meyer_exit_deg, 3),
+                "nozzle_moc_turn_angle_deg": round(nozzle_moc_turn_angle_deg, 3),
                 "nozzle_reference_conical_half_angle_deg": 15.0,
                 "nozzle_reference_conical_length_mm": rounded(nozzle_equivalent_conical_length_mm),
                 "nozzle_bell_length_fraction": round(nozzle_bell_length_fraction, 3),

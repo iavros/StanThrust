@@ -248,8 +248,10 @@ def test_nozzle_contour_metadata_and_shape():
     values = design.derived.engineering_values
     contour_points = list(design.derived.nozzle_contour_points)
 
-    assert values.get("nozzle_contour_method") == "rao_quadratic_bell"
-    assert values.get("nozzle_contour_method_label") == "Rao-style quadratic bell contour"
+    assert values.get("nozzle_contour_method") == "moc_bell"
+    assert values.get("nozzle_contour_method_label") == "MOC-informed bell contour"
+    assert float(values.get("nozzle_moc_exit_mach", 0.0)) > 1.0
+    assert float(values.get("nozzle_moc_turn_angle_deg", 0.0)) > float(values.get("nozzle_bell_exit_angle_deg", 0.0))
     assert float(values.get("nozzle_bell_length_fraction", 0.0)) > 0.0
     assert float(values.get("nozzle_bell_entrance_angle_deg", 0.0)) > float(values.get("nozzle_bell_exit_angle_deg", 0.0))
     assert len(contour_points) >= 12
@@ -281,7 +283,8 @@ def test_export_includes_nozzle_geometry_metadata():
     geometry_meta = payload["solver"]["stage_0_geometry"]
 
     assert geometry_meta["status"] == "calculated"
-    assert geometry_meta["nozzle_contour_method"] == "rao_quadratic_bell"
+    assert geometry_meta["nozzle_contour_method"] == "moc_bell"
+    assert float(geometry_meta["moc_exit_mach"]) > 1.0
     assert float(geometry_meta["bell_entrance_angle_deg"]) > float(geometry_meta["bell_exit_angle_deg"])
     assert float(geometry_meta["throat_entry_blend_radius_mm"]) > 0.0
     assert float(geometry_meta["throat_exit_blend_radius_mm"]) > 0.0

@@ -115,6 +115,10 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
 
     normalized = {
         "target_thrust_newtons": _safe_float(targets.get("target_thrust_newtons"), 250.0),
+        "target_chamber_pressure_kpa": _safe_float(
+            targets.get("target_chamber_pressure_kpa", design_request.get("target_chamber_pressure_kpa")),
+            0.0,
+        ),
         "burn_time_seconds": _safe_float(targets.get("burn_time_seconds"), 12.0),
         "mixture_ratio": _safe_float(propellants.get("mixture_ratio"), 1.4),
         "use_pumps": use_pumps,
@@ -395,7 +399,17 @@ def solve(
     mixture_ratio = max(0.1, float(req.get("mixture_ratio", 1.4)))
     burn_time_s = max(1.0, float(req.get("burn_time_seconds", 12.0)))
 
-    chamber_pressure_kpa = _estimate_chamber_pressure_kpa(thrust_n, use_pumps)
+    requested_chamber_pressure_kpa = _safe_float(req.get("target_chamber_pressure_kpa"), 0.0)
+    if isinstance(upstream_context, dict):
+        requested_chamber_pressure_kpa = _safe_float(
+            upstream_context.get("target_chamber_pressure_kpa", upstream_context.get("chamber_pressure_kpa")),
+            requested_chamber_pressure_kpa,
+        )
+    chamber_pressure_kpa = (
+        _clamp(requested_chamber_pressure_kpa, 150.0, 18000.0)
+        if requested_chamber_pressure_kpa > 0.0
+        else _estimate_chamber_pressure_kpa(thrust_n, use_pumps)
+    )
     injector_dp_ratio = 0.18 if str(req.get("injector_type", "impinging")) == "impinging" else 0.14
     injector_pressure_drop_kpa = chamber_pressure_kpa * injector_dp_ratio
 

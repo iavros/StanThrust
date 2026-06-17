@@ -1,16 +1,15 @@
+import math
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
 from liquid_engine_studio.concept_model import INJECTOR_TYPES, create_concept_design
+from liquid_engine_studio.coupled_cycle_solver import solve as solve_coupled_cycle
 from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
 from liquid_engine_studio.exporter import (
+    build_revolved_profile_points,
     export_measurements_csv,
     export_profile_dxf,
-    export_revolved_stl,
-    export_revolved_step,
     export_station_csv,
 )
 from liquid_engine_studio.materials import MATERIAL_OPTIONS
@@ -25,13 +24,12 @@ from liquid_engine_studio.optimizer_hooks import (
 from liquid_engine_studio.project_io import load_project, save_project
 from liquid_engine_studio.propellants import FUEL_NAMES, OXIDIZER_NAMES
 from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.solver_interface import solve as solve_solver_interface
 from liquid_engine_studio.structural_material_solver import build_structural_materials_output
 from liquid_engine_studio.validation_pack import validate_concept_design
 
 try:
-    from PyQt5.QtCore import Qt, QLineF, QRectF, QTimer
-    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
+    from PyQt5.QtCore import Qt, QLineF, QPointF, QRectF, QTimer
+    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
     from PyQt5.QtWidgets import (
         QApplication,
         QButtonGroup,
@@ -935,6 +933,132 @@ class SchematicView(QGraphicsView):
         self._add_text(scene, label_x, y - 18, label, QT_PALETTE["muted"], 8, True, max_width=available_width)
 
 
+class Model3DView(QGraphicsView):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        self.setScene(QGraphicsScene(self))
+        self.setObjectName("schematicView")
+        self.setMinimumHeight(420)
+
+    def render_design(self, design) -> None:
+        scene = self.scene()
+        scene.clear()
+        scene.setSceneRect(0, 0, 1100, 560)
+        bg = QGraphicsRectItem(QRectF(0, 0, 1100, 560))
+        bg.setBrush(QColor("#090C10"))
+        bg.setPen(QPen(QColor("#090C10")))
+        scene.addItem(bg)
+
+        title_item = scene.addText("3D Engine Model", QFont("Segoe UI", 13, QFont.Bold))
+        title_item.setDefaultTextColor(QColor(QT_PALETTE["text"]))
+        title_item.setPos(48, 28)
+        self._add_text(scene, 48, 52, "Live revolved preview from the solved chamber, throat, nozzle, and cooling envelope.", QT_PALETTE["muted"], 9, 520)
+
+        profile = build_revolved_profile_points(design)
+        if len(profile) < 2:
+            self._add_text(scene, 48, 110, "No model profile is available for the current design.", QT_PALETTE["warning"], 10, 420)
+            return
+
+        max_x = max(point[0] for point in profile)
+        max_radius = max(point[1] for point in profile)
+        scale = min(760.0 / max(1.0, max_x), 185.0 / max(1.0, max_radius))
+        origin_x = 150.0
+        origin_y = 310.0
+        tilt_rad = math.radians(24.0)
+        yaw_rad = math.radians(-28.0)
+        cos_tilt = math.cos(tilt_rad)
+        sin_tilt = math.sin(tilt_rad)
+        cos_yaw = math.cos(yaw_rad)
+        sin_yaw = math.sin(yaw_rad)
+
+        def project(x_mm: float, radial_y_mm: float, radial_z_mm: float) -> Tuple[float, float, float]:
+            y1 = radial_y_mm * cos_yaw - radial_z_mm * sin_yaw
+            z1 = radial_y_mm * sin_yaw + radial_z_mm * cos_yaw
+            y2 = y1 * cos_tilt - z1 * sin_tilt
+            z2 = y1 * sin_tilt + z1 * cos_tilt
+            return (
+                origin_x + x_mm * scale + z2 * scale * 0.24,
+                origin_y - y2 * scale + z2 * scale * 0.08,
+                z2,
+            )
+
+        segments = 28
+        rings: List[List[Tuple[float, float, float]]] = []
+        for x_mm, radius_mm in profile:
+            ring: List[Tuple[float, float, float]] = []
+            for index in range(segments):
+                theta = 2.0 * math.pi * index / segments
+                ring.append(project(x_mm, radius_mm * math.cos(theta), radius_mm * math.sin(theta)))
+            rings.append(ring)
+
+        surfaces = []
+        for point_index in range(len(rings) - 1):
+            for segment_index in range(segments):
+                p0 = rings[point_index][segment_index]
+                p1 = rings[point_index][(segment_index + 1) % segments]
+                p2 = rings[point_index + 1][(segment_index + 1) % segments]
+                p3 = rings[point_index + 1][segment_index]
+                depth = (p0[2] + p1[2] + p2[2] + p3[2]) * 0.25
+                surfaces.append((depth, p0, p1, p2, p3))
+
+        min_depth = min(surface[0] for surface in surfaces)
+        max_depth = max(surface[0] for surface in surfaces)
+        depth_span = max(1e-6, max_depth - min_depth)
+        for depth, p0, p1, p2, p3 in sorted(surfaces, key=lambda item: item[0]):
+            shade = int(72 + 82 * ((depth - min_depth) / depth_span))
+            color = QColor(shade + 38, max(28, shade // 2), max(34, shade // 2 + 4))
+            polygon = QPolygonF([QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]), QPointF(p2[0], p2[1]), QPointF(p3[0], p3[1])])
+            scene.addPolygon(polygon, QPen(QColor("#28181D"), 0.35), QBrush(color))
+
+        wire_pen = QPen(QColor("#E16A76"), 1.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        wire_pen.setCosmetic(True)
+        for ring_index, ring in enumerate(rings):
+            if ring_index % 3 != 0 and ring_index not in (0, len(rings) - 1):
+                continue
+            for segment_index in range(segments):
+                a = ring[segment_index]
+                b = ring[(segment_index + 1) % segments]
+                scene.addLine(a[0], a[1], b[0], b[1], wire_pen)
+        for segment_index in range(0, segments, 4):
+            path = QPainterPath()
+            first = rings[0][segment_index]
+            path.moveTo(first[0], first[1])
+            for ring in rings[1:]:
+                point = ring[segment_index]
+                path.lineTo(point[0], point[1])
+            scene.addPath(path, wire_pen)
+
+        values = dict(design.derived.engineering_values)
+        throat_diameter = _format_number(values.get("nozzle_throat_diameter_mm", "--"), 2)
+        exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
+        length = _format_number(design.derived.total_stack_length_mm, 2)
+        contour = str(values.get("nozzle_contour_method_label", "Nozzle contour"))
+        self._metric(scene, 790, 104, "Length", f"{length} mm")
+        self._metric(scene, 790, 166, "Throat", f"{throat_diameter} mm")
+        self._metric(scene, 790, 228, "Exit", f"{exit_diameter} mm")
+        self._metric(scene, 790, 290, "Contour", contour)
+
+    def _add_text(self, scene: QGraphicsScene, x: float, y: float, text: str, color: str, size: int, width: float) -> None:
+        item = QGraphicsTextItem(text)
+        item.setFont(QFont("Segoe UI", size))
+        item.setDefaultTextColor(QColor(color))
+        item.setTextWidth(width)
+        item.document().setDocumentMargin(0)
+        item.setPos(x, y)
+        scene.addItem(item)
+
+    def _metric(self, scene: QGraphicsScene, x: float, y: float, label: str, value: str) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(x, y, 244, 46), 8, 8)
+        item = QGraphicsPathItem(path)
+        item.setBrush(QColor("#11161D"))
+        item.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
+        scene.addItem(item)
+        self._add_text(scene, x + 14, y + 8, label, QT_PALETTE["muted"], 8, 70)
+        self._add_text(scene, x + 82, y + 8, value, QT_PALETTE["text"], 9, 142)
+
+
 class StanThrustQtWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -947,6 +1071,7 @@ class StanThrustQtWindow(QMainWindow):
         self.current_validation_report = None
         self.current_combustion_result = None
         self.current_solver_interface_result = None
+        self.current_coupled_cycle_result = None
         self.current_structural_result = None
         self.current_ga_result = None
         self.current_ga_candidate_state = None
@@ -965,8 +1090,11 @@ class StanThrustQtWindow(QMainWindow):
         self.metadata_text: Optional[QPlainTextEdit] = None
         self.status_banner: Optional[StatusBanner] = None
         self.schematic_view: Optional[SchematicView] = None
+        self.model_3d_view: Optional[Model3DView] = None
         self.ga_status_label: Optional[QLabel] = None
         self.cfd_status_label: Optional[QLabel] = None
+        self.solver_stage_label: Optional[QLabel] = None
+        self.solver_residual_label: Optional[QLabel] = None
         self.export_status_label: Optional[QLabel] = None
         self.progress_bar: Optional[QProgressBar] = None
         self.result_cards: Dict[str, MetricCard] = {}
@@ -1389,10 +1517,6 @@ class StanThrustQtWindow(QMainWindow):
         load_button.clicked.connect(self.load_project_dialog)
         export_dxf = QPushButton("Profile DXF")
         export_dxf.clicked.connect(self.export_profile_dxf_dialog)
-        export_step = QPushButton("Solid STEP")
-        export_step.clicked.connect(self.export_revolved_step_dialog)
-        export_stl = QPushButton("Solid STL")
-        export_stl.clicked.connect(self.export_revolved_stl_dialog)
         export_csv = QPushButton("Export CSV")
         export_csv.clicked.connect(self.export_csv_dialog)
         export_stations = QPushButton("Stations CSV")
@@ -1401,10 +1525,8 @@ class StanThrustQtWindow(QMainWindow):
         actions_layout.addWidget(save_button, 2, 1)
         actions_layout.addWidget(load_button, 2, 2)
         actions_layout.addWidget(export_dxf, 3, 0)
-        actions_layout.addWidget(export_step, 3, 1)
-        actions_layout.addWidget(export_stl, 3, 2)
-        actions_layout.addWidget(export_csv, 4, 0)
-        actions_layout.addWidget(export_stations, 4, 1, 1, 2)
+        actions_layout.addWidget(export_csv, 3, 1)
+        actions_layout.addWidget(export_stations, 3, 2)
         layout.addWidget(actions)
         return frame
 
@@ -1421,6 +1543,7 @@ class StanThrustQtWindow(QMainWindow):
         self.output_tabs.tabBar().setExpanding(False)
         self.output_tabs.addTab(self._build_overview_tab(), "Overview")
         self.output_tabs.addTab(self._build_schematic_tab(), "Schematic")
+        self.output_tabs.addTab(self._build_model_tab(), "3D Model")
         self.output_tabs.addTab(self._build_plots_tab(), "Plots")
         self.output_tabs.addTab(self._build_measurements_tab(), "Measurements")
         self.output_tabs.addTab(self._build_summary_tab(), "Summary")
@@ -1483,6 +1606,18 @@ class StanThrustQtWindow(QMainWindow):
         layout.addWidget(title)
         self.schematic_view = SchematicView()
         layout.addWidget(self.schematic_view, 1)
+        return tab
+
+    def _build_model_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+        title = QLabel("Live 3D Model")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        self.model_3d_view = Model3DView()
+        layout.addWidget(self.model_3d_view, 1)
         return tab
 
     def _build_measurements_tab(self) -> QWidget:
@@ -1585,6 +1720,14 @@ class StanThrustQtWindow(QMainWindow):
         self.cfd_status_label.setObjectName("sectionBody")
         self.cfd_status_label.setWordWrap(True)
         feed_layout.addWidget(self.cfd_status_label)
+        self.solver_stage_label = QLabel("Coupled solver idle.")
+        self.solver_stage_label.setObjectName("sectionBody")
+        self.solver_stage_label.setWordWrap(True)
+        feed_layout.addWidget(self.solver_stage_label)
+        self.solver_residual_label = QLabel("Residuals will appear after Solve.")
+        self.solver_residual_label.setObjectName("sectionBody")
+        self.solver_residual_label.setWordWrap(True)
+        feed_layout.addWidget(self.solver_residual_label)
         self.export_status_label = QLabel("")
         self.export_status_label.setObjectName("sectionBody")
         self.export_status_label.setWordWrap(True)
@@ -1954,6 +2097,7 @@ class StanThrustQtWindow(QMainWindow):
         self.current_ga_candidate_state = None
         self.current_combustion_result = None
         self.current_solver_interface_result = None
+        self.current_coupled_cycle_result = None
         self._suspend_preview = False
         self.refresh_preview()
 
@@ -2003,6 +2147,7 @@ class StanThrustQtWindow(QMainWindow):
             return
         self.current_combustion_result = None
         self.current_solver_interface_result = None
+        self.current_coupled_cycle_result = None
         self.current_structural_result = None
         self.current_ga_result = None
         self.current_ga_candidate_state = None
@@ -2029,7 +2174,10 @@ class StanThrustQtWindow(QMainWindow):
         self._render_plots()
         if self.schematic_view is not None:
             self.schematic_view.render_design(self.current_design)
+        if self.model_3d_view is not None:
+            self.model_3d_view.render_design(self.current_design)
         self._set_solver_snapshot_defaults()
+        self._render_coupled_convergence_status()
         self._set_status(status, "GA idle.", "")
 
     def _set_status(self, cfd_text: str, ga_text: str, export_text: str) -> None:
@@ -2039,8 +2187,38 @@ class StanThrustQtWindow(QMainWindow):
             self.ga_status_label.setText(ga_text)
         if self.export_status_label is not None:
             self.export_status_label.setText(export_text)
+        if self.solver_stage_label is not None and not cfd_text.lower().startswith("running"):
+            self.solver_stage_label.setText("Coupled solver idle.")
         if self.statusBar() is not None:
             self.statusBar().showMessage(cfd_text)
+
+    def _set_solver_progress(self, progress: float, message: str) -> None:
+        if self.progress_bar is not None:
+            self.progress_bar.setValue(int(max(0.0, min(100.0, progress))))
+        if self.solver_stage_label is not None:
+            self.solver_stage_label.setText(message)
+        if self.cfd_status_label is not None:
+            self.cfd_status_label.setText(message)
+        if self.statusBar() is not None:
+            self.statusBar().showMessage(message)
+        QApplication.processEvents()
+
+    def _render_coupled_convergence_status(self) -> None:
+        if self.solver_residual_label is None:
+            return
+        if not isinstance(self.current_coupled_cycle_result, dict):
+            self.solver_residual_label.setText("Residuals will appear after Solve.")
+            return
+        payload = dict(self.current_coupled_cycle_result.get("payload", {}))
+        convergence = dict(payload.get("convergence", {}))
+        self.solver_residual_label.setText(
+            "Pc residual {0} kPa | thrust error {1}% | feed margin {2} kPa | structural margin {3}x".format(
+                _format_number(convergence.get("final_residual_kpa", "--"), 3),
+                _format_number((_safe_float(convergence.get("thrust_error_fraction"), 0.0) or 0.0) * 100.0, 3),
+                _format_number(convergence.get("minimum_feed_margin_kpa", "--"), 3),
+                _format_number(convergence.get("minimum_structural_margin_ratio", "--"), 3),
+            )
+        )
 
     def _render_status_banner(self) -> None:
         if self.status_banner is None:
@@ -2208,7 +2386,14 @@ class StanThrustQtWindow(QMainWindow):
                 "points": [
                     (
                         row.get("iteration"),
-                        (_safe_float(row.get("relative_error"), 0.0) or 0.0) * 100.0,
+                        (
+                            _safe_float(
+                                row.get("relative_error", row.get("thrust_error_fraction")),
+                                0.0,
+                            )
+                            or 0.0
+                        )
+                        * 100.0,
                     )
                     for row in iteration_trace
                 ],
@@ -2225,12 +2410,20 @@ class StanThrustQtWindow(QMainWindow):
 
         combustion_summary = dict(self.current_combustion_result.get("summary", {}))
         combustion_metadata = dict(self.current_combustion_result.get("metadata", {}))
-        feed_result = dict(dict(self.current_solver_interface_result.get("payload", {})).get("feed_pressure_drop", {}))
+        solver_payload = dict(self.current_solver_interface_result.get("payload", {}))
+        feed_result = dict(solver_payload.get("feed_pressure_drop", {}))
         feed_payload = dict(feed_result.get("payload", {}))
         feed_summary = dict(feed_payload.get("summary", {}))
         time_history = list(feed_payload.get("time_history_rows", []))
         axial_profile = list(self.current_combustion_result.get("axial_profile", []))
-        iteration_trace = list(self.current_combustion_result.get("iteration_trace", []))
+        coupled_payload = (
+            dict(self.current_coupled_cycle_result.get("payload", {}))
+            if isinstance(self.current_coupled_cycle_result, dict)
+            else {}
+        )
+        iteration_trace = list(coupled_payload.get("iteration_trace", [])) or list(
+            self.current_combustion_result.get("iteration_trace", [])
+        )
 
         predicted_thrust = _safe_float(
             combustion_summary.get("predicted_thrust_newtons"),
@@ -2584,41 +2777,66 @@ class StanThrustQtWindow(QMainWindow):
         if self.progress_bar is not None:
             self.progress_bar.setValue(12)
         if self.cfd_status_label is not None:
-            self.cfd_status_label.setText("Running combustion proxy...")
+            self.cfd_status_label.setText("Running coupled numerical solve...")
         QApplication.processEvents()
-        self.current_solver_interface_result = solve_solver_interface(
-            self.collect_form_state(),
-            upstream_context={"source": "qt-ui", "stage": "export-preview"},
-        )
         resolution = self._collect_solver_resolution()
-        solver_assumptions = replace(
-            self.solver_assumptions,
-            flow_model=resolution["flow_model"],
-            convergence_tolerance=resolution["convergence_tolerance"],
+        state = self.collect_form_state()
+        state["solver_flow_model"] = resolution["flow_model"]
+        initial_pressure_kpa = _safe_float(
+            dict(self.current_design.derived.engineering_values).get("chamber_pressure_kpa"),
+            1500.0,
+        )
+        self.current_coupled_cycle_result = solve_coupled_cycle(
+            state,
+            upstream_context={"source": "qt-ui", "stage": "coupled-solve"},
+            initial_chamber_pressure_kpa=initial_pressure_kpa,
+            initial_design=self.current_design,
+            convergence_tolerance_kpa=max(0.5, resolution["convergence_tolerance"] * 1000.0),
             max_iterations=resolution["iteration_limit"],
+            progress_callback=self._set_solver_progress,
         )
-        self.current_combustion_result = run_combustion_cfd_proxy(
-            self.current_design,
-            solver_assumptions,
-            station_count=resolution["station_count"],
-            max_iterations_override=resolution["iteration_limit"],
-            progress_callback=self._on_combustion_progress,
-            thermochemistry_mode="auto",
+        coupled_payload = dict(self.current_coupled_cycle_result.get("payload", {}))
+        final_feed_result = dict(coupled_payload.get("feed_solver_result", {}))
+        final_combustion_result = dict(coupled_payload.get("combustion_solver_result", {}))
+        final_structural_result = dict(coupled_payload.get("structural_solver_result", {}))
+        self.current_solver_interface_result = {
+            "metadata": {
+                "solver_name": "Common Solver Interface",
+                "solver_version": "1.0",
+                "solver_mode": "coupled-cycle",
+            },
+            "status": self.current_coupled_cycle_result.get("status", "unknown"),
+            "payload": {
+                "normalized_request": state,
+                "feed_pressure_drop": final_feed_result,
+                "coupled_cycle": self.current_coupled_cycle_result,
+            },
+            "warnings": list(self.current_coupled_cycle_result.get("warnings", [])),
+            "trace": list(self.current_coupled_cycle_result.get("trace", [])),
+        }
+        self.current_combustion_result = final_combustion_result or {}
+        self.current_structural_result = (
+            final_structural_result if final_structural_result else self._build_structural_result()
         )
-        self.current_structural_result = self._build_structural_result()
         self._render_status_banner()
         self._render_measurements()
         self._render_summary_text()
         self._render_metadata_text()
         self._render_plots()
         self._render_solver_snapshot()
+        self._render_coupled_convergence_status()
+        if self.model_3d_view is not None:
+            self.model_3d_view.render_design(self.current_design)
         thermo = {}
         if isinstance(self.current_combustion_result, dict):
             thermo = dict(dict(self.current_combustion_result.get("metadata", {})).get("thermochemistry", {}))
+        coupled_convergence = dict(coupled_payload.get("convergence", {}))
         self._set_status(
-            "Done. {0}: {1} | thermo: {2} ({3})".format(
+            "Done. {0}: {1} | coupled: {2}, residual {3} kPa | thermo: {4} ({5})".format(
                 FLOW_MODEL_DISPLAY_NAMES.get(resolution["flow_model"], resolution["flow_model"]),
                 self.current_combustion_result.get("status", "unknown"),
+                self.current_coupled_cycle_result.get("status", "unknown"),
+                _format_number(coupled_convergence.get("final_residual_kpa", "--"), 3),
                 thermo.get("provider", "--"),
                 thermo.get("status", "--"),
             ),
@@ -2743,44 +2961,6 @@ class StanThrustQtWindow(QMainWindow):
             self.cfd_status_label.text() if self.cfd_status_label else "",
             self.ga_status_label.text() if self.ga_status_label else "",
             "Exported DXF profile for CAD revolve/import.",
-        )
-
-    def export_revolved_stl_dialog(self) -> None:
-        if not self.current_design:
-            QMessageBox.warning(self, "Nothing to export", "No design is available yet.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export CAD Solid STL",
-            "stanth-solid.stl",
-            "STL Files (*.stl);;All Files (*)",
-        )
-        if not path:
-            return
-        export_revolved_stl(Path(path), self.current_design)
-        self._set_status(
-            self.cfd_status_label.text() if self.cfd_status_label else "",
-            self.ga_status_label.text() if self.ga_status_label else "",
-            "Exported STL solid for CAD import.",
-        )
-
-    def export_revolved_step_dialog(self) -> None:
-        if not self.current_design:
-            QMessageBox.warning(self, "Nothing to export", "No design is available yet.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export CAD Solid STEP",
-            "stanth-solid.step",
-            "STEP Files (*.step *.stp);;All Files (*)",
-        )
-        if not path:
-            return
-        export_revolved_step(Path(path), self.current_design)
-        self._set_status(
-            self.cfd_status_label.text() if self.cfd_status_label else "",
-            self.ga_status_label.text() if self.ga_status_label else "",
-            "Exported faceted STEP solid for CAD import.",
         )
 
     def export_csv_dialog(self) -> None:
