@@ -1,14 +1,14 @@
 """Tests for section-based structural and thermal material outputs."""
 import sys
 
-sys.path.insert(0, r"E:/LIQUID_ENGINE")
+sys.path.insert(0, r"E:/StanThrust")
 
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.material_assignment_solver import assign_materials
-from liquid_engine_studio.structural_material_solver import build_structural_materials_output
-from liquid_engine_studio.exporter import build_cad_export_payload
+from stanshock.concept_model import create_concept_design
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.material_assignment_solver import assign_materials
+from stanshock.structural_material_solver import build_structural_materials_output
+from stanshock.exporter import build_cad_export_payload
 
 
 def test_structural_materials_output_contains_sections():

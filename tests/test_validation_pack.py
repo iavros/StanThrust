@@ -7,12 +7,12 @@ changes in solver behavior.
 
 import sys
 
-sys.path.insert(0, r"E:/LIQUID_ENGINE")
+sys.path.insert(0, r"E:/StanThrust")
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.validation_pack import (
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.concept_model import create_concept_design
+from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.validation_pack import (
     get_regression_baseline_cases,
     get_regression_baselines,
     validate_concept_design,

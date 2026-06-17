@@ -10,7 +10,7 @@ Covers:
 
 import pytest
 from importlib.util import find_spec
-from liquid_engine_studio.ml_surrogate_adapter import (
+from stanshock.ml_surrogate_adapter import (
     GaussianProcessSurrogate,
     MLSurrogateModel,
     TrainingDataPoint,

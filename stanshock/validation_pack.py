@@ -9,8 +9,8 @@ ConceptDesign object or raw solver outputs.
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
-from liquid_engine_studio.benchmark_cases import get_internal_baseline_cases
-from liquid_engine_studio.concept_model import ConceptDesign
+from stanshock.benchmark_cases import get_internal_baseline_cases
+from stanshock.concept_model import ConceptDesign
 
 
 @dataclass(frozen=True)

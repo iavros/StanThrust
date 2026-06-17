@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from liquid_engine_studio.monte_carlo_sampler import EnsembleResults
+from stanshock.monte_carlo_sampler import EnsembleResults
 
 
 @dataclass

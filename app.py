@@ -18,7 +18,7 @@ _append_user_site()
 
 
 def _self_test_cantera() -> int:
-    from liquid_engine_studio.thermochemistry_provider import CanteraThermochemistryProvider, _import_cantera
+    from stanshock.thermochemistry_provider import CanteraThermochemistryProvider, _import_cantera
 
     ct = _import_cantera()
     gas, mechanism_path, phase_name = CanteraThermochemistryProvider()._load_mechanism(ct)
@@ -31,7 +31,7 @@ def main() -> int:
     if "--self-test-cantera" in sys.argv:
         return _self_test_cantera()
 
-    from liquid_engine_studio.qt_desktop import run
+    from stanshock.qt_desktop import run
 
     run()
     return 0

@@ -2,15 +2,15 @@
 
 import pytest
 from PyQt5.QtWidgets import QApplication
-from liquid_engine_studio.optimizer_hooks import (
+from stanshock.optimizer_hooks import (
     build_optimizer_seed,
     run_genetic_optimizer,
     run_genetic_optimizer_with_fidelity,
     GeneticAlgorithmResult,
     _summarize_tier_usage,
 )
-from liquid_engine_studio.concept_model import create_concept_design
-import liquid_engine_studio.qt_desktop as desktop_module
+from stanshock.concept_model import create_concept_design
+import stanshock.qt_desktop as desktop_module
 
 
 class TestGAIntegrationBasics:

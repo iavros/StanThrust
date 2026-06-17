@@ -1,6 +1,6 @@
 """Tests for uncertainty and provenance outputs."""
 
-from liquid_engine_studio.uncertainty_provenance import (
+from stanshock.uncertainty_provenance import (
     UncertaintyBand,
     ProvenanceField,
     get_field_confidence_bands,

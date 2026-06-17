@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Callable, Dict
 
-from liquid_engine_studio.concept_model import ConceptDesign, clamp
-from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS
+from stanshock.concept_model import ConceptDesign, clamp
+from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS
 
 
 ObjectiveEvaluator = Callable[[ConceptDesign], float]

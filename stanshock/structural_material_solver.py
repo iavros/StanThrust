@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from liquid_engine_studio.concept_model import create_concept_design
+from stanshock.concept_model import create_concept_design
 
 
 SOLVER_NAME = "Structural Material Solver"

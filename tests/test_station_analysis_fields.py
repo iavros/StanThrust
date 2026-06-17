@@ -6,7 +6,7 @@ import csv
 
 def test_station_numeric_promotion():
     """Assert all station rows include machine-friendly numeric fields."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({})
     for row in design.derived.station_rows:
@@ -22,7 +22,7 @@ def test_station_numeric_promotion():
 
 def test_numeric_value_ranges():
     """Validate that numeric station fields have physically reasonable values."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({})
     for row in design.derived.station_rows:
@@ -42,8 +42,8 @@ def test_numeric_value_ranges():
 
 def test_json_export_contains_analysis_fields():
     """Assert JSON export contains analysis_fields with provenance for each station."""
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.exporter import build_cad_export_payload
+    from stanshock.concept_model import create_concept_design
+    from stanshock.exporter import build_cad_export_payload
 
     design = create_concept_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -71,8 +71,8 @@ def test_json_export_contains_analysis_fields():
 
 def test_json_export_numeric_fields():
     """Assert JSON export includes machine-friendly numeric station fields."""
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.exporter import build_cad_export_payload
+    from stanshock.concept_model import create_concept_design
+    from stanshock.exporter import build_cad_export_payload
 
     design = create_concept_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -87,7 +87,7 @@ def test_json_export_numeric_fields():
 
 def test_backward_compatibility_notes():
     """Assert human-readable note fields are still present (backward compatibility)."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({})
     for row in design.derived.station_rows:
@@ -101,7 +101,7 @@ def test_backward_compatibility_notes():
 
 def test_regen_cooling_scenario():
     """Test station promotion with regen cooling enabled."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     state = {
         "regen_cooling": True,
@@ -132,7 +132,7 @@ def test_regen_cooling_scenario():
 
 def test_no_regen_cooling_scenario():
     """Test station promotion with regen cooling disabled."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     state = {
         "regen_cooling": False,
@@ -162,8 +162,8 @@ def test_no_regen_cooling_scenario():
 
 def test_csv_export_numeric_columns():
     """Assert CSV station export includes numeric columns at the end."""
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.exporter import export_station_csv
+    from stanshock.concept_model import create_concept_design
+    from stanshock.exporter import export_station_csv
 
     design = create_concept_design({})
     with TemporaryDirectory() as tmpdir:
@@ -217,8 +217,8 @@ def test_csv_export_numeric_columns():
 
 def test_solver_provenance_tagging():
     """Assert that solver provenance is correctly tagged in analysis_fields."""
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.exporter import build_cad_export_payload
+    from stanshock.concept_model import create_concept_design
+    from stanshock.exporter import build_cad_export_payload
 
     design = create_concept_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -242,7 +242,7 @@ def test_solver_provenance_tagging():
 
 def test_nozzle_contour_metadata_and_shape():
     """Assert the nozzle contour uses bell metadata and produces a usable monotonic profile."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({})
     values = design.derived.engineering_values
@@ -275,7 +275,7 @@ def test_nozzle_contour_metadata_and_shape():
 
 def test_impinging_injector_reports_full_orifice_pattern():
     """Assert impinging injector geometry exposes every calculated orifice."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({"injector_type": "impinging"})
     values = design.derived.engineering_values
@@ -294,7 +294,7 @@ def test_impinging_injector_reports_full_orifice_pattern():
 
 def test_render_geometry_fields_are_calculated():
     """Assert live 3D render dimensions come from solver-owned geometry fields."""
-    from liquid_engine_studio.concept_model import create_concept_design
+    from stanshock.concept_model import create_concept_design
 
     design = create_concept_design({"use_pumps": True, "injector_type": "impinging"})
     values = design.derived.engineering_values
@@ -328,8 +328,8 @@ def test_render_geometry_fields_are_calculated():
 
 def test_export_includes_nozzle_geometry_metadata():
     """Assert export payload carries the nozzle contour metadata for downstream CAD/report use."""
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.exporter import build_cad_export_payload
+    from stanshock.concept_model import create_concept_design
+    from stanshock.exporter import build_cad_export_payload
 
     design = create_concept_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})

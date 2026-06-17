@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 
-from liquid_engine_studio.materials import MATERIAL_OPTIONS
+from stanshock.materials import MATERIAL_OPTIONS
 
 
 SOLVER_NAME = "Material Assignment Solver"

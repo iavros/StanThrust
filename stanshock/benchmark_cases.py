@@ -1,10 +1,10 @@
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.defaults import DEFAULT_STATE
-from liquid_engine_studio.solver_assumptions import SolverAssumptions
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.concept_model import create_concept_design
+from stanshock.defaults import DEFAULT_STATE
+from stanshock.solver_assumptions import SolverAssumptions
 
 
 @dataclass(frozen=True)

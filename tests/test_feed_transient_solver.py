@@ -3,12 +3,12 @@
 import sys
 from dataclasses import asdict
 
-sys.path.insert(0, r"E:/LIQUID_ENGINE")
+sys.path.insert(0, r"E:/StanThrust")
 
-from liquid_engine_studio.defaults import DEFAULT_STATE
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.exporter import build_cad_export_payload
-from liquid_engine_studio.solver_interface import solve as solve_solver_interface
+from stanshock.defaults import DEFAULT_STATE
+from stanshock.concept_model import create_concept_design
+from stanshock.exporter import build_cad_export_payload
+from stanshock.solver_interface import solve as solve_solver_interface
 
 
 def test_pressure_fed_transient_history_has_blowdown_and_tailoff():

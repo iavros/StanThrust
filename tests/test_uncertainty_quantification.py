@@ -8,12 +8,12 @@ Covers:
 """
 
 import pytest
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.monte_carlo_sampler import (
+from stanshock.concept_model import create_concept_design
+from stanshock.monte_carlo_sampler import (
     MonteCarloEnsemble,
     InputSample,
 )
-from liquid_engine_studio.sobol_analyzer import SobolAnalyzer
+from stanshock.sobol_analyzer import SobolAnalyzer
 
 
 # Fixtures

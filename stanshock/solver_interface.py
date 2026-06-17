@@ -1,10 +1,10 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-from liquid_engine_studio.concept_model import DesignInputs
-from liquid_engine_studio.feed_pressure_drop_solver import solve as solve_feed_pressure_drop
-from liquid_engine_studio.materials import MATERIAL_OPTIONS
-from liquid_engine_studio.propellants import lookup_propellant
+from stanshock.concept_model import DesignInputs
+from stanshock.feed_pressure_drop_solver import solve as solve_feed_pressure_drop
+from stanshock.materials import MATERIAL_OPTIONS
+from stanshock.propellants import lookup_propellant
 
 
 SOLVER_INTERFACE_VERSION = "1.0"

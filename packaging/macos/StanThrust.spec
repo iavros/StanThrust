@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 project_root = Path.cwd()
 sys.path.insert(0, str(project_root))
-from liquid_engine_studio import __version__ as APP_VERSION
+from stanshock import __version__ as APP_VERSION
 
 asset_dir = project_root / "assets"
 icon_path = asset_dir / "app_icon.icns"
@@ -16,10 +16,10 @@ cantera_binaries = collect_dynamic_libs("cantera")
 analysis_datas = cantera_datas + [
     (str(asset_dir / "Logo.png"), "assets"),
     (str(asset_dir / "Logo.svg"), "assets"),
-    (str(project_root / "liquid_engine_studio" / "data" / "default_mechanism.json"), "liquid_engine_studio/data"),
-    (str(project_root / "liquid_engine_studio" / "data" / "rocket_mech_equilibrium.yaml"), "liquid_engine_studio/data"),
-    (str(project_root / "liquid_engine_studio" / "data" / "rocket_mech.yaml"), "liquid_engine_studio/data"),
-    (str(project_root / "liquid_engine_studio" / "data" / "rocket_mech_minimal.yaml"), "liquid_engine_studio/data"),
+    (str(project_root / "stanshock" / "data" / "default_mechanism.json"), "stanshock/data"),
+    (str(project_root / "stanshock" / "data" / "rocket_mech_equilibrium.yaml"), "stanshock/data"),
+    (str(project_root / "stanshock" / "data" / "rocket_mech.yaml"), "stanshock/data"),
+    (str(project_root / "stanshock" / "data" / "rocket_mech_minimal.yaml"), "stanshock/data"),
 ]
 if icon_path.exists():
     analysis_datas.append((str(icon_path), "."))

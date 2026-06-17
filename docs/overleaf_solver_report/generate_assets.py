@@ -26,17 +26,17 @@ _add_user_site()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.benchmark_cases import (
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.benchmark_cases import (
     build_internal_baseline_rows,
     build_public_benchmark_reference_rows,
     build_reconstructed_benchmark_rows,
 )
-from liquid_engine_studio.concept_model import _solve_pressure_state, create_concept_design
-from liquid_engine_studio.defaults import DEFAULT_STATE
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.solver_interface import solve as solve_solver_interface
-from liquid_engine_studio.thermochemistry_provider import CanteraThermochemistryProvider
+from stanshock.concept_model import _solve_pressure_state, create_concept_design
+from stanshock.defaults import DEFAULT_STATE
+from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.solver_interface import solve as solve_solver_interface
+from stanshock.thermochemistry_provider import CanteraThermochemistryProvider
 
 
 def write_csv(path: Path, fieldnames, rows) -> None:

@@ -2,12 +2,12 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from liquid_engine_studio.concept_model import ConceptDesign, create_concept_design
-from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS
-from liquid_engine_studio.objectives import evaluate_objectives, normalize_objective_weights
-from liquid_engine_studio.multifidelity_adapter import MultiFidelityScreener
-from liquid_engine_studio.validation_pack import validate_concept_design
-from liquid_engine_studio.fidelity_coordinator import (
+from stanshock.concept_model import ConceptDesign, create_concept_design
+from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS
+from stanshock.objectives import evaluate_objectives, normalize_objective_weights
+from stanshock.multifidelity_adapter import MultiFidelityScreener
+from stanshock.validation_pack import validate_concept_design
+from stanshock.fidelity_coordinator import (
     FidelityRouter,
     AdaptiveSamplingPool,
     SurrogateRetrainingScheduler,

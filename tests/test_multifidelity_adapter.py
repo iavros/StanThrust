@@ -1,6 +1,6 @@
 """Tests for multi-fidelity screening and confirmation workflows."""
 
-from liquid_engine_studio.multifidelity_adapter import (
+from stanshock.multifidelity_adapter import (
     ConceptSurrogateModel,
     MultiFidelityScreener,
 )

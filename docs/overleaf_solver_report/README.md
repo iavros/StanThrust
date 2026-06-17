@@ -60,7 +60,7 @@ The script writes:
 - `data/report_macros.tex`
 
 The benchmark CSV files are generated from the shared solver registry in
-`liquid_engine_studio/benchmark_cases.py`, so the report, exports, and automated
+`stanshock/benchmark_cases.py`, so the report, exports, and automated
 regression tests all use the same benchmark definitions.
 
 The transient feed CSV files are generated from the same solver-interface path used by the app, so the report plots reflect the same burn-time feed behavior shown in the desktop UI and exports.

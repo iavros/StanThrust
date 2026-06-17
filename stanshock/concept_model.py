@@ -2,7 +2,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from liquid_engine_studio.propellants import PropellantOption, lookup_propellant
+from stanshock.propellants import PropellantOption, lookup_propellant
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:

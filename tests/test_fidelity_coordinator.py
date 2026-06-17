@@ -1,7 +1,7 @@
 """Tests for Stage 7: Advanced Fidelity Coordination."""
 
 import pytest
-from liquid_engine_studio.fidelity_coordinator import (
+from stanshock.fidelity_coordinator import (
     FidelityTier,
     FidelityRouter,
     AdaptiveSamplingPool,

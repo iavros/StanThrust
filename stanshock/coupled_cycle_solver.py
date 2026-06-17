@@ -11,12 +11,12 @@ and section margins are solved together instead of reported as isolated guesses.
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.feed_pressure_drop_solver import solve as solve_feed_system
-from liquid_engine_studio.material_assignment_solver import assign_materials
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.structural_material_solver import build_structural_materials_output
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.concept_model import create_concept_design
+from stanshock.feed_pressure_drop_solver import solve as solve_feed_system
+from stanshock.material_assignment_solver import assign_materials
+from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.structural_material_solver import build_structural_materials_output
 
 
 SOLVER_NAME = "Coupled Cycle Loop Solver"

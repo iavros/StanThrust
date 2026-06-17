@@ -1,10 +1,10 @@
 import math
 from typing import Callable, Dict, List, Optional
 
-from liquid_engine_studio.concept_model import ConceptDesign, clamp, rounded
-from liquid_engine_studio.propellants import lookup_propellant
-from liquid_engine_studio.solver_assumptions import SolverAssumptions
-from liquid_engine_studio.thermochemistry_provider import (
+from stanshock.concept_model import ConceptDesign, clamp, rounded
+from stanshock.propellants import lookup_propellant
+from stanshock.solver_assumptions import SolverAssumptions
+from stanshock.thermochemistry_provider import (
     CanteraThermochemistryProvider,
     ThermochemistryProvider,
     resolve_thermochemistry_provider,

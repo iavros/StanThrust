@@ -15,30 +15,30 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from liquid_engine_studio import __version__ as APP_VERSION
-from liquid_engine_studio.concept_model import INJECTOR_TYPES, create_concept_design
-from liquid_engine_studio.coupled_cycle_solver import solve as solve_coupled_cycle
-from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
-from liquid_engine_studio.exporter import (
+from stanshock import __version__ as APP_VERSION
+from stanshock.concept_model import INJECTOR_TYPES, create_concept_design
+from stanshock.coupled_cycle_solver import solve as solve_coupled_cycle
+from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
+from stanshock.exporter import (
     build_revolved_profile_points,
     export_measurements_csv,
     export_profile_dxf,
     export_station_csv,
 )
-from liquid_engine_studio.materials import MATERIAL_OPTIONS
-from liquid_engine_studio.material_assignment_solver import assign_materials
-from liquid_engine_studio.objectives import evaluate_objectives, normalize_objective_weights
-from liquid_engine_studio.optimizer_hooks import (
+from stanshock.materials import MATERIAL_OPTIONS
+from stanshock.material_assignment_solver import assign_materials
+from stanshock.objectives import evaluate_objectives, normalize_objective_weights
+from stanshock.optimizer_hooks import (
     build_optimizer_seed,
     run_feasibility_first_optimizer,
     run_genetic_optimizer,
     apply_multifidelity_confirmation,
 )
-from liquid_engine_studio.project_io import load_project, save_project
-from liquid_engine_studio.propellants import FUEL_NAMES, OXIDIZER_NAMES
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-from liquid_engine_studio.structural_material_solver import build_structural_materials_output
-from liquid_engine_studio.validation_pack import validate_concept_design
+from stanshock.project_io import load_project, save_project
+from stanshock.propellants import FUEL_NAMES, OXIDIZER_NAMES
+from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.structural_material_solver import build_structural_materials_output
+from stanshock.validation_pack import validate_concept_design
 
 try:
     from PyQt5.QtCore import Qt, QLineF, QPointF, QRectF, QTimer
@@ -4133,7 +4133,7 @@ class StanThrustQtWindow(QMainWindow):
             self,
             "Load Project",
             "",
-            "StanThrust Project (*.stanth.json);;Liquid Engine Project (*.liquid.json);;JSON Files (*.json)",
+            "StanThrust Project (*.stanth.json);;Legacy Project (*.liquid.json);;JSON Files (*.json)",
         )
         if not path:
             return

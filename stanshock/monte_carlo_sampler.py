@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from liquid_engine_studio.concept_model import ConceptDesign, create_concept_design
-from liquid_engine_studio.validation_pack import validate_concept_design
+from stanshock.concept_model import ConceptDesign, create_concept_design
+from stanshock.validation_pack import validate_concept_design
 
 
 @dataclass

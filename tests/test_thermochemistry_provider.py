@@ -6,10 +6,10 @@ import pytest
 def test_generated_equilibrium_mechanism_loads_and_estimates():
     import cantera as ct
 
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.propellants import lookup_propellant
-    from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-    from liquid_engine_studio.thermochemistry_provider import (
+    from stanshock.concept_model import create_concept_design
+    from stanshock.propellants import lookup_propellant
+    from stanshock.solver_assumptions import get_default_solver_assumptions
+    from stanshock.thermochemistry_provider import (
         CanteraThermochemistryProvider,
         EQUILIBRIUM_MECHANISM_PATH,
     )
@@ -36,11 +36,11 @@ def test_generated_equilibrium_mechanism_loads_and_estimates():
 def test_public_benchmark_propellant_pairs_are_supported():
     import cantera  # noqa: F401
 
-    from liquid_engine_studio.benchmark_cases import get_public_benchmark_cases
-    from liquid_engine_studio.concept_model import create_concept_design
-    from liquid_engine_studio.propellants import lookup_propellant
-    from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
-    from liquid_engine_studio.thermochemistry_provider import CanteraThermochemistryProvider
+    from stanshock.benchmark_cases import get_public_benchmark_cases
+    from stanshock.concept_model import create_concept_design
+    from stanshock.propellants import lookup_propellant
+    from stanshock.solver_assumptions import get_default_solver_assumptions
+    from stanshock.thermochemistry_provider import CanteraThermochemistryProvider
 
     provider = CanteraThermochemistryProvider()
     assumptions = get_default_solver_assumptions()
@@ -58,7 +58,7 @@ def test_public_benchmark_propellant_pairs_are_supported():
 
 
 def test_thermochemistry_provider_requires_cantera_mode():
-    from liquid_engine_studio.thermochemistry_provider import (
+    from stanshock.thermochemistry_provider import (
         CanteraThermochemistryProvider,
         resolve_thermochemistry_provider,
     )

@@ -3,11 +3,11 @@
 import sys
 from dataclasses import replace
 
-sys.path.insert(0, r"E:/LIQUID_ENGINE")
+sys.path.insert(0, r"E:/StanThrust")
 
-from liquid_engine_studio.combustion_cfd_solver import run_combustion_cfd_proxy
-from liquid_engine_studio.concept_model import create_concept_design
-from liquid_engine_studio.solver_assumptions import get_default_solver_assumptions
+from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.concept_model import create_concept_design
+from stanshock.solver_assumptions import get_default_solver_assumptions
 
 
 def test_flow_modes_emit_distinct_metadata_and_outputs():

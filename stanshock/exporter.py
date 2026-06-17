@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from liquid_engine_studio.benchmark_cases import (
+from stanshock.benchmark_cases import (
     get_internal_baseline_cases,
     get_public_benchmark_cases,
 )
-from liquid_engine_studio.concept_model import ConceptDesign
-from liquid_engine_studio.uncertainty_provenance import (
+from stanshock.concept_model import ConceptDesign
+from stanshock.uncertainty_provenance import (
     UncertaintyBand,
     ProvenanceField,
     build_uncertainty_summary,
