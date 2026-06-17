@@ -12,9 +12,13 @@ import sys
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from liquid_engine_studio import __version__ as APP_VERSION
+
 APP_NAME = "StanThrust"
-APP_VERSION = "0.1.0"
 DIST_ROOT = PROJECT_ROOT / "dist"
 MACOS_DIST = DIST_ROOT / "macos"
 APP_PATH = MACOS_DIST / f"{APP_NAME}.app"
@@ -47,7 +51,7 @@ def _clean_outputs() -> None:
 
 def _build_app_bundle() -> None:
     _print_header("Building macOS app bundle")
-    _run([sys.executable, str(PROJECT_ROOT / "build_macos_app.py")])
+    _run([sys.executable, str(PROJECT_ROOT / "packaging" / "macos" / "build_app.py")])
     if not APP_PATH.exists():
         raise SystemExit(f"Expected app bundle was not found: {APP_PATH}")
 

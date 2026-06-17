@@ -189,6 +189,34 @@ def build_geometry_breakdown_rows(design):
     ]
 
 
+def build_render_geometry_rows(values):
+    fields = [
+        ("Fuel feed tube", "Diameter", "fuel_feed_tube_diameter_mm"),
+        ("Ox feed tube", "Diameter", "oxidizer_feed_tube_diameter_mm"),
+        ("Fuel pump casing", "Diameter", "fuel_pump_casing_diameter_mm"),
+        ("Ox pump casing", "Diameter", "oxidizer_pump_casing_diameter_mm"),
+        ("Fuel impeller", "Diameter", "fuel_impeller_diameter_mm"),
+        ("Ox impeller", "Diameter", "oxidizer_impeller_diameter_mm"),
+        ("Motor envelope", "Length", "electric_motor_envelope_length_mm"),
+        ("Injector face", "Diameter", "injector_face_diameter_mm"),
+        ("Injector recess", "Diameter", "injector_recess_diameter_mm"),
+        ("Injector element ring", "Diameter", "injector_element_ring_diameter_mm"),
+    ]
+    rows = []
+    for component, dimension, key in fields:
+        value = float(values.get(key, 0.0) or 0.0)
+        if value > 0.0:
+            rows.append(
+                {
+                    "component": component,
+                    "dimension": dimension,
+                    "field_name": key,
+                    "value_mm": round(value, 4),
+                }
+            )
+    return rows
+
+
 def build_propellant_breakdown_rows(values):
     return [
         {
@@ -336,6 +364,11 @@ def main() -> None:
         DATA_DIR / "geometry_breakdown.csv",
         ["component", "length_mm"],
         build_geometry_breakdown_rows(design),
+    )
+    write_csv(
+        DATA_DIR / "render_geometry.csv",
+        ["component", "dimension", "field_name", "value_mm"],
+        build_render_geometry_rows(values),
     )
     write_csv(
         DATA_DIR / "propellant_breakdown.csv",
@@ -530,6 +563,8 @@ def main() -> None:
         "SampleBellExitAngle": "{0:.2f}".format(values.get("nozzle_bell_exit_angle_deg", 0.0)),
         "SampleThroatEntryBlendRadius": "{0:.1f}".format(values.get("nozzle_throat_entry_blend_radius_mm", 0.0)),
         "SampleThroatExitBlendRadius": "{0:.1f}".format(values.get("nozzle_throat_exit_blend_radius_mm", 0.0)),
+        "SampleInjectorOrificeCount": "{0:.0f}".format(values.get("impinging_orifice_count", 0.0)),
+        "SampleInjectorElementRing": "{0:.1f}".format(values.get("injector_element_ring_diameter_mm", 0.0)),
         "SampleChamberPressure": "{0:.1f}".format(summary["chamber_pressure_kpa"]),
         "SampleThrust": "{0:.1f}".format(summary["predicted_thrust_newtons"]),
         "SampleIsp": "{0:.1f}".format(summary["predicted_isp_seconds"]),

@@ -1,5 +1,11 @@
+import json
 import math
+import os
+import shutil
 import sys
+import urllib.error
+import urllib.request
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -9,6 +15,7 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+from liquid_engine_studio import __version__ as APP_VERSION
 from liquid_engine_studio.concept_model import INJECTOR_TYPES, create_concept_design
 from liquid_engine_studio.coupled_cycle_solver import solve as solve_coupled_cycle
 from liquid_engine_studio.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
@@ -77,7 +84,8 @@ except ImportError as exc:  # pragma: no cover - exercised only when Qt is absen
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LOGO_PNG_PATH = PROJECT_ROOT / "Logo.png"
+LOGO_PNG_PATH = PROJECT_ROOT / "assets" / "Logo.png"
+UPDATE_RELEASE_API = "https://api.github.com/repos/iavros/StanThrust/releases/latest"
 
 QT_PALETTE = {
     "bg": "#0D0F12",
@@ -179,6 +187,25 @@ def _safe_float(value: object, fallback: Optional[float] = None) -> Optional[flo
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _version_parts(version: object) -> Tuple[int, ...]:
+    cleaned = str(version or "").strip().lstrip("vV")
+    parts: List[int] = []
+    for token in cleaned.replace("-", ".").replace("_", ".").split("."):
+        digits = "".join(char for char in token if char.isdigit())
+        if digits:
+            parts.append(int(digits))
+    return tuple(parts or [0])
+
+
+def _is_newer_version(candidate: object, current: object) -> bool:
+    candidate_parts = list(_version_parts(candidate))
+    current_parts = list(_version_parts(current))
+    width = max(len(candidate_parts), len(current_parts))
+    candidate_parts.extend([0] * (width - len(candidate_parts)))
+    current_parts.extend([0] * (width - len(current_parts)))
+    return tuple(candidate_parts) > tuple(current_parts)
 
 
 class MetricCard(QFrame):
@@ -2492,12 +2519,15 @@ class StanThrustQtWindow(QMainWindow):
         export_csv.clicked.connect(self.export_csv_dialog)
         export_stations = QPushButton("Stations CSV")
         export_stations.clicked.connect(self.export_station_csv_dialog)
+        update_button = QPushButton("Check For Update")
+        update_button.clicked.connect(self.check_for_update)
         actions_layout.addWidget(reset_button, 2, 0)
         actions_layout.addWidget(save_button, 2, 1)
         actions_layout.addWidget(load_button, 2, 2)
         actions_layout.addWidget(export_dxf, 3, 0)
         actions_layout.addWidget(export_csv, 3, 1)
         actions_layout.addWidget(export_stations, 3, 2)
+        actions_layout.addWidget(update_button, 4, 0, 1, 3)
         layout.addWidget(actions)
         return frame
 
@@ -3805,6 +3835,116 @@ class StanThrustQtWindow(QMainWindow):
                 lines.append("calculation_stage = {0}".format(stage))
         self.diagnostic_snapshot_lines = lines
         self._refresh_diagnostics_terminal()
+
+    def check_for_update(self) -> None:
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            release = self._fetch_latest_release()
+            latest_tag = str(release.get("tag_name") or release.get("name") or "").strip()
+            latest_version = latest_tag.lstrip("vV")
+            if not latest_version:
+                QMessageBox.information(self, "Update Check", "No release version was found.")
+                return
+            if not _is_newer_version(latest_version, APP_VERSION):
+                QMessageBox.information(
+                    self,
+                    "StanThrust Is Up To Date",
+                    "Installed version: {0}\nLatest release: {1}".format(APP_VERSION, latest_tag),
+                )
+                return
+            asset = self._select_release_asset(release)
+            release_url = str(release.get("html_url") or "https://github.com/iavros/StanThrust/releases")
+            if not asset:
+                answer = QMessageBox.question(
+                    self,
+                    "Update Available",
+                    "StanThrust {0} is available, but no installer asset matches this platform.\n\nOpen the release page?".format(latest_tag),
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if answer == QMessageBox.Yes:
+                    webbrowser.open(release_url)
+                return
+            asset_name = str(asset.get("name") or "StanThrust update")
+            answer = QMessageBox.question(
+                self,
+                "Update Available",
+                "StanThrust {0} is available.\n\nDownload {1} to your Downloads folder?".format(latest_tag, asset_name),
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            downloaded_path = self._download_release_asset(asset)
+            self._append_solver_log("Downloaded update installer: {0}".format(downloaded_path), "I-UPDATE-001", "INFO")
+            QMessageBox.information(
+                self,
+                "Update Downloaded",
+                "Downloaded:\n{0}\n\nRun the installer to update StanThrust.".format(downloaded_path),
+            )
+            self._open_file_location(downloaded_path)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            QMessageBox.warning(self, "Update Check Failed", "Could not reach GitHub Releases.\n\n{0}".format(exc))
+        except Exception as exc:
+            QMessageBox.warning(self, "Update Check Failed", "StanThrust could not complete the update check.\n\n{0}".format(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _fetch_latest_release(self) -> Dict[str, object]:
+        request = urllib.request.Request(
+            UPDATE_RELEASE_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "StanThrust/{0}".format(APP_VERSION),
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return dict(json.loads(response.read().decode("utf-8")))
+
+    def _select_release_asset(self, release: Dict[str, object]) -> Optional[Dict[str, object]]:
+        raw_assets = release.get("assets", [])
+        assets = [dict(asset) for asset in raw_assets if isinstance(asset, dict)]
+        if sys.platform == "win32":
+            preferred = ("installer.exe", ".msi", "windows-portable.zip", ".zip")
+        elif sys.platform == "darwin":
+            preferred = (".dmg", ".pkg", ".zip")
+        else:
+            preferred = (".zip", ".tar.gz", ".tgz")
+        for marker in preferred:
+            for asset in assets:
+                name = str(asset.get("name") or "").lower()
+                if marker in name and asset.get("browser_download_url"):
+                    return asset
+        return None
+
+    def _download_release_asset(self, asset: Dict[str, object]) -> Path:
+        url = str(asset.get("browser_download_url") or "")
+        if not url:
+            raise ValueError("Release asset is missing a download URL.")
+        name = Path(str(asset.get("name") or "StanThrust-update")).name
+        downloads_dir = Path.home() / "Downloads"
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        target = downloads_dir / name
+        stem = target.stem
+        suffix = "".join(target.suffixes)
+        counter = 1
+        while target.exists():
+            target = downloads_dir / "{0}-{1}{2}".format(stem, counter, suffix)
+            counter += 1
+        request = urllib.request.Request(url, headers={"User-Agent": "StanThrust/{0}".format(APP_VERSION)})
+        with urllib.request.urlopen(request, timeout=90) as response, target.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        return target
+
+    def _open_file_location(self, path: Path) -> None:
+        folder = path.parent
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                webbrowser.open(folder.as_uri())
+            else:
+                webbrowser.open(folder.as_uri())
+        except Exception:
+            webbrowser.open(folder.as_uri())
 
     def run_solver(self) -> None:
         QApplication.setOverrideCursor(Qt.WaitCursor)

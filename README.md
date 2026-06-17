@@ -62,7 +62,7 @@ The current solved stack includes:
 - a hard overall diameter cap, with both capped geometry and uncapped required envelope reported in diagnostics
 - fast and refined quasi-1D chamber/nozzle flow modes
 - transient feed-system histories for pressure-fed and pump-fed architectures
-- a Stage 3.2 coupled numerical loop that relaxes chamber pressure across feed, chamber/nozzle, and structural-margin solvers
+- a coupled numerical loop that relaxes chamber pressure across feed, chamber/nozzle, and structural-margin solvers
 - desktop engineering plots driven from the transient feed history, axial station field, and chamber-iteration trace
 - benchmark and regression datasets shared across the app, exports, tests, and report
 
@@ -92,7 +92,7 @@ Create the installer on the same operating system you want to distribute. PyInst
 For Windows, run this on Windows:
 
 ```powershell
-python build_windows_installer.py
+python packaging\windows\build_installer.py
 ```
 
 This creates `dist/installer/StanThrust-Installer.exe`, which is the file to send to Windows users. They do not need Python.
@@ -100,10 +100,18 @@ This creates `dist/installer/StanThrust-Installer.exe`, which is the file to sen
 For macOS, run this on macOS:
 
 ```bash
-python build_macos_installer.py
+python packaging/macos/build_installer.py
 ```
 
 This creates `dist/installer/StanThrust-macOS.dmg`, which is the file to send to Mac users. They do not need Python.
+
+The app also includes `Check For Update` in the Actions panel. It checks the latest GitHub Release, downloads the matching Windows installer or macOS DMG into the user's Downloads folder, and lets the user run that installer. Publish release assets with the names produced by the packaging scripts so the update checker can find them.
+
+The repository includes a GitHub Actions packaging workflow:
+
+- `.github/workflows/package.yml`
+
+Run it manually from GitHub Actions to produce Windows and macOS artifacts, or push a version tag such as `v1.0.1` to build both installers and attach them to a GitHub Release.
 
 ## Solver Report
 
@@ -154,7 +162,7 @@ python -m pip install -r requirements.txt
 Build the single-file Windows executable on Windows:
 
 ```powershell
-python build_windows_app.py
+python packaging\windows\build_app.py
 ```
 
 Build output:
@@ -164,7 +172,7 @@ Build output:
 Build the native macOS app bundle on macOS:
 
 ```bash
-python build_macos_app.py
+python packaging/macos/build_app.py
 ```
 
 Build output:
@@ -173,17 +181,17 @@ Build output:
 
 The tracked spec files are:
 
-- `StanThrust_windows.spec`
-- `StanThrust_macos.spec`
+- `packaging/windows/StanThrust.spec`
+- `packaging/macos/StanThrust.spec`
 
 ## Packaging Notes
 
 The packaged app bundles the runtime assets it needs, including:
 
-- `Logo.png`
-- `Logo.svg`
-- `app_icon.ico`
-- `app_icon.icns` when generated for macOS
+- `assets/Logo.png`
+- `assets/Logo.svg`
+- `assets/app_icon.ico`
+- `assets/app_icon.icns`
 - bundled Cantera mechanism files under `liquid_engine_studio/data`
 
 ## Project Structure
@@ -194,6 +202,8 @@ The packaged app bundles the runtime assets it needs, including:
 - `liquid_engine_studio/exporter.py`: CAD and report-facing export paths
 - `liquid_engine_studio/optimizer_hooks.py`: GA and feasibility-first optimization hooks
 - `liquid_engine_studio/combustion_cfd_solver.py`: combustion / CFD proxy path
+- `assets/`: application icons and brand assets used by the UI and installers
+- `packaging/`: Windows and macOS build scripts plus PyInstaller spec files
 - `docs/overleaf_solver_report/`: solver report source and generated plot assets
 - `scripts/`: optional project utilities and diagnostics
 - `tests/`: regression and feature validation coverage

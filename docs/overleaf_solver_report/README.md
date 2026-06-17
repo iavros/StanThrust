@@ -18,6 +18,7 @@ The current report documents:
 - section-based structural and thermal margin relations
 - transient pressure-fed and pump-fed feed-system behavior
 - fast vs refined quasi-1D chamber/nozzle flow modes
+- live-render geometry fields used by the desktop 3D model views
 - reconstructed collegiate benchmark cases and internal regression baselines
 
 The desktop app now exposes the same reduced-order histories in its Qt results workspace through a dedicated plots tab:
@@ -44,6 +45,7 @@ The script writes:
 - `data/feed_transient_pressure_fed.csv`
 - `data/feed_transient_pump_fed.csv`
 - `data/geometry_breakdown.csv`
+- `data/render_geometry.csv`
 - `data/propellant_breakdown.csv`
 - `data/nozzle_loss_breakdown.csv`
 - `data/cooling_sweep.csv`

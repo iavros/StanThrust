@@ -1,0 +1,11 @@
+component,dimension,field_name,value_mm
+Fuel feed tube,Diameter,fuel_feed_tube_diameter_mm,4.4
+Ox feed tube,Diameter,oxidizer_feed_tube_diameter_mm,4.3
+Fuel pump casing,Diameter,fuel_pump_casing_diameter_mm,72.7
+Ox pump casing,Diameter,oxidizer_pump_casing_diameter_mm,76.7
+Fuel impeller,Diameter,fuel_impeller_diameter_mm,67.5
+Ox impeller,Diameter,oxidizer_impeller_diameter_mm,71.1
+Motor envelope,Length,electric_motor_envelope_length_mm,77.1
+Injector face,Diameter,injector_face_diameter_mm,70.0
+Injector recess,Diameter,injector_recess_diameter_mm,59.7
+Injector element ring,Diameter,injector_element_ring_diameter_mm,50.4

@@ -539,6 +539,47 @@ A_{s,n}=0.82\,\pi d_e L_n.
 \label{eq:nozzle-shell-area}
 \end{equation}
 
+\subsection{Renderable Geometry Fields}
+The desktop 3D views are rendered from the same solved scalar fields and sampled nozzle contour used by the measurement table and exports. The drawing layer may choose colors, perspective, wireframe density, and label positions, but the visible engine dimensions are not hard-coded in the renderer. For example, tank cylinders use solved outer diameters and required lengths, pump models use solved casing, impeller, eye, hub, blade-count, and motor-envelope values, and the impinging injector pattern uses the solved element count, orifice diameter, pair spacing, ring diameter, and convergence height.
+
+\begin{table}[H]
+\centering
+\caption{Selected solved fields used directly by the live 3D renderer for the default pump-fed impinging-injector case.}
+\pgfplotstabletypeset[
+  col sep=comma,
+  columns={component,dimension,value_mm},
+  columns/component/.style={string type,column name=Component},
+  columns/dimension/.style={string type,column name=Dimension},
+  columns/value_mm/.style={column name={Value [mm]}, fixed, fixed zerofill, precision=2},
+  every head row/.style={before row=\toprule, after row=\midrule},
+  every last row/.style={after row=\bottomrule}
+]{data/render_geometry.csv}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.88\textwidth,
+  height=0.42\textwidth,
+  xbar,
+  xmin=0,
+  xlabel={Solved dimension [mm]},
+  symbolic y coords={Fuel feed tube,Ox feed tube,Fuel pump casing,Ox pump casing,Fuel impeller,Ox impeller,Motor envelope,Injector face,Injector recess,Injector element ring},
+  ytick=data,
+  grid=major,
+  grid style={draw=gray!25},
+  nodes near coords,
+  every node near coord/.append style={font=\scriptsize, text=stancharcoal},
+  point meta=x,
+  enlarge y limits=0.08,
+]
+\addplot+[fill=stanred!72, draw=stanred] table[x=value_mm,y=component,col sep=comma] {data/render_geometry.csv};
+\end{axis}
+\end{tikzpicture}
+\caption{Representative solved dimensions that drive the in-app 3D render. The plotted values are regenerated from the current solver implementation.}
+\end{figure}
+
 \section{Performance and Propellant Closure}
 \subsection{Delivered Thrust and Burn-Time Consistency}
 StanThrust does not assume the requested thrust is exactly delivered. Instead it constructs a thrust-delivery factor
@@ -1975,6 +2016,18 @@ The output should be read as the result of the staged closure above:
 \item thermochemistry provides $(\gamma,R,T_c)$;
 \item the quasi-1D solver returns $P_c$, $\mdotp$, $F$, and $I_{sp}$.
 \end{enumerate}
+
+\section{Validation Workflow}
+StanThrust validation is intentionally split into several checks rather than a single pass/fail number. The public benchmark reconstructions below compare the solver against published collegiate engines where enough information exists to rebuild an operating point. The internal regression baselines check repeatability of representative solved cases. The generated report figures check that the documentation data are regenerated from the same implementation that drives the desktop app. Finally, the packaging workflow runs the Python test suite before building native Windows and macOS distribution artifacts.
+
+For a solver change to be considered healthy, the expected path is:
+\begin{enumerate}[leftmargin=6mm]
+\item regenerate this report's CSV assets with \texttt{docs/overleaf\_solver\_report/generate\_assets.py};
+\item run the automated test suite, including benchmark regression and render-geometry field checks;
+\item inspect the live Qt diagnostics log for solver-stage status and error codes;
+\item build the platform installer from the tracked packaging scripts or the GitHub packaging workflow.
+\end{enumerate}
+This keeps method documentation, UI-visible geometry, and packaged application behavior tied to the same code path.
 
 \section{Benchmark Against Real Student Engines}
 The most useful benchmark is not a simple side-by-side list of thrust levels. A better engineering check is to reconstruct a small set of public student engines, run those reconstructed cases through the same StanThrust solver used for the default design, and then compare the solver output against the published operating point.

@@ -14,14 +14,15 @@ from pathlib import Path
 from typing import Optional
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_NAME = "StanThrust"
 ENTRY_POINT = PROJECT_ROOT / "app.py"
-SPEC_FILE = PROJECT_ROOT / f"{APP_NAME}_windows.spec"
+SPEC_FILE = PROJECT_ROOT / "packaging" / "windows" / f"{APP_NAME}.spec"
 DIST_DIR = PROJECT_ROOT / "dist" / "windows"
 BUILD_DIR = PROJECT_ROOT / "build" / "windows"
-ICON_FILE = PROJECT_ROOT / "app_icon.ico"
-LOGO_PNG = PROJECT_ROOT / "Logo.png"
+ASSET_DIR = PROJECT_ROOT / "assets"
+ICON_FILE = ASSET_DIR / "app_icon.ico"
+LOGO_PNG = ASSET_DIR / "Logo.png"
 
 
 def _print_header(message: str) -> None:

@@ -16,16 +16,20 @@ from pathlib import Path
 from typing import Optional
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from liquid_engine_studio import __version__ as APP_VERSION
+
 APP_NAME = "StanThrust"
-APP_VERSION = "0.1.0"
 INSTALLER_EXE_NAME = f"{APP_NAME}-Installer.exe"
 DIST_ROOT = PROJECT_ROOT / "dist"
 WINDOWS_DIST = DIST_ROOT / "windows"
 EXE_PATH = WINDOWS_DIST / f"{APP_NAME}.exe"
 INSTALLER_BUILD_DIR = PROJECT_ROOT / "build" / "installer"
 INSTALLER_OUTPUT_DIR = DIST_ROOT / "installer"
-ICON_FILE = PROJECT_ROOT / "app_icon.ico"
+ICON_FILE = PROJECT_ROOT / "assets" / "app_icon.ico"
 
 
 def _print_header(message: str) -> None:
@@ -78,7 +82,7 @@ def _clean_installer_outputs() -> None:
 
 def _build_standalone_exe() -> None:
     _print_header("Building standalone Windows executable")
-    _run([sys.executable, str(PROJECT_ROOT / "build_windows_app.py")])
+    _run([sys.executable, str(PROJECT_ROOT / "packaging" / "windows" / "build_app.py")])
     if not EXE_PATH.exists():
         raise SystemExit(f"Expected PyInstaller output was not found: {EXE_PATH}")
 
