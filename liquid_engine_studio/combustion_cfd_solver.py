@@ -369,7 +369,7 @@ def run_combustion_cfd_proxy(
     if not isinstance(provider, CanteraThermochemistryProvider):
         raise RuntimeError("Combustion solver requires the Cantera thermochemistry provider.")
     thermo = provider.estimate(design, assumptions, fuel, oxidizer)
-    if thermo.status not in {"ok", "approximate", "placeholder"}:
+    if thermo.status not in {"ok", "approximate"}:
         raise RuntimeError("Cantera thermochemistry failed: {0}".format(thermo.note or thermo.status))
 
     gamma = thermo.gamma

@@ -30,7 +30,7 @@ For each iteration:
 
 1. Build a concept design seeded with the current chamber-pressure guess.
 2. Run the transient feed solver with that pressure target.
-3. Run the combustion/nozzle solver from the same seeded design. If Cantera is unavailable, use a bounded numerical surrogate so the coupled loop still returns diagnostics.
+3. Run the Cantera-backed combustion/nozzle solver from the same seeded design. Missing or broken thermochemistry is treated as a solver error.
 4. Run material assignment and structural margin outputs.
 5. Compute feed-supported pressure, combustion-supported pressure, feed margin, thrust residual, and minimum structural margin.
 6. Relax the next chamber-pressure estimate toward the limiting pressure state.
@@ -55,7 +55,7 @@ The payload includes:
 - `results`: final chamber pressure, tank pressures, feed margin, thrust error, and structural margin
 - `iteration_trace`: per-iteration feed-supported pressure, combustion-supported pressure, relaxed pressure, residuals, and notes
 - `feed_solver_result`: final transient feed result
-- `combustion_solver_result`: final combustion/nozzle result or surrogate fallback
+- `combustion_solver_result`: final combustion/nozzle result
 - `structural_solver_result`: final section margin result
 - `station_field_updates`: merged provenance-tagged fields from feed, combustion, and structural solvers
 
@@ -66,5 +66,5 @@ The desktop Solve action now uses this coupled loop as the primary explicit solv
 ## Notes
 
 - This is still a reduced-order concept-stage numerical model, not a validated hardware design solver.
-- Cantera-backed combustion remains the preferred path when available.
-- The fallback surrogate exists to keep the app operational and visibly coupled on machines without Cantera.
+- Cantera-backed combustion is required for supported solver runs.
+- Dependency or mechanism failures are reported as errors so invalid thermochemistry cannot be mistaken for a solved engine state.

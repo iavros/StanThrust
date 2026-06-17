@@ -213,13 +213,7 @@ def test_combustion_solver_consistency():
     """Test that combustion solver output integrates consistently with concept design."""
     design = create_concept_design({})
     assumptions = get_default_solver_assumptions()
-    try:
-        result = run_combustion_cfd_proxy(design, assumptions)
-    except RuntimeError as exc:
-        if "Cantera thermochemistry provider" in str(exc):
-            print("[skip] test_combustion_solver_consistency skipped: Cantera unavailable")
-            return
-        raise
+    result = run_combustion_cfd_proxy(design, assumptions)
 
     assert isinstance(result, dict), "Combustion result must be a dict"
     assert "station_field_updates" in result, "Result must contain 'station_field_updates'"
@@ -249,13 +243,7 @@ def test_refined_flow_mode_metadata():
 
     design = create_concept_design({})
     assumptions = replace(get_default_solver_assumptions(), flow_model="refined")
-    try:
-        result = run_combustion_cfd_proxy(design, assumptions)
-    except RuntimeError as exc:
-        if "Cantera thermochemistry provider" in str(exc):
-            print("[skip] test_refined_flow_mode_metadata skipped: Cantera unavailable")
-            return
-        raise
+    result = run_combustion_cfd_proxy(design, assumptions)
 
     metadata = result.get("metadata", {})
     summary = result.get("summary", {})

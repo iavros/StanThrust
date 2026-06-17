@@ -169,61 +169,6 @@ def _extract_thrust_error(combustion_result: Optional[Dict[str, object]]) -> flo
     return abs(_safe_float(summary.get("thrust_error_fraction"), 1.0))
 
 
-def _combustion_surrogate(
-    design: object,
-    chamber_pressure_kpa: float,
-    feed_summary: Dict[str, object],
-    reason: str,
-) -> Dict[str, object]:
-    values = dict(getattr(design.derived, "engineering_values", {}))
-    target_thrust = _safe_float(values.get("target_thrust_newtons"), _safe_float(design.inputs.target_thrust_newtons, 1.0))
-    nominal_thrust = _safe_float(values.get("calculated_thrust_newtons"), target_thrust)
-    feed_scale = _safe_float(feed_summary.get("final_chamber_pressure_kpa"), chamber_pressure_kpa) / max(1.0, chamber_pressure_kpa)
-    predicted_thrust = nominal_thrust * _clamp(feed_scale, 0.35, 1.08)
-    thrust_error = abs(predicted_thrust - target_thrust) / max(1.0, target_thrust)
-    mass_flow = _safe_float(values.get("propellant_mass_flow_kg_s"), 0.0) * _clamp(feed_scale, 0.35, 1.08)
-    return {
-        "metadata": {
-            "solver_name": "Combustion Numerical Surrogate",
-            "solver_version": "0.1",
-            "solver_mode": "coupled-fallback",
-            "flow_model": "surrogate",
-        },
-        "status": "approximate",
-        "status_detail": reason,
-        "summary": {
-            "chamber_pressure_kpa": round(chamber_pressure_kpa, 3),
-            "predicted_thrust_newtons": round(predicted_thrust, 3),
-            "predicted_isp_seconds": 210.0,
-            "mass_flow_kg_s": round(mass_flow, 5),
-            "thrust_error_fraction": round(thrust_error, 6),
-            "flow_model": "surrogate",
-            "flow_model_label": "Coupled numerical surrogate",
-        },
-        "iteration_trace": [
-            {
-                "iteration": 1.0,
-                "chamber_pressure_kpa": round(chamber_pressure_kpa, 3),
-                "relative_error": round(thrust_error, 6),
-            }
-        ],
-        "physics": {
-            "results": {
-                "chamber_pressure_kpa": round(chamber_pressure_kpa, 3),
-                "predicted_thrust_newtons": round(predicted_thrust, 3),
-                "mass_flow_kg_s": round(mass_flow, 5),
-            },
-            "nozzle": {
-                "status": "approximate",
-                "overall_efficiency": 0.9,
-                "loss_fraction": 0.1,
-            },
-        },
-        "station_field_updates": {},
-        "warnings": [reason],
-    }
-
-
 def _run_combustion(
     state: Dict[str, object],
     design: object,
@@ -240,21 +185,13 @@ def _run_combustion(
             "max_iterations": max(3, min(200, max_iterations * 8)),
         }
     )
-    try:
-        return run_combustion_cfd_proxy(
-            design,
-            assumptions,
-            station_count=18,
-            max_iterations_override=max(3, min(200, max_iterations * 8)),
-            thermochemistry_mode="auto",
-        )
-    except Exception as exc:
-        return _combustion_surrogate(
-            design,
-            chamber_pressure_kpa,
-            feed_summary,
-            "Combustion solver fallback used during coupled solve: {0}".format(str(exc)),
-        )
+    return run_combustion_cfd_proxy(
+        design,
+        assumptions,
+        station_count=18,
+        max_iterations_override=max(3, min(200, max_iterations * 8)),
+        thermochemistry_mode="auto",
+    )
 
 
 def _run_structural(

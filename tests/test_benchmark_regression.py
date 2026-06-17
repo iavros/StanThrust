@@ -51,12 +51,9 @@ def test_internal_baseline_rows_are_within_declared_ranges():
             )
 
 
-def test_reconstructed_public_benchmark_outputs_are_stable_when_cantera_is_available():
+def test_reconstructed_public_benchmark_outputs_are_stable_with_cantera():
     """Assert public benchmark reconstructions remain in expected neighborhoods."""
-    try:
-        import cantera  # noqa: F401
-    except Exception:
-        return
+    import cantera  # noqa: F401
 
     rows = build_reconstructed_benchmark_rows(get_default_solver_assumptions())
     rows_by_engine = {row["engine"]: row for row in rows}
@@ -93,7 +90,7 @@ def run_all_tests():
     tests = [
         test_public_benchmark_reference_catalog_is_complete,
         test_internal_baseline_rows_are_within_declared_ranges,
-        test_reconstructed_public_benchmark_outputs_are_stable_when_cantera_is_available,
+        test_reconstructed_public_benchmark_outputs_are_stable_with_cantera,
     ]
 
     passed = 0

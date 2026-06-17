@@ -15,22 +15,16 @@ def test_flow_modes_emit_distinct_metadata_and_outputs():
     design = create_concept_design({})
     base_assumptions = get_default_solver_assumptions()
 
-    try:
-        fast_result = run_combustion_cfd_proxy(
-            design,
-            replace(base_assumptions, flow_model="fast"),
-            station_count=18,
-        )
-        refined_result = run_combustion_cfd_proxy(
-            design,
-            replace(base_assumptions, flow_model="refined"),
-            station_count=18,
-        )
-    except RuntimeError as exc:
-        if "Cantera thermochemistry provider" in str(exc):
-            print("[skip] test_flow_modes_emit_distinct_metadata_and_outputs skipped: Cantera unavailable")
-            return
-        raise
+    fast_result = run_combustion_cfd_proxy(
+        design,
+        replace(base_assumptions, flow_model="fast"),
+        station_count=18,
+    )
+    refined_result = run_combustion_cfd_proxy(
+        design,
+        replace(base_assumptions, flow_model="refined"),
+        station_count=18,
+    )
 
     assert fast_result["metadata"]["flow_model"] == "fast"
     assert refined_result["metadata"]["flow_model"] == "refined"
@@ -73,17 +67,11 @@ def test_architecture_cooling_and_flow_modes_share_solved_geometry():
             assert float(values["minimum_structural_margin_ratio"]) > 0.0
 
             for flow_model in ("fast", "refined"):
-                try:
-                    result = run_combustion_cfd_proxy(
-                        design,
-                        replace(base_assumptions, flow_model=flow_model),
-                        station_count=12,
-                    )
-                except RuntimeError as exc:
-                    if "Cantera thermochemistry provider" in str(exc):
-                        print("[skip] test_architecture_cooling_and_flow_modes_share_solved_geometry skipped: Cantera unavailable")
-                        return
-                    raise
+                result = run_combustion_cfd_proxy(
+                    design,
+                    replace(base_assumptions, flow_model=flow_model),
+                    station_count=12,
+                )
                 assert result["metadata"]["flow_model"] == flow_model
                 assert result["status"] in {"ok", "warning", "converged"}
                 assert float(result["summary"]["predicted_thrust_newtons"]) > 0.0

@@ -1478,7 +1478,7 @@ R=\SI{\SampleGasConstant}{J\,kg^{-1}\,K^{-1}},\qquad
 T_c=\SI{\SampleChamberTemperature}{K}.
 \]
 
-These are not reconstructed inside the geometry model; they are taken from the thermochemistry provider and inserted directly into the quasi-one-dimensional performance model. If Cantera is unavailable, the application uses a bounded approximate fallback so the UI remains operational.
+These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the quasi-one-dimensional performance model. Cantera is a required dependency for supported solver runs, and missing thermochemistry is reported as a solver error.
 
 \section{Quasi-One-Dimensional Chamber and Nozzle Solver}
 \subsection{Fast and Refined Flow Modes}

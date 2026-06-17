@@ -31,7 +31,7 @@ python app.py
 
 ## Thermochemistry
 
-StanThrust uses Cantera as a required supported-install dependency for thermochemistry. The code still contains conservative fallback estimates as a development guard path, but release builds and CI install Cantera.
+StanThrust requires Cantera for thermochemistry in local, CI, and packaged builds. If Cantera cannot be imported or the bundled mechanism cannot be loaded, the combustion and coupled-cycle solvers fail with a diagnostic instead of returning a conservative substitute.
 
 - Preferred bundled mechanism: `liquid_engine_studio/data/rocket_mech_equilibrium.yaml`
 - Additional bundled mechanisms: `rocket_mech.yaml`, `rocket_mech_minimal.yaml`
@@ -140,7 +140,7 @@ python docs\overleaf_solver_report\generate_assets.py
 
 ## Diagnostics
 
-One optional diagnostic helper is included for thermochemistry troubleshooting:
+A diagnostic helper is included for thermochemistry troubleshooting:
 
 - `scripts/thermochemistry_diagnostics.py`
 
@@ -198,7 +198,7 @@ The packaged app bundles the runtime assets it needs, including:
 - `assets/`: application icons and brand assets used by the UI and installers
 - `packaging/`: Windows and macOS build scripts plus PyInstaller spec files
 - `docs/overleaf_solver_report/`: solver report source and generated plot assets
-- `scripts/`: optional project utilities and diagnostics
+- `scripts/`: project utilities and diagnostics
 - `tests/`: regression and feature validation coverage
 
 ## Regenerable Files

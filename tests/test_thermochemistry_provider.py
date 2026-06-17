@@ -1,11 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 
 def test_generated_equilibrium_mechanism_loads_and_estimates():
-    try:
-        import cantera as ct
-    except Exception:
-        return
+    import cantera as ct
 
     from liquid_engine_studio.concept_model import create_concept_design
     from liquid_engine_studio.propellants import lookup_propellant
@@ -35,10 +34,7 @@ def test_generated_equilibrium_mechanism_loads_and_estimates():
 
 
 def test_public_benchmark_propellant_pairs_are_supported():
-    try:
-        import cantera  # noqa: F401
-    except Exception:
-        return
+    import cantera  # noqa: F401
 
     from liquid_engine_studio.benchmark_cases import get_public_benchmark_cases
     from liquid_engine_studio.concept_model import create_concept_design
@@ -59,3 +55,14 @@ def test_public_benchmark_propellant_pairs_are_supported():
         )
         assert thermo.provider_name == "cantera"
         assert thermo.status == "ok", f"{case.engine}: thermochemistry status {thermo.status}"
+
+
+def test_thermochemistry_provider_requires_cantera_mode():
+    from liquid_engine_studio.thermochemistry_provider import (
+        CanteraThermochemistryProvider,
+        resolve_thermochemistry_provider,
+    )
+
+    assert isinstance(resolve_thermochemistry_provider("auto"), CanteraThermochemistryProvider)
+    with pytest.raises(RuntimeError, match="Cantera is required"):
+        resolve_thermochemistry_provider("fallback")

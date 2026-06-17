@@ -32,7 +32,13 @@ def _import_cantera():
                 site.addsitedir(user_site)
             except Exception:
                 pass
-        return importlib.import_module("cantera")
+        try:
+            return importlib.import_module("cantera")
+        except Exception as second_error:
+            raise RuntimeError(
+                "Cantera is required for StanThrust thermochemistry. "
+                "Install project dependencies with 'python -m pip install -r requirements.txt'."
+            ) from second_error
 
 
 @dataclass(frozen=True)
@@ -52,30 +58,6 @@ class ThermochemistryProvider:
 
     def estimate(self, design, assumptions, fuel, oxidizer) -> ThermochemistryEstimate:
         raise NotImplementedError
-
-
-class FallbackThermochemistryProvider(ThermochemistryProvider):
-    """Fallback provider when Cantera is not installed.
-
-    Uses conservative design-margin estimates instead of equilibrium calculations.
-    """
-    name = "fallback"
-
-    def estimate(self, design, assumptions, fuel, oxidizer) -> ThermochemistryEstimate:
-        """Return conservative estimates without requiring Cantera.
-
-        These values are suitable for early design iteration and preliminary studies.
-        """
-        return ThermochemistryEstimate(
-            gamma=1.25,
-            gas_constant_j_kgk=420.0,
-            chamber_temperature_k=3200.0,
-            cstar_efficiency_factor=0.97,
-            provider_name=self.name,
-            source="fallback-conservative-margin",
-            status="placeholder",
-            note="Using conservative fallback estimates (Cantera unavailable or the bundled mechanism could not be loaded). Results are suitable for preliminary iteration only.",
-        )
 
 
 class CanteraThermochemistryProvider(ThermochemistryProvider):
@@ -105,7 +87,7 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
     }
 
     def _load_mechanism(self, ct) -> Tuple[object, Path, str]:
-        """Load the highest-fidelity available mechanism with graceful fallback."""
+        """Load the highest-fidelity bundled mechanism available."""
         phase_names = ("rocket_detailed", "rocket_minimal", "rocket")
         for mechanism_path in MECHANISM_SEARCH_ORDER:
             if not mechanism_path.exists():
@@ -133,11 +115,7 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
         return _clamp(stoich_of / actual_of, 0.45, 2.4)
 
     def estimate(self, design, assumptions, fuel, oxidizer) -> ThermochemistryEstimate:
-        try:
-            ct = _import_cantera()
-        except ImportError:
-            # Fall back to conservative estimates if cantera is not available
-            return FallbackThermochemistryProvider().estimate(design, assumptions, fuel, oxidizer)
+        ct = _import_cantera()
 
         fuel_key = fuel.name.strip().lower()
         oxidizer_key = oxidizer.name.strip().lower()
@@ -159,8 +137,8 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
 
         try:
             gas, mechanism_path, phase_name = self._load_mechanism(ct)
-        except Exception:
-            return FallbackThermochemistryProvider().estimate(design, assumptions, fuel, oxidizer)
+        except Exception as exc:
+            raise RuntimeError("Cantera mechanism load failed: {0}".format(str(exc))) from exc
 
         # If the requested species aren't in the bundled mechanism, return a
         # approximate estimate instead of failing the app.
@@ -205,7 +183,7 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
             )
         except Exception as exc:
             # Provide diagnostic information when equilibrium fails so the UI can
-            # indicate why a placeholder/approximate estimate was used.
+            # distinguish an approximate estimate from a full equilibrium result.
             reason = f"equilibrium failure: {type(exc).__name__}: {str(exc)[:200]}"
             return self._approximate_estimate(design, assumptions, fuel_key, oxidizer_key, phi, reason=reason)
 
@@ -255,14 +233,8 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
 def resolve_thermochemistry_provider(mode: str) -> ThermochemistryProvider:
     m = (mode or "auto").strip().lower()
     if m == "fallback":
-        return FallbackThermochemistryProvider()
+        raise RuntimeError("Fallback thermochemistry mode has been removed; Cantera is required.")
 
-    # Try to import Cantera early so callers can see a provider that will
-    # actually attempt equilibrium calculations. If Cantera isn't importable
-    # in the current environment, fall back to the conservative provider.
-    try:
-        _import_cantera()
-        return CanteraThermochemistryProvider()
-    except Exception:
-        return FallbackThermochemistryProvider()
+    _import_cantera()
+    return CanteraThermochemistryProvider()
 

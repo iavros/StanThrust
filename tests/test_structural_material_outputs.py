@@ -1,8 +1,6 @@
 """Tests for section-based structural and thermal material outputs."""
 import sys
 
-import pytest
-
 sys.path.insert(0, r"E:/LIQUID_ENGINE")
 
 from liquid_engine_studio.concept_model import create_concept_design
@@ -13,19 +11,10 @@ from liquid_engine_studio.structural_material_solver import build_structural_mat
 from liquid_engine_studio.exporter import build_cad_export_payload
 
 
-def _run_combustion_or_skip(design, assumptions):
-	try:
-		return run_combustion_cfd_proxy(design, assumptions)
-	except RuntimeError as exc:
-		if "Cantera thermochemistry provider" in str(exc):
-			pytest.skip("Cantera unavailable")
-		raise
-
-
 def test_structural_materials_output_contains_sections():
 	design = create_concept_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = _run_combustion_or_skip(design, assumptions)
+	comb = run_combustion_cfd_proxy(design, assumptions)
 	# prepare a material assignment using inputs as 'materials' mapping
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
@@ -59,7 +48,7 @@ def test_structural_materials_output_contains_sections():
 def test_exporter_includes_thermal_margin_in_analysis_fields():
 	design = create_concept_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = _run_combustion_or_skip(design, assumptions)
+	comb = run_combustion_cfd_proxy(design, assumptions)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)
@@ -79,7 +68,7 @@ def test_exporter_includes_thermal_margin_in_analysis_fields():
 def test_section_margins_are_numeric_and_positive_for_default_design():
 	design = create_concept_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = _run_combustion_or_skip(design, assumptions)
+	comb = run_combustion_cfd_proxy(design, assumptions)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)
