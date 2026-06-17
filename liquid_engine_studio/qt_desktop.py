@@ -1296,6 +1296,7 @@ class Model3DView(QGraphicsView):
             jet_pen = QPen(QColor(QT_PALETTE["oxidizer"]), 1.0, Qt.SolidLine, Qt.RoundCap)
             jet_pen.setCosmetic(True)
             first_port_point = None
+            orifice_positions: List[Tuple[float, float, float]] = []
             half_angle = math.radians(max(6.0, min(80.0, impinging_angle)) * 0.5)
             convergence_lift = min(face_radius_px * 0.32, max(8.0, spacing_px * 0.5 / max(0.18, math.tan(half_angle))))
             for pair_index in range(element_count):
@@ -1308,18 +1309,14 @@ class Model3DView(QGraphicsView):
                 for side in (-1.0, 1.0):
                     port_x = center_x + tangent_x * spacing_px * 0.5 * side
                     port_y = center_y + tangent_y * spacing_px * 0.5 * side
-                    port = self._draw_projected_disc(
-                        scene,
-                        origin,
-                        port_x,
-                        port_y,
-                        face_thickness_px * 1.04,
-                        port_radius_px,
-                        QT_PALETTE["oxidizer"],
-                    )
+                    port_z = face_thickness_px * 1.04
+                    port = self._project(port_x, port_y, port_z, origin, 1.0)
+                    orifice_positions.append((port_x, port_y, port_z))
                     scene.addLine(port[0], port[1], convergence[0], convergence[1], jet_pen)
                     if first_port_point is None:
                         first_port_point = port
+            for port_x, port_y, port_z in orifice_positions:
+                self._draw_projected_orifice(scene, origin, port_x, port_y, port_z, port_radius_px, QT_PALETTE["oxidizer"])
             port_point = first_port_point or self._project(ring_radius_px, 0.0, face_thickness_px, origin, 1.0)
             self._draw_callout(scene, (port_point[0], port_point[1]), (552.0, 172.0), "Orifice dia {0} mm".format(_format_number(orifice_diameter, 2)), QT_PALETTE["oxidizer"])
             self._metric(scene, 790, 290, "Orifice", "{0} mm".format(_format_number(orifice_diameter, 2)))
@@ -1778,7 +1775,7 @@ class Model3DView(QGraphicsView):
             path.lineTo(point[0], point[1])
         scene.addPath(path, QPen(color, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
 
-    def _draw_projected_disc(
+    def _draw_projected_orifice(
         self,
         scene: QGraphicsScene,
         origin: Tuple[float, float],
@@ -1789,14 +1786,33 @@ class Model3DView(QGraphicsView):
         color: str,
     ) -> Tuple[float, float, float]:
         projected = self._project(x, y, z, origin, 1.0)
-        apparent = max(2.2, radius)
+        apparent = max(3.2, radius * 1.18)
+        rim = QColor(color)
+        rim.setAlpha(235)
+        shadow = QColor("#030507")
+        scene.addEllipse(
+            projected[0] - apparent - 1.1,
+            projected[1] - apparent - 1.1,
+            (apparent + 1.1) * 2.0,
+            (apparent + 1.1) * 2.0,
+            QPen(QColor("#030507"), 0.8),
+            QBrush(QColor("#030507")),
+        )
         scene.addEllipse(
             projected[0] - apparent,
             projected[1] - apparent,
             apparent * 2.0,
             apparent * 2.0,
-            QPen(QColor(color)),
-            QBrush(QColor(color)),
+            QPen(rim, 1.4),
+            QBrush(QColor("#071018")),
+        )
+        scene.addEllipse(
+            projected[0] - apparent * 0.35,
+            projected[1] - apparent * 0.35,
+            apparent * 0.70,
+            apparent * 0.70,
+            QPen(QColor(color), 0.7),
+            QBrush(rim),
         )
         return projected
 
