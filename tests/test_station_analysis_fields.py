@@ -273,6 +273,22 @@ def test_nozzle_contour_metadata_and_shape():
     assert abs(throat_radius_mm * 2.0 - float(values.get("nozzle_throat_diameter_mm", 0.0))) < 0.2
 
 
+def test_impinging_injector_reports_full_orifice_pattern():
+    """Assert impinging injector geometry exposes every calculated orifice."""
+    from liquid_engine_studio.concept_model import create_concept_design
+
+    design = create_concept_design({"injector_type": "impinging"})
+    values = design.derived.engineering_values
+
+    element_count = int(values["impinging_element_count"])
+    orifice_count = int(values["impinging_orifice_count"])
+
+    assert element_count > 2
+    assert orifice_count == element_count * 2
+    assert float(values["impinging_orifice_diameter_mm"]) > 0.0
+    assert float(values["impinging_pair_spacing_mm"]) > 0.0
+
+
 def test_export_includes_nozzle_geometry_metadata():
     """Assert export payload carries the nozzle contour metadata for downstream CAD/report use."""
     from liquid_engine_studio.concept_model import create_concept_design
@@ -305,6 +321,7 @@ if __name__ == "__main__":
         test_csv_export_numeric_columns,
         test_solver_provenance_tagging,
         test_nozzle_contour_metadata_and_shape,
+        test_impinging_injector_reports_full_orifice_pattern,
         test_export_includes_nozzle_geometry_metadata,
     ]
     

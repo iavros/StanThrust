@@ -1179,6 +1179,7 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
             ("Impinging injector angle", "impinging_angle_deg", "deg", "--"),
             ("Impinging injector pair spacing", "impinging_pair_spacing_mm", "mm", "--"),
             ("Impinging injector element count", "impinging_element_count", "", "--"),
+            ("Impinging injector orifice count", "impinging_orifice_count", "", "--"),
         ]
     _add_measurement_rows(rows, values, injector_rows)
     return rows
@@ -1652,6 +1653,7 @@ class ConceptSolver:
             impinging_angle_deg = 0.0
             impinging_pair_spacing_mm = 0.0
             impinging_element_count = 0.0
+            impinging_orifice_count = 0.0
         else:
             pintle_tip_diameter_mm = 0.0
             pintle_stem_diameter_mm = 0.0
@@ -1664,7 +1666,15 @@ class ConceptSolver:
             )
             impinging_angle_deg = clamp(28.0 + mixture_bias * 16.0, 22.0, 56.0)
             impinging_pair_spacing_mm = clamp(inputs.chamber_diameter_mm * 0.085, 3.0, 12.0)
-            impinging_element_count = 2.0
+            usable_face_radius_mm = injector_face_diameter_mm * 0.36
+            element_pitch_mm = max(
+                impinging_pair_spacing_mm * 2.15,
+                impinging_orifice_diameter_mm * 4.0,
+                4.0,
+            )
+            ring_capacity = max(2, int(math.floor(2.0 * math.pi * usable_face_radius_mm / element_pitch_mm)))
+            impinging_element_count = float(max(2, ring_capacity))
+            impinging_orifice_count = impinging_element_count * 2.0
 
         chamber_pressure_kpa = clamp(
             680.0
@@ -2201,6 +2211,7 @@ class ConceptSolver:
                 "impinging_angle_deg": round(impinging_angle_deg, 2),
                 "impinging_pair_spacing_mm": rounded(impinging_pair_spacing_mm),
                 "impinging_element_count": impinging_element_count,
+                "impinging_orifice_count": impinging_orifice_count,
                 "solver_iterations": float(solver_iterations),
                 "total_stack_length_mm": rounded(total_stack_length_mm),
                 "fuel_tank_allowable_stress_mpa": section_margin_values["fuel_tank"]["allowable_stress_mpa"],

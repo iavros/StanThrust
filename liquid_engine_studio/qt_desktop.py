@@ -1100,20 +1100,6 @@ class Model3DView(QGraphicsView):
             rings.append(ring)
         self._draw_ring_mesh(scene, rings, origin, scale, "#AA2735", "#E16A76", cap_ends=True)
 
-        injector_face_diameter = _safe_float(values.get("injector_face_diameter_mm"), chamber_outer_diameter) or chamber_outer_diameter
-        injector_face_thickness = _safe_float(values.get("injector_face_thickness_mm"), chamber_length * 0.06) or chamber_length * 0.06
-        flange_radius = max(chamber_outer_radius, injector_face_diameter * 0.5)
-        self._draw_disc_mesh(
-            scene,
-            radius_mm=flange_radius,
-            depth_mm=max(3.0, injector_face_thickness),
-            origin=origin,
-            scale=scale,
-            color="#303841",
-            wire_color=QT_PALETTE["muted"],
-            center=(-max_x * 0.5 - injector_face_thickness * 0.55, 0.0, 0.0),
-        )
-
         throat_diameter = _format_number(values.get("nozzle_throat_diameter_mm", "--"), 2)
         exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
         length = _format_number(chamber_length + nozzle_length, 2)
@@ -1155,12 +1141,18 @@ class Model3DView(QGraphicsView):
         self._draw_axial_cylinder_mesh(scene, fuel_length, tank_diameter * 0.5, fuel_origin, scale, QT_PALETTE["fuel"], "#F3C26E")
         self._add_text(scene, 74, 154, "Oxidizer Tank", QT_PALETTE["text"], 11, 180)
         self._add_text(scene, 74, 364, "Fuel Tank", QT_PALETTE["text"], 11, 180)
-        self._draw_small_nozzle(scene, (640.0, 228.0), QT_PALETTE["oxidizer"])
-        self._draw_small_nozzle(scene, (640.0, 438.0), QT_PALETTE["fuel"])
+        ox_outlet = (640.0, 228.0)
+        fuel_outlet = (640.0, 438.0)
         ox_front = self._project(ox_length * 0.5, tank_diameter * 0.18, 0.0, ox_origin, scale)
         ox_body = self._project(0.0, -tank_diameter * 0.52, 0.0, ox_origin, scale)
+        ox_tube_start = self._project(ox_length * 0.5, 0.0, 0.0, ox_origin, scale)
         fuel_front = self._project(fuel_length * 0.5, tank_diameter * 0.18, 0.0, fuel_origin, scale)
         fuel_body = self._project(0.0, -tank_diameter * 0.52, 0.0, fuel_origin, scale)
+        fuel_tube_start = self._project(fuel_length * 0.5, 0.0, 0.0, fuel_origin, scale)
+        self._draw_feed_connector(scene, (ox_tube_start[0], ox_tube_start[1]), (ox_outlet[0] - 28.0, ox_outlet[1]), QT_PALETTE["oxidizer"])
+        self._draw_feed_connector(scene, (fuel_tube_start[0], fuel_tube_start[1]), (fuel_outlet[0] - 28.0, fuel_outlet[1]), QT_PALETTE["fuel"])
+        self._draw_small_nozzle(scene, ox_outlet, QT_PALETTE["oxidizer"])
+        self._draw_small_nozzle(scene, fuel_outlet, QT_PALETTE["fuel"])
         self._draw_callout(scene, (ox_front[0], ox_front[1]), (552.0, 128.0), "Ox length {0} mm".format(_format_number(ox_length, 2)), QT_PALETTE["oxidizer"])
         self._draw_callout(scene, (ox_body[0], ox_body[1]), (154.0, 286.0), "Diameter {0} mm".format(_format_number(tank_diameter, 2)), QT_PALETTE["text"])
         self._draw_callout(scene, (fuel_front[0], fuel_front[1]), (552.0, 344.0), "Fuel length {0} mm".format(_format_number(fuel_length, 2)), QT_PALETTE["fuel"])
@@ -1294,6 +1286,7 @@ class Model3DView(QGraphicsView):
             impinging_angle = _safe_float(values.get("impinging_angle_deg"), 30.0) or 30.0
             pair_spacing = _safe_float(values.get("impinging_pair_spacing_mm"), face_diameter * 0.085) or face_diameter * 0.085
             element_count = max(2, int(round(_safe_float(values.get("impinging_element_count"), 2.0) or 2.0)))
+            orifice_count = max(element_count * 2, int(round(_safe_float(values.get("impinging_orifice_count"), element_count * 2) or element_count * 2)))
             port_radius_px = max(2.6, orifice_diameter * 0.5 * display_scale)
             spacing_px = pair_spacing * display_scale
             ring_radius_px = max(
@@ -1337,6 +1330,7 @@ class Model3DView(QGraphicsView):
                 "Angle / Spacing",
                 "{0} deg / {1} mm".format(_format_number(impinging_angle, 1), _format_number(pair_spacing, 2)),
             )
+            self._metric(scene, 790, 476, "Holes", str(orifice_count))
         face_point = self._project(face_radius_px, 0.0, 0.0, origin, 1.0)
         thickness_point = self._project(0.0, face_radius_px * 0.70, face_thickness_px * 0.56, origin, 1.0)
         self._draw_callout(scene, (face_point[0], face_point[1]), (552.0, 392.0), "Face dia {0} mm".format(_format_number(face_diameter, 2)), QT_PALETTE["text"])
@@ -1828,6 +1822,25 @@ class Model3DView(QGraphicsView):
         scene.addLine(origin[0] - 28, origin[1], origin[0] + 34, origin[1], pen)
         scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] - 12, pen)
         scene.addLine(origin[0] + 34, origin[1], origin[0] + 48, origin[1] + 12, pen)
+
+    def _draw_feed_connector(
+        self,
+        scene: QGraphicsScene,
+        start: Tuple[float, float],
+        end: Tuple[float, float],
+        color: str,
+    ) -> None:
+        pen = QPen(QColor(color), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        path = QPainterPath()
+        path.moveTo(start[0], start[1])
+        bend_x = start[0] + (end[0] - start[0]) * 0.54
+        path.lineTo(bend_x, start[1])
+        path.lineTo(bend_x, end[1])
+        path.lineTo(end[0], end[1])
+        scene.addPath(path, pen)
+        highlight = QColor("#FFFFFF")
+        highlight.setAlpha(62)
+        scene.addPath(path, QPen(highlight, 1.1, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
 
     def _draw_callout(
         self,
