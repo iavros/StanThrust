@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -76,22 +77,30 @@ def _stage_dmg_contents() -> Path:
 
 def _build_dmg(staging_dir: Path) -> None:
     _print_header("Building macOS DMG")
-    _run(
-        [
-            "hdiutil",
-            "create",
-            "-volname",
-            APP_NAME,
-            "-srcfolder",
-            str(staging_dir),
-            "-ov",
-            "-format",
-            "UDZO",
-            str(DMG_PATH),
-        ]
-    )
-    if not DMG_PATH.exists():
-        raise SystemExit(f"Expected DMG was not found: {DMG_PATH}")
+    command = [
+        "hdiutil",
+        "create",
+        "-volname",
+        APP_NAME,
+        "-srcfolder",
+        str(staging_dir),
+        "-ov",
+        "-format",
+        "UDZO",
+        str(DMG_PATH),
+    ]
+    for attempt in range(1, 5):
+        print(" ".join(f'"{part}"' if " " in part else part for part in command))
+        completed = subprocess.run(command, cwd=str(PROJECT_ROOT))
+        if completed.returncode == 0 and DMG_PATH.exists():
+            return
+        if DMG_PATH.exists():
+            DMG_PATH.unlink()
+        if attempt < 4:
+            delay_seconds = 5 * attempt
+            print(f"hdiutil create failed; retrying in {delay_seconds} seconds.")
+            time.sleep(delay_seconds)
+    raise SystemExit(f"Expected DMG was not created: {DMG_PATH}")
 
 
 def main() -> int:
