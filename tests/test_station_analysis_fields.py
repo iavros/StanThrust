@@ -3,6 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import csv
 
+import pytest
+
 
 def test_station_numeric_promotion():
     """Assert all station rows include machine-friendly numeric fields."""
@@ -289,6 +291,28 @@ def test_nozzle_exit_diameter_is_auto_sized_by_default():
     assert float(values["nozzle_exit_pressure_target_kpa"]) > 0.0
     assert float(values["nozzle_exit_separation_ratio"]) > 0.0
     assert float(values["nozzle_inner_diameter_mm"]) != 95.0
+
+
+def test_chamber_length_uses_characteristic_length_target():
+    """Assert chamber barrel length is tied to L-star and solved throat area."""
+    from stanshock.concept_model import create_concept_design
+
+    compact_chamber = create_concept_design({"chamber_diameter_mm": 35.0})
+    compact_values = compact_chamber.derived.engineering_values
+    default_chamber = create_concept_design({})
+    default_values = default_chamber.derived.engineering_values
+
+    assert compact_values["chamber_length_sizing_method"] == "characteristic_length"
+    assert float(compact_values["chamber_characteristic_length_target_mm"]) > 600.0
+    assert float(compact_values["chamber_characteristic_length_actual_mm"]) == pytest.approx(
+        float(compact_values["chamber_characteristic_length_target_mm"]),
+        rel=0.02,
+    )
+    assert float(compact_values["chamber_contraction_ratio"]) > 1.0
+    assert compact_chamber.derived.chamber_length_mm > default_chamber.derived.chamber_length_mm
+    assert float(default_values["chamber_characteristic_length_actual_mm"]) >= float(
+        default_values["chamber_characteristic_length_target_mm"]
+    )
 
 
 def test_manual_nozzle_exit_override_remains_available():

@@ -769,6 +769,12 @@ class GeometrySizing:
     fuel_tank_length_mm: float
     oxidizer_tank_length_mm: float
     chamber_length_mm: float
+    chamber_length_sizing_method: str
+    chamber_characteristic_length_target_mm: float
+    chamber_characteristic_length_actual_mm: float
+    chamber_packaging_reference_length_mm: float
+    chamber_contraction_ratio: float
+    chamber_effective_contraction_ratio: float
     nozzle_throat_diameter_mm: float
     nozzle_throat_sizing_method: str
     nozzle_throat_pressure_assumption_kpa: float
@@ -865,6 +871,76 @@ def _estimate_auto_nozzle_exit(
     }
 
 
+def _estimate_chamber_characteristic_length(
+    inputs: DesignInputs,
+    fuel: PropellantOption,
+    oxidizer: PropellantOption,
+    mixture_bias: float,
+    thrust_scale: float,
+    throat_diameter_mm: float,
+    packaging_reference_length_mm: float,
+) -> Dict[str, float]:
+    injector_factor = {
+        "impinging": 0.98,
+        "pintle": 0.94,
+        "showerhead": 1.08,
+        "coaxial": 1.02,
+    }.get(inputs.injector_type, 1.0)
+    packaging_factor = {
+        "compact": 0.94,
+        "balanced": 1.0,
+        "serviceable": 1.08,
+    }.get(inputs.packaging_bias, 1.0)
+    cooling_factor = 0.97 if inputs.regen_cooling else 1.0
+    film_factor = 1.02 if inputs.film_cooling else 1.0
+    target_lstar_mm = clamp(
+        (
+            980.0
+            + oxidizer.thermal_severity * 260.0
+            - fuel.cooling_affinity * 115.0
+            + abs(mixture_bias - 0.50) * 180.0
+            + (thrust_scale - 1.0) * 45.0
+        )
+        * injector_factor
+        * packaging_factor
+        * cooling_factor
+        * film_factor,
+        650.0,
+        1850.0,
+    )
+    throat_area_m2 = math.pi * pow(max(0.1, throat_diameter_mm) / 2000.0, 2)
+    chamber_area_m2 = math.pi * pow(max(0.1, inputs.chamber_diameter_mm) / 2000.0, 2)
+    actual_contraction_ratio = chamber_area_m2 / max(1e-12, throat_area_m2)
+    target_contraction_ratio = clamp(
+        7.2
+        + (thrust_scale - 1.0) * 0.75
+        + (0.55 if inputs.regen_cooling else 0.0)
+        + (0.35 if inputs.film_cooling else 0.0)
+        + (0.35 if inputs.use_pumps else -0.25),
+        5.2,
+        11.5,
+    )
+    effective_contraction_ratio = clamp(
+        min(actual_contraction_ratio, target_contraction_ratio),
+        3.0,
+        max(3.0, actual_contraction_ratio),
+    )
+    raw_chamber_length_mm = target_lstar_mm / max(1e-6, actual_contraction_ratio)
+    minimum_length_mm = max(inputs.chamber_diameter_mm * 0.55, throat_diameter_mm * 4.5)
+    maximum_length_mm = max(minimum_length_mm, packaging_reference_length_mm * 3.0)
+    chamber_length_mm = clamp(raw_chamber_length_mm, minimum_length_mm, maximum_length_mm)
+    achieved_lstar_mm = chamber_length_mm * actual_contraction_ratio
+
+    return {
+        "length_mm": chamber_length_mm,
+        "target_lstar_mm": target_lstar_mm,
+        "actual_lstar_mm": achieved_lstar_mm,
+        "packaging_reference_length_mm": packaging_reference_length_mm,
+        "contraction_ratio": actual_contraction_ratio,
+        "effective_contraction_ratio": effective_contraction_ratio,
+    }
+
+
 def _calculate_geometry_sizing(
     inputs: DesignInputs,
     fuel: PropellantOption,
@@ -901,7 +977,7 @@ def _calculate_geometry_sizing(
         * (0.88 + mixture_bias * 0.36)
         * blowdown_factor
     )
-    chamber_length_mm = (
+    chamber_packaging_reference_length_mm = (
         inputs.chamber_diameter_mm
         * packaging["chamber_length"]
         * thrust_scale
@@ -952,6 +1028,20 @@ def _calculate_geometry_sizing(
         ),
     )
     nozzle_throat_sizing_method = "Choked thrust coefficient"
+    chamber_lstar = _estimate_chamber_characteristic_length(
+        inputs,
+        fuel,
+        oxidizer,
+        mixture_bias,
+        thrust_scale,
+        nozzle_throat_diameter_mm,
+        chamber_packaging_reference_length_mm,
+    )
+    chamber_length_mm = chamber_lstar["length_mm"]
+    chamber_characteristic_length_target_mm = chamber_lstar["target_lstar_mm"]
+    chamber_characteristic_length_actual_mm = chamber_lstar["actual_lstar_mm"]
+    chamber_contraction_ratio = chamber_lstar["contraction_ratio"]
+    chamber_effective_contraction_ratio = chamber_lstar["effective_contraction_ratio"]
     if inputs.nozzle_exit_mode == "auto":
         auto_exit = _estimate_auto_nozzle_exit(inputs, nozzle_throat_diameter_mm, thrust_scale)
         nozzle_exit_diameter_mm = float(auto_exit["diameter_mm"])
@@ -1111,6 +1201,12 @@ def _calculate_geometry_sizing(
         fuel_tank_length_mm=fuel_tank_length_mm,
         oxidizer_tank_length_mm=oxidizer_tank_length_mm,
         chamber_length_mm=chamber_length_mm,
+        chamber_length_sizing_method="characteristic_length",
+        chamber_characteristic_length_target_mm=chamber_characteristic_length_target_mm,
+        chamber_characteristic_length_actual_mm=chamber_characteristic_length_actual_mm,
+        chamber_packaging_reference_length_mm=chamber_packaging_reference_length_mm,
+        chamber_contraction_ratio=chamber_contraction_ratio,
+        chamber_effective_contraction_ratio=chamber_effective_contraction_ratio,
         nozzle_throat_diameter_mm=nozzle_throat_diameter_mm,
         nozzle_throat_sizing_method=nozzle_throat_sizing_method,
         nozzle_throat_pressure_assumption_kpa=nozzle_throat_pressure_assumption_kpa,
@@ -1214,6 +1310,10 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
 
     rows = [
         MeasurementRow("Chamber body length", f"{rounded(derived.chamber_length_mm)} mm", rounded(derived.chamber_length_mm), "mm"),
+        _measurement_row_from_value("Chamber length method", values, "chamber_length_sizing_method", "", "characteristic_length"),
+        _measurement_row_from_value("Target characteristic length", values, "chamber_characteristic_length_target_mm", "mm", "--"),
+        _measurement_row_from_value("Achieved characteristic length", values, "chamber_characteristic_length_actual_mm", "mm", "--"),
+        _measurement_row_from_value("Chamber contraction ratio", values, "chamber_contraction_ratio", "x", "--"),
         MeasurementRow("Chamber surface area", f"{rounded(derived.chamber_surface_area_mm2)} mm^2", rounded(derived.chamber_surface_area_mm2), "mm^2"),
         MeasurementRow("Chamber volume", f"{chamber_volume_l} L", chamber_volume_l, "L"),
     ]
@@ -1669,6 +1769,12 @@ class ConceptSolver:
         fuel_tank_length_mm = geometry.fuel_tank_length_mm
         oxidizer_tank_length_mm = geometry.oxidizer_tank_length_mm
         chamber_length_mm = geometry.chamber_length_mm
+        chamber_length_sizing_method = geometry.chamber_length_sizing_method
+        chamber_characteristic_length_target_mm = geometry.chamber_characteristic_length_target_mm
+        chamber_characteristic_length_actual_mm = geometry.chamber_characteristic_length_actual_mm
+        chamber_packaging_reference_length_mm = geometry.chamber_packaging_reference_length_mm
+        chamber_contraction_ratio = geometry.chamber_contraction_ratio
+        chamber_effective_contraction_ratio = geometry.chamber_effective_contraction_ratio
         nozzle_throat_diameter_mm = geometry.nozzle_throat_diameter_mm
         nozzle_throat_sizing_method = geometry.nozzle_throat_sizing_method
         nozzle_throat_pressure_assumption_kpa = geometry.nozzle_throat_pressure_assumption_kpa
@@ -2477,6 +2583,13 @@ class ConceptSolver:
                 "chamber_inner_diameter_mm": rounded(inputs.chamber_diameter_mm),
                 "chamber_outer_diameter_mm": rounded(chamber_regen_outer_diameter_mm),
                 "chamber_wall_thickness_mm": rounded(chamber_structural_wall_thickness_mm),
+                "chamber_length_mm": rounded(chamber_length_mm),
+                "chamber_length_sizing_method": chamber_length_sizing_method,
+                "chamber_characteristic_length_target_mm": rounded(chamber_characteristic_length_target_mm),
+                "chamber_characteristic_length_actual_mm": rounded(chamber_characteristic_length_actual_mm),
+                "chamber_packaging_reference_length_mm": rounded(chamber_packaging_reference_length_mm),
+                "chamber_contraction_ratio": round(chamber_contraction_ratio, 3),
+                "chamber_effective_contraction_ratio": round(chamber_effective_contraction_ratio, 3),
                 "throat_wall_thickness_mm": rounded(throat_structural_wall_thickness_mm),
                 "nozzle_required_outer_diameter_mm": rounded(nozzle_required_outer_diameter_mm),
                 "nozzle_diameter_limit_excess_mm": rounded(nozzle_diameter_excess_mm),

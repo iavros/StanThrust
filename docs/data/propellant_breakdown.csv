@@ -1,4 +1,4 @@
 quantity,fuel_value,oxidizer_value,unit
 Mass,0.6,0.9,kg
 Volume,0.9,0.8,L
-Volume flow,3.6,3.5,L/min
+Volume flow,3.5,3.4,L/min

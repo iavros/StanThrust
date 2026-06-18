@@ -1,4 +1,4 @@
 label,thrust_n,thrust_range_n,chamber_pressure_kpa,chamber_pressure_range_kpa,expansion_ratio,expansion_ratio_range,stack_length_mm,stack_length_range_mm
-Default pressure-fed sample,210.5,190.0 to 230.0,1640.0,1450.0 to 1800.0,11.61,10.8 to 12.2,972.7,920.0 to 1025.0
-Pump-fed regen midscale case,841.0,780.0 to 905.0,2159.5,1950.0 to 2350.0,11.7,10.9 to 12.4,1156.8,1090.0 to 1215.0
-Film-cooled pressure-fed large case,1559.9,1450.0 to 1685.0,2140.4,1900.0 to 2350.0,10.61,9.8 to 11.4,1726.1,1625.0 to 1815.0
+Default pressure-fed sample,210.5,190.0 to 230.0,1640.0,1450.0 to 1800.0,3.06,2.9 to 3.8,869.2,835.0 to 930.0
+Pump-fed regen midscale case,841.0,780.0 to 905.0,2159.5,1950.0 to 2350.0,3.69,3.4 to 4.5,1034.7,990.0 to 1110.0
+Film-cooled pressure-fed large case,1559.9,1450.0 to 1685.0,2140.4,1900.0 to 2350.0,3.67,3.4 to 4.5,1509.4,1440.0 to 1605.0

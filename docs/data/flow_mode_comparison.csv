@@ -1,3 +1,3 @@
 flow_model,flow_model_label,predicted_thrust_newtons,predicted_isp_seconds,chamber_pressure_kpa,mass_flow_kg_s,exit_pressure_kpa,thrust_coefficient,overall_efficiency,separation_efficiency,nozzle_half_angle_deg,nozzle_expansion_ratio
-fast,Fast quasi-1D preview,245.8,217.4,199.2,0.1,2.8,1.6,0.9008,1.0,18.043,11.611
-refined,Refined quasi-1D solve,245.7,186.9,258.4,0.1,3.2,1.3,0.8739,0.9425,25.901,11.611
+fast,Fast quasi-1D preview,245.9,208.8,1588.3,0.1,93.2,1.5,0.9523,1.0,5.067,3.219
+refined,Refined quasi-1D solve,245.9,192.7,1721.2,0.1,101.0,1.4,0.8821,1.0,14.929,3.219

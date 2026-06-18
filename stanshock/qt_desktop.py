@@ -1504,17 +1504,34 @@ class Model3DView(QGraphicsView):
         chamber_outer_diameter = _safe_float(values.get("chamber_outer_diameter_mm"), design.inputs.chamber_diameter_mm) or design.inputs.chamber_diameter_mm
         chamber_outer_radius = max(0.5, chamber_outer_diameter * 0.5)
         nozzle_wall = max(0.0, _safe_float(values.get("nozzle_wall_thickness_mm"), 0.0) or 0.0)
-        profile: List[Tuple[float, float]] = [
-            (0.0, chamber_outer_radius),
-            (chamber_length, chamber_outer_radius),
-        ]
+        converging_length = _safe_float(values.get("nozzle_converging_length_mm"), nozzle_length * 0.35) or nozzle_length * 0.35
+        profile: List[Tuple[float, float]] = []
+
+        def append_profile_point(x_mm: float, radius_mm: float) -> None:
+            radius_value = max(0.5, radius_mm)
+            if profile and abs(profile[-1][0] - x_mm) < 1e-6:
+                profile[-1] = (x_mm, max(profile[-1][1], radius_value))
+                return
+            profile.append((x_mm, radius_value))
+
+        def smoothstep(value: float) -> float:
+            t_value = max(0.0, min(1.0, value))
+            return t_value * t_value * (3.0 - 2.0 * t_value)
+
+        append_profile_point(0.0, chamber_outer_radius)
+        append_profile_point(chamber_length, chamber_outer_radius)
         for index, point in enumerate(design.derived.nozzle_contour_points):
             axial_mm = float(point.get("x_mm", 0.0))
             inner_radius = max(0.0, float(point.get("radius_mm", 0.0)))
-            outer_radius = inner_radius + nozzle_wall
+            nominal_outer_radius = inner_radius + nozzle_wall
             if index == 0:
-                outer_radius = max(outer_radius, chamber_outer_radius)
-            profile.append((chamber_length + axial_mm, outer_radius))
+                outer_radius = chamber_outer_radius
+            elif axial_mm <= converging_length:
+                blend = smoothstep(axial_mm / max(1e-6, converging_length))
+                outer_radius = chamber_outer_radius * (1.0 - blend) + nominal_outer_radius * blend
+            else:
+                outer_radius = nominal_outer_radius
+            append_profile_point(chamber_length + axial_mm, outer_radius)
         if len(profile) < 2:
             self._add_text(scene, 48, 110, "No model profile is available for the current design.", QT_PALETTE["warning"], 10, 420)
             return
@@ -1542,7 +1559,6 @@ class Model3DView(QGraphicsView):
         exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
         length = _format_number(chamber_length + nozzle_length, 2)
         contour = str(values.get("nozzle_contour_method_label", "Nozzle contour"))
-        converging_length = _safe_float(values.get("nozzle_converging_length_mm"), nozzle_length * 0.35) or nozzle_length * 0.35
         throat_x = chamber_length + converging_length
         throat_radius = max(0.5, (_safe_float(values.get("nozzle_throat_diameter_mm"), 1.0) or 1.0) * 0.5)
         exit_radius = max(0.5, (_safe_float(values.get("nozzle_inner_diameter_mm"), design.inputs.nozzle_diameter_mm) or design.inputs.nozzle_diameter_mm) * 0.5)
@@ -1618,11 +1634,9 @@ class Model3DView(QGraphicsView):
         rib_height = max(0.2, _safe_float(values.get("regen_rib_height_mm"), 1.0) or 1.0)
         rib_thickness = max(0.4, _safe_float(values.get("regen_rib_thickness_mm"), 1.0) or 1.0)
         channel_depth = max(0.2, _safe_float(values.get("regen_channel_depth_mm"), 1.0) or 1.0)
-        angle_span = math.radians(215.0)
-        start_angle = phase - angle_span * 0.5
-
+        rib_paths: List[Tuple[float, QPainterPath]] = []
         for rib_index in range(display_count):
-            theta = start_angle + angle_span * rib_index / max(1, display_count - 1)
+            theta = phase + 2.0 * math.pi * rib_index / max(1, display_count)
             path = QPainterPath()
             first_point = True
             depth_values: List[float] = []
@@ -1643,7 +1657,10 @@ class Model3DView(QGraphicsView):
                 depth_values.append(projected[2])
 
             mean_depth = sum(depth_values) / max(1, len(depth_values))
-            alpha = 235 if mean_depth > 0.0 else 110
+            rib_paths.append((mean_depth, path))
+
+        for mean_depth, path in sorted(rib_paths, key=lambda item: item[0]):
+            alpha = 235 if mean_depth > 0.0 else 56
             rib_color = QColor(QT_PALETTE["cooling"])
             rib_color.setAlpha(alpha)
             pen = QPen(rib_color, max(1.2, rib_thickness * scale * 0.55), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)

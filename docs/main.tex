@@ -221,18 +221,51 @@ S_I\,
 \end{equation}
 where $\Pi_{\text{tank}}$ is the packaging multiplier associated with the selected packaging bias.
 
-The chamber length is
+The chamber barrel length is now sized from a characteristic-length target rather than only from a packaging multiplier. The chamber contraction ratio is
 \begin{equation}
-L_c
+\varepsilon_c=\frac{A_c}{A_t}
+\label{eq:chamber-contraction-ratio}
+\end{equation}
+and the target characteristic length is computed from propellant severity, injector family, thrust scale, packaging preference, and cooling state:
+\begin{equation}
+L^\star_{\text{target}}
 =
-d_c\,
-\Pi_{\text{chamber}}\,
-S_F\,
-\phi_T\,
-\phi_{\text{regen}}
+\clip\!\left(
+\left[
+980
++260\tau_{ox}
+-115\chi_f
++180\left|\beta_{\text{mix}}-0.5\right|
++45(S_F-1)
+\right]\phi_{\text{inj}}\phi_{\text{pkg}}\phi_{\text{cool}},
+650,
+1850
+\right)
+\qquad [\si{mm}].
+\label{eq:chamber-lstar-target}
+\end{equation}
+The raw barrel length follows directly from
+\begin{equation}
+L_{c,\text{raw}}=\frac{L^\star_{\text{target}}}{\varepsilon_c}.
+\label{eq:chamber-lstar-raw-length}
+\end{equation}
+The final barrel length uses practical geometric bounds:
+\begin{equation}
+L_{c,\min}=\max(0.55d_c,\,4.5d_t),
+\qquad
+L_{c,\max}=3\,d_c\,\Pi_{\text{chamber}}S_F\phi_T\phi_{\text{regen}}
+\label{eq:chamber-lstar-bounds}
+\end{equation}
+\begin{equation}
+L_c=\clip(L_{c,\text{raw}},L_{c,\min},L_{c,\max}).
 \label{eq:chamber-length}
 \end{equation}
-with $\Pi_{\text{chamber}}$ the chamber-length packaging multiplier.
+The achieved characteristic length reported in the UI is
+\begin{equation}
+L^\star_{\text{actual}}=L_c\varepsilon_c.
+\label{eq:chamber-lstar-actual}
+\end{equation}
+This exposes when an oversized chamber diameter forces the practical minimum barrel length to produce more residence volume than the target.
 
 StanThrust also treats the user-specified target diameter as a hard outer-envelope limit. If $D_{\text{req}}$ is the uncapped required outside diameter of a tank, chamber, or nozzle package and $D_{\text{lim}}$ is the target diameter, the exported geometry uses
 \begin{equation}
