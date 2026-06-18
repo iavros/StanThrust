@@ -273,6 +273,64 @@ def test_nozzle_contour_metadata_and_shape():
     assert abs(throat_radius_mm * 2.0 - float(values.get("nozzle_throat_diameter_mm", 0.0))) < 0.2
 
 
+def test_nozzle_exit_diameter_is_auto_sized_by_default():
+    """Assert the nozzle exit is solved unless a manual override is requested."""
+    from stanshock.concept_model import create_concept_design
+
+    design = create_concept_design({})
+    values = design.derived.engineering_values
+
+    assert values["nozzle_exit_mode"] == "auto"
+    assert values["nozzle_exit_sizing_status"] in {"calculated", "capped_by_target_diameter"}
+    assert values["nozzle_throat_sizing_method"] == "Choked thrust coefficient"
+    assert float(values["nozzle_throat_pressure_assumption_kpa"]) > 0.0
+    assert float(values["nozzle_throat_thrust_coefficient_assumption"]) > 1.0
+    assert float(values["nozzle_inner_diameter_mm"]) > float(values["nozzle_throat_diameter_mm"])
+    assert float(values["nozzle_exit_pressure_target_kpa"]) > 0.0
+    assert float(values["nozzle_exit_separation_ratio"]) > 0.0
+    assert float(values["nozzle_inner_diameter_mm"]) != 95.0
+
+
+def test_manual_nozzle_exit_override_remains_available():
+    """Assert explicit manual nozzle exit sizing remains available for constrained studies."""
+    from stanshock.concept_model import create_concept_design
+
+    manual = create_concept_design({"nozzle_exit_mode": "manual", "nozzle_diameter_mm": 88.0})
+    legacy = create_concept_design({"nozzle_diameter_mm": 88.0})
+
+    assert manual.derived.engineering_values["nozzle_exit_sizing_status"] == "manual_override"
+    assert float(manual.derived.engineering_values["nozzle_inner_diameter_mm"]) == 88.0
+    assert legacy.derived.engineering_values["nozzle_exit_sizing_status"] == "manual_override"
+    assert float(legacy.derived.engineering_values["nozzle_inner_diameter_mm"]) == 88.0
+
+
+def test_nozzle_expansion_bias_changes_auto_exit_target():
+    """Assert over and under expansion settings alter automatic nozzle sizing."""
+    from stanshock.concept_model import create_concept_design
+
+    under = create_concept_design({"nozzle_expansion_bias": "underexpanded"})
+    matched = create_concept_design({"nozzle_expansion_bias": "pressure_matched"})
+    over = create_concept_design({"nozzle_expansion_bias": "overexpanded"})
+
+    under_values = under.derived.engineering_values
+    matched_values = matched.derived.engineering_values
+    over_values = over.derived.engineering_values
+
+    assert under_values["nozzle_exit_pressure_relation"] == "underexpanded"
+    assert matched_values["nozzle_exit_pressure_relation"] == "pressure-matched"
+    assert over_values["nozzle_exit_pressure_relation"] == "overexpanded"
+    assert (
+        float(under_values["nozzle_exit_pressure_target_kpa"])
+        > float(matched_values["nozzle_exit_pressure_target_kpa"])
+        > float(over_values["nozzle_exit_pressure_target_kpa"])
+    )
+    assert (
+        float(under_values["nozzle_inner_diameter_mm"])
+        < float(matched_values["nozzle_inner_diameter_mm"])
+        < float(over_values["nozzle_inner_diameter_mm"])
+    )
+
+
 def test_impinging_injector_reports_full_orifice_pattern():
     """Assert impinging injector geometry exposes every calculated orifice."""
     from stanshock.concept_model import create_concept_design
@@ -326,6 +384,23 @@ def test_render_geometry_fields_are_calculated():
     assert float(values["injector_element_ring_diameter_mm"]) <= float(values["injector_face_diameter_mm"])
 
 
+def test_cooling_geometry_fields_describe_visible_features():
+    """Assert film and regen cooling expose geometry used by measurements and renders."""
+    from stanshock.concept_model import create_concept_design
+
+    film_design = create_concept_design({"film_cooling": True})
+    film_values = film_design.derived.engineering_values
+    assert "Injector perimeter slots" in str(film_values["film_geometry_effect_note"])
+    assert float(film_values["film_slot_count"]) >= 8.0
+    assert float(film_values["injector_face_diameter_mm"]) > float(film_design.inputs.chamber_diameter_mm)
+
+    regen_design = create_concept_design({"regen_cooling": True})
+    regen_values = regen_design.derived.engineering_values
+    assert float(regen_values["regen_channel_count"]) > 0.0
+    assert float(regen_values["regen_rib_height_mm"]) > 0.0
+    assert float(regen_values["regen_rib_thickness_mm"]) > 0.0
+
+
 def test_export_includes_nozzle_geometry_metadata():
     """Assert export payload carries the nozzle contour metadata for downstream CAD/report use."""
     from stanshock.concept_model import create_concept_design
@@ -358,8 +433,12 @@ if __name__ == "__main__":
         test_csv_export_numeric_columns,
         test_solver_provenance_tagging,
         test_nozzle_contour_metadata_and_shape,
+        test_nozzle_exit_diameter_is_auto_sized_by_default,
+        test_manual_nozzle_exit_override_remains_available,
+        test_nozzle_expansion_bias_changes_auto_exit_target,
         test_impinging_injector_reports_full_orifice_pattern,
         test_render_geometry_fields_are_calculated,
+        test_cooling_geometry_fields_describe_visible_features,
         test_export_includes_nozzle_geometry_metadata,
     ]
     

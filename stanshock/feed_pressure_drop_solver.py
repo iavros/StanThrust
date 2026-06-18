@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict, List, Optional
 
 
@@ -34,31 +35,105 @@ def _round_or_none(value: Optional[float], digits: int = 3) -> Optional[float]:
     return round(float(value), digits)
 
 
+def _default_dynamic_viscosity_pa_s(propellant_name: str, density_kg_m3: float, role: str) -> float:
+    name = str(propellant_name or "").strip().lower()
+    if "liquid oxygen" in name or name == "lox":
+        return 0.0002
+    if "nitrous" in name:
+        return 0.00018
+    if "peroxide" in name:
+        return 0.00125
+    if "ethanol" in name:
+        return 0.0012
+    if "isopropyl" in name or "ipa" in name:
+        return 0.0022
+    if "methane" in name:
+        return 0.00012
+    if role == "oxidizer":
+        return 0.00025 if density_kg_m3 < 950.0 else 0.0009
+    return 0.0011 if density_kg_m3 > 650.0 else 0.0004
+
+
+def _colebrook_friction_factor(reynolds: float, relative_roughness: float) -> Dict[str, object]:
+    re = max(1.0, float(reynolds))
+    roughness = max(0.0, float(relative_roughness))
+    if re < 2300.0:
+        return {
+            "friction_factor": 64.0 / re,
+            "flow_regime": "laminar",
+            "iterations": 0,
+        }
+
+    turbulent_guess = 0.25 / (
+        math.log10(max(1e-12, roughness / 3.7 + 5.74 / (re**0.9))) ** 2
+    )
+    friction_factor = _clamp(turbulent_guess, 0.008, 0.12)
+    iterations = 0
+    for iteration in range(1, 26):
+        denominator = roughness / 3.7 + 2.51 / (re * math.sqrt(max(1e-8, friction_factor)))
+        inverse_sqrt = -2.0 * math.log10(max(1e-12, denominator))
+        next_factor = 1.0 / max(1e-8, inverse_sqrt * inverse_sqrt)
+        next_factor = _clamp(next_factor, 0.008, 0.12)
+        iterations = iteration
+        if abs(next_factor - friction_factor) < 1e-7:
+            friction_factor = next_factor
+            break
+        friction_factor = 0.55 * friction_factor + 0.45 * next_factor
+
+    if re < 4000.0:
+        blend = (re - 2300.0) / 1700.0
+        laminar_factor = 64.0 / re
+        friction_factor = (1.0 - blend) * laminar_factor + blend * friction_factor
+        regime = "transitional"
+    else:
+        regime = "turbulent"
+    return {
+        "friction_factor": friction_factor,
+        "flow_regime": regime,
+        "iterations": iterations,
+    }
+
+
 def _line_loss_kpa(
     mass_flow_kg_s: float,
     density_kg_m3: float,
     diameter_m: float,
     length_m: float,
     minor_k: float,
-) -> Dict[str, float]:
+    dynamic_viscosity_pa_s: float,
+    roughness_m: float,
+) -> Dict[str, object]:
     density = max(60.0, density_kg_m3)
     diameter = max(0.003, diameter_m)
     area = 3.141592653589793 * diameter * diameter * 0.25
     velocity = mass_flow_kg_s / max(1e-8, density * area)
 
-    viscosity_pa_s = 0.00022 if density > 900.0 else 0.0007
+    viscosity_pa_s = _clamp(dynamic_viscosity_pa_s, 0.00005, 0.02)
     reynolds = max(1.0, density * velocity * diameter / max(1e-8, viscosity_pa_s))
-    if reynolds < 2300.0:
-        friction_factor = 64.0 / reynolds
-    else:
-        friction_factor = 0.3164 / (reynolds ** 0.25)
-    equivalent_k = friction_factor * (length_m / diameter) + max(0.0, minor_k)
-    dp_pa = equivalent_k * 0.5 * density * velocity * velocity
+    relative_roughness = _clamp(roughness_m / diameter, 0.0, 0.05)
+    friction = _colebrook_friction_factor(reynolds, relative_roughness)
+    friction_factor = float(friction["friction_factor"])
+    major_k = friction_factor * (length_m / diameter)
+    minor_k = max(0.0, minor_k)
+    equivalent_k = major_k + minor_k
+    dynamic_pressure_pa = 0.5 * density * velocity * velocity
+    major_drop_pa = major_k * dynamic_pressure_pa
+    minor_drop_pa = minor_k * dynamic_pressure_pa
+    dp_pa = major_drop_pa + minor_drop_pa
     return {
         "pressure_drop_kpa": dp_pa / 1000.0,
+        "major_pressure_drop_kpa": major_drop_pa / 1000.0,
+        "minor_pressure_drop_kpa": minor_drop_pa / 1000.0,
         "velocity_m_s": velocity,
         "reynolds": reynolds,
         "friction_factor": friction_factor,
+        "flow_regime": str(friction["flow_regime"]),
+        "friction_iterations": float(friction["iterations"]),
+        "relative_roughness": relative_roughness,
+        "dynamic_viscosity_pa_s": viscosity_pa_s,
+        "dynamic_pressure_kpa": dynamic_pressure_pa / 1000.0,
+        "major_k": major_k,
+        "minor_k": minor_k,
         "equivalent_k": equivalent_k,
     }
 
@@ -105,6 +180,8 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
     feed_request = _as_dict(design_request.get("feed_pressure_drop_request"))
     fuel_record = _as_dict(propellants.get("fuel_record"))
     oxidizer_record = _as_dict(propellants.get("oxidizer_record"))
+    fuel_name = str(propellants.get("fuel", "Fuel") or "Fuel")
+    oxidizer_name = str(propellants.get("oxidizer", "Oxidizer") or "Oxidizer")
 
     tank_diameter_mm = _safe_float(geometry_limits.get("tank_diameter_mm"), 110.0)
     base_line_diameter_m = _clamp(tank_diameter_mm / 1000.0 * 0.11, 0.008, 0.028)
@@ -112,6 +189,8 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
     use_pumps = bool(architecture.get("use_pumps", False))
     history_steps_default = 31 if use_pumps else 41
     initial_fill_fraction_default = 0.72 if use_pumps else 0.58
+    fuel_density_kg_m3 = _clamp(_safe_float(fuel_record.get("density_index"), 0.75) * 1000.0, 450.0, 1250.0)
+    oxidizer_density_kg_m3 = _clamp(_safe_float(oxidizer_record.get("density_index"), 0.9) * 1000.0, 650.0, 1600.0)
 
     normalized = {
         "target_thrust_newtons": _safe_float(targets.get("target_thrust_newtons"), 250.0),
@@ -125,8 +204,24 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
         "regen_cooling": bool(architecture.get("regen_cooling", False)),
         "injector_type": str(architecture.get("injector_type", "impinging") or "impinging"),
         "tank_diameter_mm": tank_diameter_mm,
-        "fuel_density_kg_m3": _clamp(_safe_float(fuel_record.get("density_index"), 0.75) * 1000.0, 450.0, 1250.0),
-        "oxidizer_density_kg_m3": _clamp(_safe_float(oxidizer_record.get("density_index"), 0.9) * 1000.0, 650.0, 1600.0),
+        "fuel_name": fuel_name,
+        "oxidizer_name": oxidizer_name,
+        "fuel_density_kg_m3": fuel_density_kg_m3,
+        "oxidizer_density_kg_m3": oxidizer_density_kg_m3,
+        "fuel_dynamic_viscosity_pa_s": _safe_float(
+            feed_request.get("fuel_dynamic_viscosity_pa_s"),
+            _default_dynamic_viscosity_pa_s(fuel_name, fuel_density_kg_m3, "fuel"),
+        ),
+        "oxidizer_dynamic_viscosity_pa_s": _safe_float(
+            feed_request.get("oxidizer_dynamic_viscosity_pa_s"),
+            _default_dynamic_viscosity_pa_s(oxidizer_name, oxidizer_density_kg_m3, "oxidizer"),
+        ),
+        "line_roughness_fuel_m": _clamp(_safe_float(feed_request.get("line_roughness_fuel_m"), 1.5e-6), 0.0, 3.0e-4),
+        "line_roughness_oxidizer_m": _clamp(
+            _safe_float(feed_request.get("line_roughness_oxidizer_m"), 1.5e-6),
+            0.0,
+            3.0e-4,
+        ),
         "line_diameter_fuel_m": _safe_float(feed_request.get("line_diameter_fuel_m"), base_line_diameter_m),
         "line_diameter_oxidizer_m": _safe_float(feed_request.get("line_diameter_oxidizer_m"), base_line_diameter_m * 0.95),
         "line_length_fuel_m": _safe_float(feed_request.get("line_length_fuel_m"), 1.55),
@@ -426,6 +521,8 @@ def solve(
         diameter_m=float(req.get("line_diameter_fuel_m", 0.012)),
         length_m=float(req.get("line_length_fuel_m", 1.55)),
         minor_k=float(req.get("minor_loss_fuel_k", 8.0)),
+        dynamic_viscosity_pa_s=float(req.get("fuel_dynamic_viscosity_pa_s", 0.0011)),
+        roughness_m=float(req.get("line_roughness_fuel_m", 1.5e-6)),
     )
     oxidizer_branch = _line_loss_kpa(
         mass_flow_kg_s=oxidizer_mass_flow_kg_s,
@@ -433,6 +530,8 @@ def solve(
         diameter_m=float(req.get("line_diameter_oxidizer_m", 0.011)),
         length_m=float(req.get("line_length_oxidizer_m", 1.75)),
         minor_k=float(req.get("minor_loss_oxidizer_k", 9.2)),
+        dynamic_viscosity_pa_s=float(req.get("oxidizer_dynamic_viscosity_pa_s", 0.00025)),
+        roughness_m=float(req.get("line_roughness_oxidizer_m", 1.5e-6)),
     )
 
     distribution_loss_kpa = _clamp(5.5 * thermal_margin_factor * (110.0 / tank_diameter_mm), 2.5, 18.0)
@@ -471,6 +570,13 @@ def solve(
             "status": "calculated",
             "velocity_m_s": round(fuel_branch["velocity_m_s"], 3),
             "reynolds": round(fuel_branch["reynolds"], 1),
+            "major_pressure_drop_kpa": round(fuel_branch["major_pressure_drop_kpa"], 3),
+            "minor_pressure_drop_kpa": round(fuel_branch["minor_pressure_drop_kpa"], 3),
+            "friction_factor": round(fuel_branch["friction_factor"], 6),
+            "flow_regime": fuel_branch["flow_regime"],
+            "relative_roughness": round(fuel_branch["relative_roughness"], 7),
+            "dynamic_viscosity_pa_s": round(fuel_branch["dynamic_viscosity_pa_s"], 7),
+            "friction_iterations": int(fuel_branch["friction_iterations"]),
         },
         {
             "segment": "oxidizer_branch_total",
@@ -479,6 +585,13 @@ def solve(
             "status": "calculated",
             "velocity_m_s": round(oxidizer_branch["velocity_m_s"], 3),
             "reynolds": round(oxidizer_branch["reynolds"], 1),
+            "major_pressure_drop_kpa": round(oxidizer_branch["major_pressure_drop_kpa"], 3),
+            "minor_pressure_drop_kpa": round(oxidizer_branch["minor_pressure_drop_kpa"], 3),
+            "friction_factor": round(oxidizer_branch["friction_factor"], 6),
+            "flow_regime": oxidizer_branch["flow_regime"],
+            "relative_roughness": round(oxidizer_branch["relative_roughness"], 7),
+            "dynamic_viscosity_pa_s": round(oxidizer_branch["dynamic_viscosity_pa_s"], 7),
+            "friction_iterations": int(oxidizer_branch["friction_iterations"]),
         },
         {
             "segment": "injector_pressure_drop",
@@ -513,7 +626,7 @@ def solve(
 
     trace = [
         "Validated request for reduced-order transient feed-pressure model.",
-        "Solved branch losses with Darcy-Weisbach + minor-loss terms and injector closure.",
+        "Solved branch losses with iterative Darcy-Weisbach/Colebrook friction, roughness, viscosity, minor-loss terms, and injector closure.",
         "Integrated burn-time feed history with pressure-fed blowdown or pump-head control logic.",
     ]
     if upstream_context:
@@ -522,11 +635,16 @@ def solve(
     summary = {
         "total_pressure_drop_kpa": round(total_drop_kpa, 2),
         "model_status": "calculated",
-        "quality_flag": "stage-2-transient-feed-v1",
+        "quality_flag": "stage-2-transient-feed-v2-iterative-darcy",
+        "feed_line_model": "iterative Darcy-Weisbach with Colebrook friction",
         "estimated_chamber_pressure_kpa": round(chamber_pressure_kpa, 2),
         "injector_pressure_drop_kpa": round(injector_pressure_drop_kpa, 2),
         "fuel_branch_pressure_drop_kpa": round(fuel_total_drop_kpa, 2),
         "oxidizer_branch_pressure_drop_kpa": round(oxidizer_total_drop_kpa, 2),
+        "fuel_branch_flow_regime": fuel_branch["flow_regime"],
+        "oxidizer_branch_flow_regime": oxidizer_branch["flow_regime"],
+        "fuel_branch_friction_factor": round(fuel_branch["friction_factor"], 6),
+        "oxidizer_branch_friction_factor": round(oxidizer_branch["friction_factor"], 6),
         "required_feed_delta_kpa": round(required_feed_delta_kpa, 2),
         "required_tank_pressure_kpa": round(required_tank_pressure_kpa, 2),
         "estimated_propellant_mass_flow_kg_s": round(total_mass_flow_kg_s, 4),
@@ -566,7 +684,7 @@ def solve(
             "station_field_updates": station_field_updates,
         },
         "warnings": [
-            "Reduced-order transient only: this is not yet a calibrated hydraulic network or valve-level feed simulation.",
+            "Uses iterative Darcy-Weisbach/Colebrook line losses and burn-time tank pressure dynamics; still not a calibrated valve-level hydraulic network.",
         ],
         "trace": trace,
     }

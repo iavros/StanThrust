@@ -8,13 +8,14 @@ consistent concept state where chamber pressure, feed margin, thrust residual,
 and section margins are solved together instead of reported as isolated guesses.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
 from stanshock.concept_model import create_concept_design
 from stanshock.feed_pressure_drop_solver import solve as solve_feed_system
 from stanshock.material_assignment_solver import assign_materials
+from stanshock.propellants import lookup_propellant
 from stanshock.solver_assumptions import get_default_solver_assumptions
 from stanshock.structural_material_solver import build_structural_materials_output
 
@@ -70,6 +71,8 @@ class ConvergenceInfo:
     thrust_error_fraction: float
     minimum_feed_margin_kpa: float
     minimum_structural_margin_ratio: float
+    minimum_heat_transfer_margin_ratio: float
+    minimum_combined_material_margin_ratio: float
     converged: bool
     notes: List[str]
 
@@ -88,6 +91,7 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
         "tank_diameter_mm": _safe_float(req.get("tank_diameter_mm"), 100.0),
         "chamber_diameter_mm": _safe_float(req.get("chamber_diameter_mm"), 80.0),
         "nozzle_diameter_mm": _safe_float(req.get("nozzle_diameter_mm"), 95.0),
+        "nozzle_exit_mode": str(req.get("nozzle_exit_mode", "auto") or "auto"),
         "mixture_ratio": _safe_float(req.get("mixture_ratio"), 2.0),
         "burn_time_seconds": _safe_float(req.get("burn_time_seconds"), 12.0),
         "factor_of_safety": _safe_float(req.get("factor_of_safety"), 2.0),
@@ -106,6 +110,8 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
 
 
 def _build_feed_request(state: Dict[str, object], chamber_pressure_kpa: float) -> Dict[str, object]:
+    fuel = lookup_propellant(str(state["fuel_name"]), "fuel")
+    oxidizer = lookup_propellant(str(state["oxidizer_name"]), "oxidizer")
     return {
         "targets": {
             "target_thrust_newtons": state["target_thrust_newtons"],
@@ -118,6 +124,8 @@ def _build_feed_request(state: Dict[str, object], chamber_pressure_kpa: float) -
             "fuel": state["fuel_name"],
             "oxidizer": state["oxidizer_name"],
             "mixture_ratio": state["mixture_ratio"],
+            "fuel_record": asdict(fuel),
+            "oxidizer_record": asdict(oxidizer),
         },
         "geometry_limits": {
             "tank_diameter_mm": state["tank_diameter_mm"],
@@ -143,7 +151,9 @@ def _build_feed_request(state: Dict[str, object], chamber_pressure_kpa: float) -
 
 
 def _build_design_for_pressure(state: Dict[str, object], chamber_pressure_kpa: float) -> object:
-    design = create_concept_design(state)
+    design_state = dict(state)
+    design_state["target_chamber_pressure_kpa"] = chamber_pressure_kpa
+    design = create_concept_design(design_state)
     values = design.derived.engineering_values
     values["chamber_pressure_kpa"] = round(chamber_pressure_kpa, 4)
     values["coupled_pressure_override_kpa"] = round(chamber_pressure_kpa, 4)
@@ -221,6 +231,18 @@ def _minimum_structural_margin(structural_result: Optional[Dict[str, object]], d
     return min(margins) if margins else fallback
 
 
+def _material_margin_summary(structural_result: Optional[Dict[str, object]], design: object) -> Dict[str, float]:
+    stress_margin = _minimum_structural_margin(structural_result, design)
+    summary = _as_dict(_as_dict(structural_result.get("payload") if isinstance(structural_result, dict) else {}).get("summary"))
+    heat_margin = _safe_float(summary.get("minimum_heat_transfer_margin_ratio"), stress_margin)
+    combined_margin = _safe_float(summary.get("minimum_combined_margin_ratio"), min(stress_margin, heat_margin))
+    return {
+        "minimum_structural_margin_ratio": stress_margin,
+        "minimum_heat_transfer_margin_ratio": heat_margin,
+        "minimum_combined_material_margin_ratio": combined_margin,
+    }
+
+
 def _merge_station_field_updates(
     feed_result: Optional[Dict[str, object]],
     combustion_result: Optional[Dict[str, object]],
@@ -272,6 +294,8 @@ def iterate_coupling_loop(
         thrust_error_fraction=1.0,
         minimum_feed_margin_kpa=0.0,
         minimum_structural_margin_ratio=0.0,
+        minimum_heat_transfer_margin_ratio=0.0,
+        minimum_combined_material_margin_ratio=0.0,
         converged=False,
         notes=[],
     )
@@ -327,12 +351,16 @@ def iterate_coupling_loop(
 
         pressure_residual_kpa = abs(next_pressure_kpa - pressure_guess_kpa)
         thrust_error_fraction = _extract_thrust_error(combustion_result)
-        minimum_structural_margin_ratio = _minimum_structural_margin(structural_result, design)
+        material_margins = _material_margin_summary(structural_result, design)
+        minimum_structural_margin_ratio = material_margins["minimum_structural_margin_ratio"]
+        minimum_heat_transfer_margin_ratio = material_margins["minimum_heat_transfer_margin_ratio"]
+        minimum_combined_material_margin_ratio = material_margins["minimum_combined_material_margin_ratio"]
         criteria_met = (
             pressure_residual_kpa <= convergence_tolerance_kpa
             and thrust_error_fraction <= 0.035
             and minimum_feed_margin_kpa >= -convergence_tolerance_kpa
             and minimum_structural_margin_ratio > 1.0
+            and minimum_combined_material_margin_ratio > 1.0
         )
         converged = criteria_met and iteration >= minimum_required_iterations
         notes = [
@@ -344,6 +372,8 @@ def iterate_coupling_loop(
             notes.append("feed margin negative: {0:.1f} kPa".format(minimum_feed_margin_kpa))
         if minimum_structural_margin_ratio <= 1.0:
             notes.append("structural margin below unity")
+        if minimum_heat_transfer_margin_ratio <= 1.0:
+            notes.append("heat-transfer material margin below unity")
 
         row = {
             "iteration": iteration,
@@ -354,6 +384,8 @@ def iterate_coupling_loop(
             "combustion_supported_pressure_kpa": round(combustion_pressure_kpa, 3),
             "minimum_feed_margin_kpa": round(minimum_feed_margin_kpa, 3),
             "minimum_structural_margin_ratio": round(minimum_structural_margin_ratio, 4),
+            "minimum_heat_transfer_margin_ratio": round(minimum_heat_transfer_margin_ratio, 4),
+            "minimum_combined_material_margin_ratio": round(minimum_combined_material_margin_ratio, 4),
             "thrust_error_fraction": round(thrust_error_fraction, 6),
             "residual_kpa": round(pressure_residual_kpa, 3),
             "criteria_met": criteria_met,
@@ -379,6 +411,8 @@ def iterate_coupling_loop(
             thrust_error_fraction=thrust_error_fraction,
             minimum_feed_margin_kpa=minimum_feed_margin_kpa,
             minimum_structural_margin_ratio=minimum_structural_margin_ratio,
+            minimum_heat_transfer_margin_ratio=minimum_heat_transfer_margin_ratio,
+            minimum_combined_material_margin_ratio=minimum_combined_material_margin_ratio,
             converged=converged,
             notes=notes,
         )
@@ -488,6 +522,8 @@ def solve(
                 "thrust_error_fraction": round(conv_info.thrust_error_fraction, 6),
                 "minimum_feed_margin_kpa": round(conv_info.minimum_feed_margin_kpa, 3),
                 "minimum_structural_margin_ratio": round(conv_info.minimum_structural_margin_ratio, 4),
+                "minimum_heat_transfer_margin_ratio": round(conv_info.minimum_heat_transfer_margin_ratio, 4),
+                "minimum_combined_material_margin_ratio": round(conv_info.minimum_combined_material_margin_ratio, 4),
             },
             "results": {
                 "chamber_pressure_kpa": round(conv_info.chamber_pressure_kpa, 3),
@@ -496,6 +532,8 @@ def solve(
                 "thrust_error_fraction": round(conv_info.thrust_error_fraction, 6),
                 "minimum_feed_margin_kpa": round(conv_info.minimum_feed_margin_kpa, 3),
                 "minimum_structural_margin_ratio": round(conv_info.minimum_structural_margin_ratio, 4),
+                "minimum_heat_transfer_margin_ratio": round(conv_info.minimum_heat_transfer_margin_ratio, 4),
+                "minimum_combined_material_margin_ratio": round(conv_info.minimum_combined_material_margin_ratio, 4),
             },
             "iteration_trace": iteration_trace,
             "station_field_updates": merged_station_updates,

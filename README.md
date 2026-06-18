@@ -30,9 +30,13 @@ Python 3.11 is the supported development runtime. Cantera is required; the solve
 - Coupled numerical solve across feed system, chamber/nozzle flow, and structural margins.
 - Cantera-backed thermochemistry using bundled mechanism files.
 - MOC-informed bell nozzle contour with explicit geometry fields.
+- Automatic nozzle exit sizing with pressure-matched, underexpanded, and overexpanded targets.
+- Reduced-order heat-transfer solve for chamber, throat, and nozzle wall sections.
+- Rankine-Hugoniot shock diagnostics for overexpanded nozzle states.
+- Material stress, thermal-margin, and redesign recommendations.
 - Pressure-fed and pump-fed transient feed histories.
-- Live 3D views for chamber/nozzle, injector, pumps, and tanks.
-- Engineering plots, measurements, diagnostics, and CSV/DXF exports.
+- Live calculated-geometry 3D views for chamber/nozzle, injector, pumps, tanks, regen ribs, and film slots.
+- Engineering plots, 2D flow-field visualization, measurements, diagnostics, and CSV/DXF exports.
 - GitHub Actions release builds for Windows and macOS installer artifacts.
 
 ## Solver Report
@@ -63,4 +67,4 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 
 ## Validation
 
-The automated test suite covers solver coupling, thermochemistry, feed transients, geometry fields, optimizer hooks, uncertainty/provenance utilities, and report benchmark cases. The release workflow runs the suite before publishing installer assets.
+The automated test suite covers solver coupling, thermochemistry, heat-transfer and shock diagnostics, feed transients, geometry fields, optimizer hooks, uncertainty/provenance utilities, and report benchmark cases. The release workflow runs the suite before publishing installer assets.

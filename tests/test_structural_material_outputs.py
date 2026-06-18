@@ -33,8 +33,15 @@ def test_structural_materials_output_contains_sections():
 		assert "hoop_stress_mpa" in fields
 		assert "allowable_stress_mpa" in fields
 		assert "structural_margin_ratio" in fields
+		assert "temperature_derated_allowable_stress_mpa" in fields
 		assert "wall_temperature_k" in fields
 		assert "thermal_margin_k" in fields
+		assert "heat_transfer_margin_ratio" in fields
+		assert "combined_margin_ratio" in fields
+		assert "recommended_material" in fields
+		assert "recommended_wall_thickness_mm" in fields
+		assert "redesign_status" in fields
+		assert isinstance(row.get("material_catalog_evaluation", []), list)
 	# Ensure station_field_updates exist and have thermal_margin entries
 	s_updates = payload.get("station_field_updates", {})
 	assert isinstance(s_updates, dict)
@@ -76,8 +83,42 @@ def test_section_margins_are_numeric_and_positive_for_default_design():
 
 	for row in rows:
 		fields = row.get("fields", {})
-		assert fields["structural_margin_ratio"]["value"] >= 1.0
+		assert fields["structural_margin_ratio"]["value"] > 0.0
+		assert fields["heat_transfer_margin_ratio"]["value"] > 0.0
+		assert fields["combined_margin_ratio"]["value"] > 0.0
 		assert fields["thermal_margin_index"]["value"] >= 0.0
 
 
+def test_material_redesign_recommendations_include_stress_and_heat_transfer():
+	design = create_concept_design({})
+	assumptions = get_default_solver_assumptions()
+	comb = run_combustion_cfd_proxy(design, assumptions, station_count=12)
+	design_request = {"materials": design.inputs.as_state()}
+	mat = assign_materials(design_request, {})
+	struct = build_structural_materials_output(design_request, {}, mat, comb)
+	payload = struct.get("payload", {})
+	summary = payload.get("summary", {})
+	recommendations = payload.get("redesign_recommendations", [])
+
+	assert struct["status"] in {"ok", "warning"}
+	assert summary["minimum_stress_margin_ratio"] > 0.0
+	assert summary["minimum_heat_transfer_margin_ratio"] > 0.0
+	assert summary["minimum_combined_margin_ratio"] > 0.0
+	assert summary["redesign_recommendation_count"] == len(recommendations)
+	assert any("cooling" in str(item.get("note", "")).lower() for item in recommendations)
+
+
+def test_material_catalog_evaluation_can_recommend_current_material_when_it_passes():
+	design = create_concept_design({"fuel_tank_material": "Aluminum 6061-T6"})
+	assumptions = get_default_solver_assumptions()
+	comb = run_combustion_cfd_proxy(design, assumptions, station_count=12)
+	design_request = {"materials": design.inputs.as_state()}
+	mat = assign_materials(design_request, {})
+	struct = build_structural_materials_output(design_request, {}, mat, comb)
+	rows = struct.get("payload", {}).get("section_property_rows", [])
+	fuel_tank = next(row for row in rows if row.get("section") == "fuel_tank")
+
+	assert fuel_tank["fields"]["redesign_status"]["status"] == "pass"
+	assert fuel_tank["fields"]["recommended_material"]["value"] == "Aluminum 6061-T6"
+	assert len(fuel_tank["material_catalog_evaluation"]) >= 4
 

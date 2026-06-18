@@ -1,6 +1,7 @@
 """Tests for GA workflow integration with fidelity coordination."""
 
 import pytest
+from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
 from stanshock.optimizer_hooks import (
     build_optimizer_seed,
@@ -304,6 +305,51 @@ class TestQtInputPreservation:
         summary = _summarize_tier_usage(candidates)
         assert summary["heuristic"] == 1
         assert summary["concept"] == 1  # Missing tier defaults to concept
+
+    def test_plot_tab_has_expanded_solver_views(self):
+        """Plot tab should expose transient, axial, 2D field, and convergence views."""
+        app_instance = QApplication.instance() or QApplication([])
+        app_instance.setQuitOnLastWindowClosed(False)
+        window = desktop_module.StanThrustQtWindow()
+        try:
+            expected_cards = {
+                "pressure_transient",
+                "performance_transient",
+                "feed_margins",
+                "axial_field",
+                "mach_area",
+                "thermal_density",
+                "convergence",
+                "coupled_margins",
+            }
+            assert expected_cards.issubset(set(window.plot_cards))
+            assert window.flow_field_card is not None
+            assert int(window.widgets["solver_station_count"].value()) == desktop_module.DEFAULT_SOLVER_STATION_COUNT
+            assert window.collect_form_state()["nozzle_expansion_bias"] == "pressure_matched"
+            window._set_default_plots()
+        finally:
+            window.close()
+
+    def test_cooling_overlays_render_from_calculated_geometry(self):
+        """Cooling overlays should render from solved regen and film geometry fields."""
+        app_instance = QApplication.instance() or QApplication([])
+        app_instance.setQuitOnLastWindowClosed(False)
+        scenarios = [
+            create_concept_design({"regen_cooling": True}),
+            create_concept_design({"film_cooling": True}),
+        ]
+        for design in scenarios:
+            view = desktop_module.Model3DView("chamber_nozzle")
+            try:
+                view.resize(900, 520)
+                view.render_design(design)
+                pixmap = QPixmap(900, 520)
+                painter = QPainter(pixmap)
+                view.scene().render(painter)
+                painter.end()
+                assert len(view.scene().items()) > 20
+            finally:
+                view.close()
 
 
 class TestFidelityMetadataExportable:

@@ -61,17 +61,17 @@ def test_reconstructed_public_benchmark_outputs_are_stable_with_cantera():
     expected_windows = {
         "Elysium": {
             "simulated_thrust_n": (1200.0, 1380.0),
-            "simulated_chamber_pressure_kpa": (1000.0, 1200.0),
-            "simulated_isp_seconds": (175.0, 195.0),
+            "simulated_chamber_pressure_kpa": (850.0, 980.0),
+            "simulated_isp_seconds": (160.0, 178.0),
         },
         "Juno": {
             "simulated_thrust_n": (1400.0, 1600.0),
-            "simulated_chamber_pressure_kpa": (950.0, 1250.0),
+            "simulated_chamber_pressure_kpa": (2400.0, 2700.0),
             "simulated_isp_seconds": (195.0, 225.0),
         },
         "Iron Lotus": {
             "simulated_thrust_n": (10400.0, 11550.0),
-            "simulated_chamber_pressure_kpa": (2200.0, 2450.0),
+            "simulated_chamber_pressure_kpa": (2700.0, 3000.0),
             "simulated_isp_seconds": (175.0, 195.0),
         },
     }

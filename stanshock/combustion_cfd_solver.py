@@ -2,7 +2,9 @@ import math
 from typing import Callable, Dict, List, Optional
 
 from stanshock.concept_model import ConceptDesign, clamp, rounded
+from stanshock.heat_transfer_solver import solve_engine_heat_transfer
 from stanshock.propellants import lookup_propellant
+from stanshock.shock_solver import find_nozzle_normal_shock_candidate
 from stanshock.solver_assumptions import SolverAssumptions
 from stanshock.thermochemistry_provider import (
     CanteraThermochemistryProvider,
@@ -43,6 +45,29 @@ def _solve_supersonic_mach(area_ratio: float, gamma: float) -> float:
         else:
             high = mid
     return 0.5 * (low + high)
+
+
+def _solve_subsonic_mach(area_ratio: float, gamma: float) -> float:
+    target = max(1.0, area_ratio)
+    low = 1e-4
+    high = 0.9999
+    for _ in range(80):
+        mid = 0.5 * (low + high)
+        value = _area_mach_relation(mid, gamma)
+        if value > target:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
+def _static_temperature_from_mach(total_temperature_k: float, gamma: float, mach: float) -> float:
+    return total_temperature_k / max(1e-8, 1.0 + 0.5 * (gamma - 1.0) * mach * mach)
+
+
+def _static_pressure_from_mach(total_pressure_pa: float, gamma: float, mach: float) -> float:
+    pressure_ratio = (1.0 + 0.5 * (gamma - 1.0) * mach * mach) ** (-gamma / (gamma - 1.0))
+    return total_pressure_pa * pressure_ratio
 
 
 def _thrust_coefficient_vacuum(gamma: float, area_ratio: float) -> Dict[str, float]:
@@ -229,6 +254,109 @@ def _estimate_nozzle_loss_model(
     return _estimate_fast_nozzle_loss_model(throat_area, exit_area, nozzle_length_mm, assumptions)
 
 
+def _interpolated_radius_mm(
+    contour_points: List[Dict[str, object]],
+    axial_x_mm: float,
+    fallback_radius_mm: float,
+) -> float:
+    points = sorted(
+        (
+            (float(point.get("x_mm", 0.0)), float(point.get("radius_mm", fallback_radius_mm)))
+            for point in contour_points
+        ),
+        key=lambda item: item[0],
+    )
+    if not points:
+        return fallback_radius_mm
+    if axial_x_mm <= points[0][0]:
+        return max(0.1, points[0][1])
+    if axial_x_mm >= points[-1][0]:
+        return max(0.1, points[-1][1])
+
+    for first, second in zip(points, points[1:]):
+        x0, r0 = first
+        x1, r1 = second
+        if x0 <= axial_x_mm <= x1:
+            ratio = (axial_x_mm - x0) / max(1e-8, x1 - x0)
+            return max(0.1, r0 + (r1 - r0) * ratio)
+    return fallback_radius_mm
+
+
+def _build_quasi_1d_axial_profile(
+    contour_points: List[Dict[str, object]],
+    station_steps: int,
+    chamber_pressure_pa: float,
+    chamber_temperature_k: float,
+    gamma: float,
+    gas_constant_j_kgk: float,
+    mass_flow_kg_s: float,
+    chamber_area_m2: float,
+    throat_area_m2: float,
+    exit_area_m2: float,
+) -> List[Dict[str, object]]:
+    throat_radius_mm = math.sqrt(max(1e-8, throat_area_m2) / math.pi) * 1000.0
+    chamber_radius_mm = math.sqrt(max(1e-8, chamber_area_m2) / math.pi) * 1000.0
+    exit_radius_mm = math.sqrt(max(1e-8, exit_area_m2) / math.pi) * 1000.0
+    points = [
+        (float(point.get("x_mm", 0.0)), float(point.get("radius_mm", throat_radius_mm)))
+        for point in contour_points
+    ]
+    if points:
+        start_x_mm = min(point[0] for point in points)
+        end_x_mm = max(point[0] for point in points)
+        throat_x_mm = min(points, key=lambda item: item[1])[0]
+    else:
+        start_x_mm = 0.0
+        end_x_mm = max(1.0, 3.0 * exit_radius_mm)
+        throat_x_mm = 0.35 * end_x_mm
+
+    axial_profile: List[Dict[str, object]] = []
+    for idx in range(station_steps + 1):
+        station_fraction = idx / max(1, station_steps)
+        axial_x_mm = start_x_mm + (end_x_mm - start_x_mm) * station_fraction
+        radius_mm = _interpolated_radius_mm(
+            contour_points,
+            axial_x_mm,
+            chamber_radius_mm if axial_x_mm < throat_x_mm else exit_radius_mm,
+        )
+        local_area_m2 = math.pi * (radius_mm / 1000.0) ** 2
+        area_ratio = max(1.0, local_area_m2 / max(1e-8, throat_area_m2))
+        if abs(axial_x_mm - throat_x_mm) < max(0.5, 0.0125 * max(1.0, end_x_mm - start_x_mm)):
+            mach = 1.0
+        elif axial_x_mm < throat_x_mm:
+            mach = _solve_subsonic_mach(area_ratio, gamma)
+        else:
+            mach = _solve_supersonic_mach(area_ratio, gamma)
+
+        static_temperature_k = _static_temperature_from_mach(chamber_temperature_k, gamma, mach)
+        static_pressure_pa = _static_pressure_from_mach(chamber_pressure_pa, gamma, mach)
+        density_kg_m3 = static_pressure_pa / max(1e-8, gas_constant_j_kgk * static_temperature_k)
+        continuity_velocity_m_s = mass_flow_kg_s / max(1e-8, density_kg_m3 * local_area_m2)
+        sonic_velocity_m_s = math.sqrt(max(1e-8, gamma * gas_constant_j_kgk * static_temperature_k))
+        mach_velocity_m_s = mach * sonic_velocity_m_s
+        velocity_closure_error_percent = 100.0 * abs(mach_velocity_m_s - continuity_velocity_m_s) / max(
+            1.0,
+            continuity_velocity_m_s,
+        )
+
+        axial_profile.append(
+            {
+                "x_mm": rounded(axial_x_mm),
+                "radius_mm": rounded(radius_mm),
+                "area_m2": round(local_area_m2, 7),
+                "area_ratio": rounded(area_ratio),
+                "mach": rounded(mach),
+                "pressure_kpa": rounded(max(1.0, static_pressure_pa / 1000.0)),
+                "temperature_k": rounded(max(1.0, static_temperature_k)),
+                "density_kg_m3": rounded(max(1e-8, density_kg_m3)),
+                "velocity_m_s": rounded(max(0.0, mach_velocity_m_s)),
+                "continuity_velocity_m_s": rounded(max(0.0, continuity_velocity_m_s)),
+                "velocity_closure_error_percent": round(velocity_closure_error_percent, 4),
+            }
+        )
+    return axial_profile
+
+
 def _effective_thrust_coefficient(
     flow_model: str,
     chamber_pressure_pa: float,
@@ -289,6 +417,8 @@ def _station_field(value: float, unit: str, source_solver: str) -> Dict[str, obj
 def _build_combustion_station_updates(
     chamber_temperature_k: float,
     chamber_pressure_kpa: float,
+    throat_temperature_k: float,
+    throat_pressure_kpa: float,
     exit_temperature_k: float,
     exit_pressure_kpa: float,
     exit_mach: float,
@@ -296,7 +426,7 @@ def _build_combustion_station_updates(
     flow_model: str,
 ) -> Dict[str, Dict[str, Dict[str, object]]]:
     source_solver = "Combustion CFD Proxy Solver"
-    exit_station_pressure_kpa = exit_pressure_kpa if flow_model == "refined" else 101.3
+    exit_station_pressure_kpa = exit_pressure_kpa
 
     return {
         "Chamber Mid": {
@@ -305,8 +435,8 @@ def _build_combustion_station_updates(
             "mass_flow": _station_field(mass_flow_kg_s, "kg/s", source_solver),
         },
         "Throat Region": {
-            "temperature": _station_field(chamber_temperature_k, "K", source_solver),
-            "pressure": _station_field(chamber_pressure_kpa * 0.95, "kPa", source_solver),
+            "temperature": _station_field(throat_temperature_k, "K", source_solver),
+            "pressure": _station_field(throat_pressure_kpa, "kPa", source_solver),
             "mach": _station_field(1.0, "", source_solver),
             "mass_flow": _station_field(mass_flow_kg_s, "kg/s", source_solver),
         },
@@ -322,7 +452,7 @@ def _build_combustion_station_updates(
 def run_combustion_cfd_proxy(
     design: ConceptDesign,
     assumptions: SolverAssumptions,
-    station_count: int = 14,
+    station_count: int = 60,
     max_iterations_override: Optional[int] = None,
     progress_callback: Optional[ProgressCallback] = None,
     thermochemistry_mode: str = "auto",
@@ -339,7 +469,10 @@ def run_combustion_cfd_proxy(
 
     eng = design.derived.engineering_values
     chamber_diameter_mm = design.inputs.chamber_diameter_mm
-    nozzle_diameter_mm = design.inputs.nozzle_diameter_mm
+    nozzle_diameter_mm = max(
+        1.0,
+        float(eng.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm)),
+    )
     chamber_area = _area_from_diameter_mm(chamber_diameter_mm)
     exit_area = _area_from_diameter_mm(nozzle_diameter_mm)
     nozzle_length_mm = max(1.0, float(getattr(design.derived, "nozzle_length_mm", 0.0)))
@@ -356,12 +489,11 @@ def run_combustion_cfd_proxy(
         0.24,
     )
     fast_throat_area = chamber_area * throat_fraction
-    if flow_model == "refined":
-        throat_diameter_mm = max(1.0, float(eng.get("nozzle_throat_diameter_mm", 0.0)))
-        geometric_throat_area = _area_from_diameter_mm(throat_diameter_mm)
-        throat_area = 0.55 * fast_throat_area + 0.45 * geometric_throat_area
-    else:
-        throat_area = fast_throat_area
+    throat_diameter_mm = max(1.0, float(eng.get("nozzle_throat_diameter_mm", 0.0)))
+    geometric_throat_area = _area_from_diameter_mm(throat_diameter_mm)
+    throat_area_source = "solved_geometry" if throat_diameter_mm > 1.0 else "heuristic_fraction"
+    throat_area = geometric_throat_area if throat_area_source == "solved_geometry" else fast_throat_area
+    throat_fraction = throat_area / max(1e-8, chamber_area)
 
     requested_thermochemistry_mode = (thermochemistry_mode or "auto").strip().lower()
     effective_thermochemistry_mode = "cantera"
@@ -491,37 +623,64 @@ def run_combustion_cfd_proxy(
     )
     effective_thrust_coefficient = coefficient_state["effective_thrust_coefficient"]
     exit_pressure_kpa = coefficient_state["exit_pressure_kpa"]
+    throat_temperature_k = _static_temperature_from_mach(chamber_temp, gamma, 1.0)
+    throat_pressure_kpa = _static_pressure_from_mach(chamber_pressure_pa, gamma, 1.0) / 1000.0
 
-    report(78.0, "Step 4/5: Building simplified CFD axial profile")
-    axial_profile = []
-    for idx in range(station_steps + 1):
+    report(78.0, "Step 4/5: Building quasi-1D axial profile from solved geometry")
+    axial_profile = _build_quasi_1d_axial_profile(
+        contour_points=contour_points,
+        station_steps=station_steps,
+        chamber_pressure_pa=chamber_pressure_pa,
+        chamber_temperature_k=chamber_temp,
+        gamma=gamma,
+        gas_constant_j_kgk=r_gas,
+        mass_flow_kg_s=mass_flow_kg_s,
+        chamber_area_m2=chamber_area,
+        throat_area_m2=throat_area,
+        exit_area_m2=exit_area,
+    )
+    for idx in range(len(axial_profile)):
         ratio = idx / max(1, station_steps)
-        axial_x_mm = ratio * max(1.0, design.derived.total_stack_length_mm)
-        local_pressure_kpa = (chamber_pressure_pa / 1000.0) * (1.0 - 0.78 * ratio)
-        local_temp_k = chamber_temp * (1.0 - 0.46 * ratio)
-        local_velocity = exit_velocity_m_s * (0.08 + 0.92 * ratio)
-        axial_profile.append(
-            {
-                "x_mm": rounded(axial_x_mm),
-                "pressure_kpa": rounded(max(80.0, local_pressure_kpa)),
-                "temperature_k": rounded(max(220.0, local_temp_k)),
-                "velocity_m_s": rounded(local_velocity),
-            }
-        )
         report(
             78.0 + ratio * 18.0,
-            "Step 4/5: Generating profile station {0}/{1}".format(idx, station_steps),
+            "Step 4/5: Solving area-Mach station {0}/{1}".format(idx, station_steps),
         )
 
-    report(98.0, "Step 5/5: Assembling combustion solver outputs")
+    report(97.0, "Step 5/5: Solving heat-transfer and shock diagnostics")
     predicted_thrust_n = effective_thrust_coefficient * chamber_pressure_pa * throat_area
     predicted_isp_s = predicted_thrust_n / max(1e-6, mass_flow_kg_s * assumptions.gravity_m_s2)
     predicted_impulse_newton_seconds = predicted_thrust_n * max(0.5, float(design.inputs.burn_time_seconds))
     thrust_error = abs(predicted_thrust_n - design_thrust_n) / max(1.0, design_thrust_n)
 
+    solver_summary = {
+        "chamber_pressure_kpa": chamber_pressure_pa / 1000.0,
+        "chamber_temperature_k": chamber_temp,
+        "gamma": gamma,
+        "gas_constant_j_kgk": r_gas,
+        "mass_flow_kg_s": mass_flow_kg_s,
+        "exit_mach": exit_mach,
+    }
+    heat_transfer = solve_engine_heat_transfer(
+        design,
+        {
+            "summary": solver_summary,
+            "axial_profile": axial_profile,
+        },
+    )
+    heat_summary = dict(heat_transfer.get("summary", {}))
+    shock_analysis = find_nozzle_normal_shock_candidate(
+        axial_profile,
+        ambient_pressure_pa / 1000.0,
+        gamma,
+    )
+
+    report(98.0, "Step 5/5: Assembling combustion solver outputs")
+
     station_field_updates = _build_combustion_station_updates(
         chamber_temperature_k=chamber_temp,
         chamber_pressure_kpa=chamber_pressure_pa / 1000.0,
+        throat_temperature_k=throat_temperature_k,
+        throat_pressure_kpa=throat_pressure_kpa,
         exit_temperature_k=exit_temp_k,
         exit_pressure_kpa=exit_pressure_kpa,
         exit_mach=exit_mach,
@@ -535,12 +694,16 @@ def run_combustion_cfd_proxy(
             "solver_version": "1.1",
             "solver_mode": "quasi-1d-{0}".format(flow_model),
             "solver_stage": "stage-2-nozzle-loss-{0}".format(flow_model),
+            "solver_stage_label": "{0} nozzle loss model".format(
+                "Refined quasi-1D" if flow_model == "refined" else "Fast quasi-1D"
+            ),
             "flow_model": flow_model,
             "flow_model_label": (
                 "Refined quasi-1D solve" if flow_model == "refined" else "Fast quasi-1D preview"
             ),
             "station_count": station_steps + 1,
             "iteration_limit": iteration_limit,
+            "throat_area_source": throat_area_source,
             "thermochemistry": {
                 "mode": thermochemistry_mode,
                 "requested_mode": requested_thermochemistry_mode,
@@ -560,6 +723,11 @@ def run_combustion_cfd_proxy(
             "chamber_pressure_kpa": rounded(chamber_pressure_pa / 1000.0),
             "exit_velocity_m_s": rounded(exit_velocity_m_s),
             "characteristic_velocity_m_s": rounded(characteristic_velocity),
+            "throat_pressure_kpa": rounded(throat_pressure_kpa),
+            "throat_temperature_k": rounded(throat_temperature_k),
+            "chamber_temperature_k": rounded(chamber_temp),
+            "gamma": round(gamma, 5),
+            "gas_constant_j_kgk": round(r_gas, 3),
             "predicted_thrust_newtons": rounded(predicted_thrust_n),
             "predicted_impulse_newton_seconds": rounded(predicted_impulse_newton_seconds),
             "predicted_isp_seconds": rounded(predicted_isp_s),
@@ -569,6 +737,7 @@ def run_combustion_cfd_proxy(
             "iteration_limit": float(iteration_limit),
             "throat_area_m2": round(throat_area, 7),
             "throat_fraction": round(throat_fraction, 4),
+            "throat_area_source": throat_area_source,
             "thrust_coefficient": rounded(effective_thrust_coefficient),
             "cstar_m_s": rounded(cstar),
             "design_thrust_newtons": rounded(design_thrust_n),
@@ -582,9 +751,21 @@ def run_combustion_cfd_proxy(
             "separation_efficiency": round(coefficient_state["separation_efficiency"], 4),
             "thermochemistry_provider": thermo.provider_name,
             "thermochemistry_status": thermo.status,
+            "axial_profile_model": "isentropic quasi-1D area-Mach profile from solved nozzle contour",
+            "heat_transfer_status": heat_summary.get("status", heat_transfer.get("status", "--")),
+            "heat_load_kw": rounded(float(heat_summary.get("total_heat_load_kw", 0.0) or 0.0)),
+            "max_hot_wall_temperature_k": rounded(float(heat_summary.get("max_hot_wall_temperature_k", 0.0) or 0.0)),
+            "coolant_outlet_temperature_k": rounded(float(heat_summary.get("coolant_outlet_temperature_k", 0.0) or 0.0)),
+            "minimum_heat_transfer_margin_k": rounded(float(heat_summary.get("min_thermal_margin_k", 0.0) or 0.0)),
+            "heat_transfer_limiting_section": heat_summary.get("limiting_section", "--"),
+            "shock_status": shock_analysis.get("status", "--"),
+            "shock_regime": shock_analysis.get("regime", "--"),
+            "shock_station_x_mm": rounded(float(shock_analysis.get("shock_x_mm", 0.0) or 0.0)),
         },
         "iteration_trace": iteration_trace,
         "axial_profile": axial_profile,
+        "heat_transfer": heat_transfer,
+        "shock_analysis": shock_analysis,
         "physics": {
             "assumptions": {
                 "flow_model": flow_model,
@@ -600,6 +781,8 @@ def run_combustion_cfd_proxy(
                 "gamma": round(gamma, 5),
                 "gas_constant_j_kgk": round(r_gas, 3),
                 "chamber_temperature_k": round(chamber_temp, 2),
+                "throat_pressure_kpa": round(throat_pressure_kpa, 2),
+                "throat_temperature_k": round(throat_temperature_k, 2),
                 "source": thermo.source,
                 "status": thermo.status,
                 "note": thermo.note,
@@ -607,6 +790,7 @@ def run_combustion_cfd_proxy(
             "geometry": {
                 "chamber_area_m2": round(chamber_area, 7),
                 "throat_area_m2": round(throat_area, 7),
+                "throat_area_source": throat_area_source,
                 "exit_area_m2": round(exit_area, 7),
                 "area_ratio": round(expansion_ratio, 4),
             },
@@ -663,6 +847,8 @@ def run_combustion_cfd_proxy(
                 "exit_angle_deg": round(float(nozzle_loss_model.get("exit_angle_deg", nozzle_loss_model["nozzle_half_angle_deg"])), 3),
                 "bell_quality": round(float(nozzle_loss_model.get("bell_quality", 1.0)), 4),
             },
+            "heat_transfer": heat_transfer,
+            "shock_analysis": shock_analysis,
         },
         "warnings": [
             (

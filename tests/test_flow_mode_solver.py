@@ -13,6 +13,7 @@ from stanshock.solver_assumptions import get_default_solver_assumptions
 def test_flow_modes_emit_distinct_metadata_and_outputs():
     """Assert the flow-mode switch changes metadata and produces the refined nozzle fields."""
     design = create_concept_design({})
+    values = design.derived.engineering_values
     base_assumptions = get_default_solver_assumptions()
 
     fast_result = run_combustion_cfd_proxy(
@@ -30,6 +31,8 @@ def test_flow_modes_emit_distinct_metadata_and_outputs():
     assert refined_result["metadata"]["flow_model"] == "refined"
     assert fast_result["metadata"]["solver_mode"] == "quasi-1d-fast"
     assert refined_result["metadata"]["solver_mode"] == "quasi-1d-refined"
+    assert fast_result["metadata"]["throat_area_source"] == "solved_geometry"
+    assert refined_result["metadata"]["throat_area_source"] == "solved_geometry"
 
     refined_nozzle = refined_result["physics"]["nozzle"]
     assert refined_nozzle["flow_model_label"] == "Refined quasi-1D solve"
@@ -37,15 +40,34 @@ def test_flow_modes_emit_distinct_metadata_and_outputs():
     assert "curvature_efficiency" in refined_nozzle
     assert "bell_quality" in refined_nozzle
     assert float(refined_nozzle["exit_pressure_kpa"]) > 0.0
+    assert refined_result["heat_transfer"]["status"].startswith("calculated")
+    assert refined_result["shock_analysis"]["status"] in {
+        "normal-shock-candidate",
+        "overexpanded-no-station-match",
+        "not-triggered",
+        "not-supersonic",
+    }
 
     fast_summary = fast_result["summary"]
     refined_summary = refined_result["summary"]
     assert fast_summary["flow_model"] == "fast"
     assert refined_summary["flow_model"] == "refined"
+    assert refined_summary["axial_profile_model"] == "isentropic quasi-1D area-Mach profile from solved nozzle contour"
+    assert values["nozzle_throat_sizing_method"] == "Choked thrust coefficient"
+    target_exit_pressure = float(values["nozzle_exit_pressure_target_kpa"])
+    simulated_exit_pressure = float(refined_summary["exit_pressure_kpa"])
+    assert abs(simulated_exit_pressure - target_exit_pressure) / target_exit_pressure < 0.25
     assert abs(float(fast_summary["predicted_thrust_newtons"]) - float(refined_summary["predicted_thrust_newtons"])) > 0.1
     assert float(refined_summary["exit_pressure_kpa"]) > 0.0
     assert float(refined_summary["predicted_isp_seconds"]) > 120.0
     assert float(refined_summary["chamber_pressure_kpa"]) > float(fast_summary["chamber_pressure_kpa"])
+
+    refined_profile = refined_result["axial_profile"]
+    assert len(refined_profile) == int(refined_result["metadata"]["station_count"])
+    assert all("mach" in row and "area_ratio" in row for row in refined_profile)
+    assert float(refined_profile[0]["mach"]) < 1.0
+    assert max(float(row["mach"]) for row in refined_profile) > 1.0
+    assert float(refined_profile[-1]["pressure_kpa"]) < float(refined_profile[0]["pressure_kpa"])
 
 
 def test_architecture_cooling_and_flow_modes_share_solved_geometry():
@@ -76,6 +98,8 @@ def test_architecture_cooling_and_flow_modes_share_solved_geometry():
                 assert result["status"] in {"ok", "warning", "converged"}
                 assert float(result["summary"]["predicted_thrust_newtons"]) > 0.0
                 assert float(result["physics"]["nozzle"]["overall_efficiency"]) > 0.0
+                assert result["heat_transfer"]["status"].startswith("calculated")
+                assert "regime" in result["shock_analysis"]
 
 
 def run_all_tests():

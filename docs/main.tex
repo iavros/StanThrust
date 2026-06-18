@@ -545,6 +545,8 @@ A_{s,n}=0.82\,\pi d_e L_n.
 \subsection{Renderable Geometry Fields}
 The desktop 3D views are rendered from the same solved scalar fields and sampled nozzle contour used by the measurement table and exports. The drawing layer may choose colors, perspective, wireframe density, and label positions, but the visible engine dimensions are not hard-coded in the renderer. For example, tank cylinders use solved outer diameters and required lengths, pump models use solved casing, impeller, eye, hub, blade-count, and motor-envelope values, and the impinging injector pattern uses the solved element count, orifice diameter, pair spacing, ring diameter, and convergence height.
 
+Cooling geometry is treated the same way. Regenerative ribs use the solved channel count, rib height, rib thickness, and channel depth. Film cooling uses the solved injector-face diameter, slot height, slot width, slot count, and injection angle. In the exterior 3D view, film cooling is shown as inlet-face slot hardware and short entry ticks only. The coolant film itself is an internal boundary-layer flow, not an exterior solid feature, so the renderer does not draw long film lines down the chamber body. This keeps the render faithful to the calculated hardware while avoiding a misleading solid-geometry interpretation of an internal flow layer.
+
 \begin{table}[H]
 \centering
 \caption{Selected solved fields used directly by the live 3D renderer for the default pump-fed impinging-injector case.}
@@ -1931,6 +1933,171 @@ I_{sp}=\frac{F}{\mdotp g_0}
 I=F\max(0.5,t_b).
 \label{eq:impulse-final}
 \end{equation}
+
+\section{Heat Transfer, Shock, and Material Redesign}
+\subsection{Wall Heat-Transfer Network}
+The combustion solve now calls a reduced-order heat-transfer model after the quasi-one-dimensional flow state has been assembled. The model evaluates three representative wall sections: chamber midsection, throat region, and nozzle exit plane. Each section uses the local diameter, length, Mach number, material, wall thickness, and cooling configuration from the solved design state.
+
+For a station with Mach number $M$, the gas-side static state is
+\begin{equation}
+T_s=\frac{T_c}{1+\frac{\gamma-1}{2}M^2}
+\label{eq:heat-static-temperature}
+\end{equation}
+\begin{equation}
+P_s=P_c\left(1+\frac{\gamma-1}{2}M^2\right)^{-\gamma/(\gamma-1)}
+\label{eq:heat-static-pressure}
+\end{equation}
+\begin{equation}
+\rho_s=\frac{P_s}{RT_s},
+\qquad
+u_s=M\sqrt{\gamma RT_s}.
+\label{eq:heat-density-velocity}
+\end{equation}
+
+The gas Reynolds number is
+\begin{equation}
+\Rey_g=\frac{\rho_s u_s D_h}{\mu_g}
+\label{eq:gas-reynolds}
+\end{equation}
+where $\mu_g$ is estimated with a Sutherland-law temperature correction. The gas Nusselt number is
+\begin{equation}
+\mathrm{Nu}_g=
+\begin{cases}
+3.66+0.008\sqrt{\Rey_g}, & \Rey_g<2300\\
+0.026\Rey_g^{0.8}\Pr_g^{0.4}, & \Rey_g\ge 2300
+\end{cases}
+\label{eq:gas-nusselt}
+\end{equation}
+and the gas-side heat-transfer coefficient is
+\begin{equation}
+h_g=\frac{\mathrm{Nu}_g k_g}{D_h}.
+\label{eq:gas-heat-transfer-coefficient}
+\end{equation}
+
+The recovery temperature is
+\begin{equation}
+T_r=T_s\left(1+\sqrt{\Pr_g}\frac{\gamma-1}{2}M^2\right).
+\label{eq:recovery-temperature}
+\end{equation}
+If film cooling is enabled, the wall-side recovery temperature is reduced by the local film effectiveness:
+\begin{equation}
+T_{r,\mathrm{eff}}=T_r-\eta_{\mathrm{film}}\left(T_r-T_{\mathrm{ref}}\right).
+\label{eq:film-recovery-temperature}
+\end{equation}
+The implementation uses the solved film coverage to set a bounded effectiveness, strongest in the chamber and reduced toward the throat and exit.
+
+When regenerative cooling is active, the coolant-side Reynolds number is
+\begin{equation}
+\Rey_c=\frac{\rho_c u_c D_{h,c}}{\mu_c}
+\label{eq:coolant-reynolds}
+\end{equation}
+with
+\begin{equation}
+u_c=\frac{\mdot_{\mathrm{cool}}}{\rho_c N_{\mathrm{ch}}w_{\mathrm{ch}}h_{\mathrm{ch}}}.
+\label{eq:coolant-channel-velocity}
+\end{equation}
+The coolant Nusselt number is $3.66$ in laminar flow, $0.023\Rey_c^{0.8}\Pr_c^{0.4}$ in turbulent flow, and linearly blended through transition. The resulting coefficient is
+\begin{equation}
+h_c=\frac{\mathrm{Nu}_c k_c}{D_{h,c}}.
+\label{eq:coolant-heat-transfer-coefficient}
+\end{equation}
+
+Each wall section is then solved as a gas-wall-coolant resistance network:
+\begin{equation}
+R_{\mathrm{tot}}=\frac{1}{h_g}+\frac{t_w}{k_w}+\frac{1}{h_c}
+\label{eq:thermal-resistance}
+\end{equation}
+\begin{equation}
+q''=\frac{T_{r,\mathrm{eff}}-T_{\mathrm{sink}}}{R_{\mathrm{tot}}}.
+\label{eq:heat-flux}
+\end{equation}
+The hot-wall and cold-wall temperatures are
+\begin{equation}
+T_{\mathrm{hot}}=T_{r,\mathrm{eff}}-\frac{q''}{h_g},
+\qquad
+T_{\mathrm{cold}}=T_{\mathrm{sink}}+\frac{q''}{h_c}.
+\label{eq:wall-temperatures}
+\end{equation}
+The section heat load and coolant outlet rise are
+\begin{equation}
+\dot{Q}=q''\pi dL,
+\qquad
+\Delta T_c=\frac{\dot{Q}}{\mdot_{\mathrm{cool}}c_{p,c}}.
+\label{eq:section-heat-load}
+\end{equation}
+For passive sections, the outer sink is ambient convection. For regenerative sections, the coolant outlet from each solved section becomes the inlet bulk temperature for the next section.
+
+\subsection{Rankine-Hugoniot Shock Diagnostics}
+The nozzle shock module evaluates whether the solved exit pressure is underexpanded, pressure matched, or overexpanded:
+\begin{equation}
+\Pi_e=\frac{P_e}{P_a}.
+\label{eq:exit-ambient-ratio}
+\end{equation}
+The current thresholds are
+\begin{equation}
+\Pi_e<0.85 \Rightarrow \text{overexpanded},
+\qquad
+0.85\le\Pi_e\le1.15 \Rightarrow \text{pressure matched},
+\qquad
+\Pi_e>1.15 \Rightarrow \text{underexpanded}.
+\label{eq:expansion-regime}
+\end{equation}
+
+For overexpanded cases, the solver scans the supersonic axial stations and applies perfect-gas Rankine-Hugoniot normal-shock jumps. The normal-shock pressure, density, and temperature ratios are
+\begin{equation}
+\frac{P_2}{P_1}=1+\frac{2\gamma}{\gamma+1}\left(M_1^2-1\right)
+\label{eq:shock-pressure-ratio}
+\end{equation}
+\begin{equation}
+\frac{\rho_2}{\rho_1}=\frac{(\gamma+1)M_1^2}{2+(\gamma-1)M_1^2}
+\label{eq:shock-density-ratio}
+\end{equation}
+\begin{equation}
+\frac{T_2}{T_1}=\frac{P_2/P_1}{\rho_2/\rho_1}.
+\label{eq:shock-temperature-ratio}
+\end{equation}
+The downstream Mach number is
+\begin{equation}
+M_2^2=
+\frac{1+\frac{\gamma-1}{2}M_1^2}
+{\gamma M_1^2-\frac{\gamma-1}{2}}.
+\label{eq:shock-downstream-mach}
+\end{equation}
+The diagnostic station is the station that minimizes
+\begin{equation}
+\left|\ln\!\left(\frac{P_2}{P_a}\right)\right|.
+\label{eq:shock-station-score}
+\end{equation}
+If no pressure-compatible station is found, the result is reported as an overexpanded separation warning rather than a resolved internal shock. The current shock result is diagnostic and does not re-integrate the downstream nozzle field after the jump.
+
+The shock module also includes a theta-beta-M oblique-shock utility. That utility is available for future nozzle and plume diagnostics, while the packaged desktop summary currently reports the normal-shock candidate for overexpanded nozzle states.
+
+\subsection{Material Stress and Thermal Redesign}
+The structural material stage now consumes both pressure and heat-transfer outputs. For each section, the selected material is evaluated with hoop stress
+\begin{equation}
+\sigma_\theta=\frac{Pr}{t_w}
+\label{eq:material-hoop-stress}
+\end{equation}
+and a temperature-derated allowable stress
+\begin{equation}
+\sigma_{\mathrm{allow},T}=\phi_T(T_{\mathrm{hot}},T_{\mathrm{limit}})\sigma_{\mathrm{allow}}.
+\label{eq:material-derated-stress}
+\end{equation}
+The derating factor remains unity below $0.55T_{\mathrm{limit}}$, falls linearly to $0.45$ at the material temperature limit, and continues decreasing if the predicted hot wall exceeds the limit.
+
+The stress and heat-transfer margins are
+\begin{equation}
+M_\sigma=\frac{\sigma_{\mathrm{allow},T}}{\sigma_\theta N_{\mathrm{FS}}},
+\qquad
+M_T=\frac{T_{\mathrm{limit}}}{T_{\mathrm{hot}}}.
+\label{eq:stress-heat-margins}
+\end{equation}
+The combined material margin used by the coupled solve is
+\begin{equation}
+M_{\mathrm{mat}}=\min(M_\sigma,M_T).
+\label{eq:combined-material-margin}
+\end{equation}
+If $M_{\mathrm{mat}}<1$, the solver ranks the available material catalog at the same section state and reports a redesign recommendation. Stress failures recommend a minimum wall thickness; thermal failures recommend a better material when one exists, or more cooling capacity when no catalog material clears the combined margin.
 
 \section{Axial Proxy Fields}
 For visualization and exports, StanThrust creates a simple axial field model across the entire engine length. If

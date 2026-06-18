@@ -16,12 +16,15 @@ class DefaultState:
     mixture_ratio: float = 1.4
     injector_type: str = "impinging"
     target_thrust_newtons: float = 250.0
+    target_chamber_pressure_kpa: float = 0.0
     target_impulse_newton_seconds: float = 3000.0
     target_diameter_mm: float = 110.0
     burn_time_seconds: float = 12.0
     tank_diameter_mm: float = 110.0
     chamber_diameter_mm: float = 68.0
     nozzle_diameter_mm: float = 95.0
+    nozzle_exit_mode: str = "auto"
+    nozzle_expansion_bias: str = "pressure_matched"
     fuel_tank_material: str = "Aluminum 6061-T6"
     oxidizer_tank_material: str = "Aluminum 6061-T6"
     feed_system_material: str = "Stainless Steel 304"

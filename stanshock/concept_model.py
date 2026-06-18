@@ -23,6 +23,18 @@ PROPELLANT_DENSITY_KG_M3 = {
 }
 
 INJECTOR_TYPES = ("impinging", "pintle")
+NOZZLE_EXIT_MODES = ("auto", "manual")
+NOZZLE_EXPANSION_BIASES = ("pressure_matched", "underexpanded", "overexpanded")
+NOZZLE_EXPANSION_PRESSURE_FACTORS = {
+    "pressure_matched": 1.0,
+    "underexpanded": 1.22,
+    "overexpanded": 0.72,
+}
+NOZZLE_EXPANSION_LABELS = {
+    "pressure_matched": "pressure-matched",
+    "underexpanded": "underexpanded",
+    "overexpanded": "overexpanded",
+}
 
 
 MATERIAL_ALLOWABLE_STRESS_MPA = {
@@ -89,6 +101,21 @@ def _area_ratio_from_mach(mach_number: float, gamma: float) -> float:
     pressure_term = 1.0 + (gamma - 1.0) * 0.5 * mach_number * mach_number
     normalized_term = (2.0 / (gamma + 1.0)) * pressure_term
     return (1.0 / mach_number) * (normalized_term**gamma_factor)
+
+
+def _pressure_ratio_from_mach(mach_number: float, gamma: float) -> float:
+    mach_number = max(1e-6, mach_number)
+    pressure_term = 1.0 + (gamma - 1.0) * 0.5 * mach_number * mach_number
+    return pressure_term ** (-gamma / (gamma - 1.0))
+
+
+def _estimate_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: float = 1.22) -> float:
+    """Estimate exit Mach from Pe/Pc on the supersonic branch."""
+    bounded_ratio = clamp(pressure_ratio, 1e-5, 0.999)
+    mach_squared = (2.0 / max(1e-6, gamma - 1.0)) * (
+        bounded_ratio ** (-(gamma - 1.0) / gamma) - 1.0
+    )
+    return float(clamp(math.sqrt(max(1.0001, mach_squared)), 1.0001, 10.0))
 
 
 def _estimate_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22) -> float:
@@ -525,12 +552,15 @@ class DesignInputs:
     mixture_ratio: float
     injector_type: str
     target_thrust_newtons: float
+    target_chamber_pressure_kpa: float
     target_impulse_newton_seconds: float
     target_diameter_mm: float
     burn_time_seconds: float
     tank_diameter_mm: float
     chamber_diameter_mm: float
     nozzle_diameter_mm: float
+    nozzle_exit_mode: str
+    nozzle_expansion_bias: str
     fuel_tank_material: str
     oxidizer_tank_material: str
     feed_system_material: str
@@ -547,6 +577,18 @@ class DesignInputs:
         injector_type = str(raw_state.get("injector_type", "impinging") or "impinging").strip().lower()
         if injector_type not in INJECTOR_TYPES:
             injector_type = "impinging"
+        raw_nozzle_mode = raw_state.get("nozzle_exit_mode", raw_state.get("nozzle_diameter_mode"))
+        if raw_nozzle_mode is None:
+            nozzle_exit_mode = "manual" if "nozzle_diameter_mm" in raw_state else "auto"
+        else:
+            nozzle_exit_mode = str(raw_nozzle_mode or "auto").strip().lower()
+            if nozzle_exit_mode not in NOZZLE_EXIT_MODES:
+                nozzle_exit_mode = "auto"
+        nozzle_expansion_bias = str(
+            raw_state.get("nozzle_expansion_bias", "pressure_matched") or "pressure_matched"
+        ).strip().lower()
+        if nozzle_expansion_bias not in NOZZLE_EXPANSION_BIASES:
+            nozzle_expansion_bias = "pressure_matched"
         return cls(
             fuel_name=(str(raw_state.get("fuel_name", "Fuel")).strip() or "Fuel"),
             oxidizer_name=(
@@ -556,6 +598,11 @@ class DesignInputs:
             injector_type=injector_type,
             target_thrust_newtons=clamp(
                 float(raw_state.get("target_thrust_newtons", 250.0) or 250.0), 1.0, 50000.0
+            ),
+            target_chamber_pressure_kpa=clamp(
+                float(raw_state.get("target_chamber_pressure_kpa", 0.0) or 0.0),
+                0.0,
+                50000.0,
             ),
             target_impulse_newton_seconds=clamp(
                 float(raw_state.get("target_impulse_newton_seconds", 3000.0) or 3000.0),
@@ -577,6 +624,8 @@ class DesignInputs:
             nozzle_diameter_mm=clamp(
                 float(raw_state.get("nozzle_diameter_mm", 95.0) or 95.0), 20.0, 250.0
             ),
+            nozzle_exit_mode=nozzle_exit_mode,
+            nozzle_expansion_bias=nozzle_expansion_bias,
             fuel_tank_material=str(
                 raw_state.get("fuel_tank_material", "Aluminum 6061-T6") or "Aluminum 6061-T6"
             ),
@@ -721,9 +770,23 @@ class GeometrySizing:
     oxidizer_tank_length_mm: float
     chamber_length_mm: float
     nozzle_throat_diameter_mm: float
+    nozzle_throat_sizing_method: str
+    nozzle_throat_pressure_assumption_kpa: float
+    nozzle_throat_thrust_coefficient_assumption: float
     nozzle_converging_length_mm: float
     nozzle_diverging_length_mm: float
     nozzle_length_mm: float
+    nozzle_exit_diameter_mm: float
+    nozzle_exit_mode: str
+    nozzle_exit_sizing_status: str
+    nozzle_exit_pressure_target_kpa: float
+    nozzle_exit_pressure_ratio: float
+    nozzle_exit_separation_ratio: float
+    nozzle_expansion_bias: str
+    nozzle_exit_pressure_relation_label: str
+    nozzle_exit_manual_override_mm: float
+    nozzle_exit_diameter_limit_mm: float
+    nozzle_exit_uncapped_diameter_mm: float
     nozzle_expansion_ratio: float
     nozzle_converging_angle_deg: float
     nozzle_diverging_angle_deg: float
@@ -749,6 +812,57 @@ class GeometrySizing:
     dry_mass_index: float
     packaging_efficiency_index: float
     thermal_margin_index: float
+
+
+def _estimate_auto_nozzle_exit(
+    inputs: DesignInputs,
+    throat_diameter_mm: float,
+    thrust_scale: float,
+) -> Dict[str, object]:
+    gamma = 1.22
+    ambient_pressure_kpa = AMBIENT_PRESSURE_KPA
+    expansion_bias = (
+        inputs.nozzle_expansion_bias
+        if inputs.nozzle_expansion_bias in NOZZLE_EXPANSION_PRESSURE_FACTORS
+        else "pressure_matched"
+    )
+    pressure_factor = NOZZLE_EXPANSION_PRESSURE_FACTORS[expansion_bias]
+    estimated_chamber_pressure_kpa = clamp(
+        680.0
+        + thrust_scale * 920.0
+        + (170.0 if inputs.use_pumps else 40.0)
+        + (90.0 if inputs.regen_cooling else 0.0),
+        600.0,
+        6500.0,
+    )
+    chamber_pressure_kpa = clamp(
+        inputs.target_chamber_pressure_kpa if inputs.target_chamber_pressure_kpa > 0.0 else estimated_chamber_pressure_kpa,
+        600.0,
+        6500.0,
+    )
+    target_exit_pressure_kpa = ambient_pressure_kpa * pressure_factor
+    pressure_ratio = clamp(target_exit_pressure_kpa / max(1.0, chamber_pressure_kpa), 1e-5, 0.95)
+    exit_mach = _estimate_supersonic_mach_from_pressure_ratio(pressure_ratio, gamma)
+    expansion_ratio = clamp(_area_ratio_from_mach(exit_mach, gamma), 1.08, 80.0)
+    uncapped_exit_diameter_mm = throat_diameter_mm * math.sqrt(expansion_ratio)
+    exit_limit_mm = clamp(inputs.target_diameter_mm * 0.94, max(24.0, throat_diameter_mm * 1.08), 250.0)
+    exit_diameter_mm = clamp(uncapped_exit_diameter_mm, throat_diameter_mm * 1.08, exit_limit_mm)
+    status = "calculated"
+    if exit_diameter_mm < uncapped_exit_diameter_mm - 1e-6:
+        status = "capped_by_target_diameter"
+    return {
+        "diameter_mm": exit_diameter_mm,
+        "uncapped_diameter_mm": uncapped_exit_diameter_mm,
+        "limit_mm": exit_limit_mm,
+        "pressure_target_kpa": target_exit_pressure_kpa,
+        "pressure_ratio": pressure_ratio,
+        "separation_ratio": pressure_factor,
+        "expansion_bias": expansion_bias,
+        "pressure_relation_label": NOZZLE_EXPANSION_LABELS[expansion_bias],
+        "exit_mach": exit_mach,
+        "expansion_ratio": expansion_ratio,
+        "status": status,
+    }
 
 
 def _calculate_geometry_sizing(
@@ -794,11 +908,73 @@ def _calculate_geometry_sizing(
         * propellant_thermal_factor
         * regen_relief
     )
-    nozzle_throat_diameter_mm = clamp(
-        inputs.chamber_diameter_mm * (0.38 + thrust_scale * 0.03),
-        10.0,
-        inputs.nozzle_diameter_mm * 0.72,
+    nozzle_manual_override_mm = inputs.nozzle_diameter_mm
+    preliminary_exit_limit_mm = clamp(
+        inputs.target_diameter_mm * 0.94,
+        max(24.0, inputs.chamber_diameter_mm * 0.32),
+        250.0,
     )
+    estimated_nozzle_chamber_pressure_kpa = clamp(
+        680.0
+        + thrust_scale * 920.0
+        + (170.0 if inputs.use_pumps else 40.0)
+        + (90.0 if inputs.regen_cooling else 0.0),
+        600.0,
+        6500.0,
+    )
+    nozzle_throat_pressure_assumption_kpa = clamp(
+        inputs.target_chamber_pressure_kpa
+        if inputs.target_chamber_pressure_kpa > 0.0
+        else estimated_nozzle_chamber_pressure_kpa,
+        600.0,
+        6500.0,
+    )
+    nozzle_throat_thrust_coefficient_assumption = clamp(
+        1.34
+        + (0.035 if inputs.use_pumps else -0.015)
+        + (0.02 if inputs.regen_cooling else 0.0)
+        - oxidizer.thermal_severity * 0.018
+        + fuel.cooling_affinity * 0.012,
+        1.18,
+        1.58,
+    )
+    throat_area_m2 = inputs.target_thrust_newtons / max(
+        1.0,
+        nozzle_throat_thrust_coefficient_assumption * nozzle_throat_pressure_assumption_kpa * 1000.0,
+    )
+    raw_nozzle_throat_diameter_mm = math.sqrt(max(1e-10, 4.0 * throat_area_m2 / math.pi)) * 1000.0
+    nozzle_throat_diameter_mm = clamp(
+        raw_nozzle_throat_diameter_mm,
+        4.0,
+        min(
+            inputs.chamber_diameter_mm * 0.62,
+            max(nozzle_manual_override_mm, preliminary_exit_limit_mm) * 0.72,
+        ),
+    )
+    nozzle_throat_sizing_method = "Choked thrust coefficient"
+    if inputs.nozzle_exit_mode == "auto":
+        auto_exit = _estimate_auto_nozzle_exit(inputs, nozzle_throat_diameter_mm, thrust_scale)
+        nozzle_exit_diameter_mm = float(auto_exit["diameter_mm"])
+        nozzle_exit_sizing_status = str(auto_exit["status"])
+        nozzle_exit_pressure_target_kpa = float(auto_exit["pressure_target_kpa"])
+        nozzle_exit_pressure_ratio = float(auto_exit["pressure_ratio"])
+        nozzle_exit_separation_ratio = float(auto_exit["separation_ratio"])
+        nozzle_expansion_bias = str(auto_exit["expansion_bias"])
+        nozzle_exit_pressure_relation_label = str(auto_exit["pressure_relation_label"])
+        nozzle_exit_diameter_limit_mm = float(auto_exit["limit_mm"])
+        nozzle_exit_uncapped_diameter_mm = float(auto_exit["uncapped_diameter_mm"])
+    else:
+        nozzle_exit_diameter_mm = nozzle_manual_override_mm
+        nozzle_exit_sizing_status = "manual_override"
+        nozzle_exit_pressure_target_kpa = 0.0
+        nozzle_exit_pressure_ratio = 0.0
+        nozzle_exit_separation_ratio = 0.0
+        nozzle_expansion_bias = inputs.nozzle_expansion_bias
+        nozzle_exit_pressure_relation_label = "manual override"
+        nozzle_exit_diameter_limit_mm = nozzle_manual_override_mm
+        nozzle_exit_uncapped_diameter_mm = nozzle_manual_override_mm
+    inputs.nozzle_diameter_mm = nozzle_exit_diameter_mm
+
     nozzle_converging_length_mm = clamp(
         inputs.chamber_diameter_mm * (0.42 + thrust_scale * 0.07),
         10.0,
@@ -936,9 +1112,23 @@ def _calculate_geometry_sizing(
         oxidizer_tank_length_mm=oxidizer_tank_length_mm,
         chamber_length_mm=chamber_length_mm,
         nozzle_throat_diameter_mm=nozzle_throat_diameter_mm,
+        nozzle_throat_sizing_method=nozzle_throat_sizing_method,
+        nozzle_throat_pressure_assumption_kpa=nozzle_throat_pressure_assumption_kpa,
+        nozzle_throat_thrust_coefficient_assumption=nozzle_throat_thrust_coefficient_assumption,
         nozzle_converging_length_mm=nozzle_converging_length_mm,
         nozzle_diverging_length_mm=nozzle_diverging_length_mm,
         nozzle_length_mm=nozzle_length_mm,
+        nozzle_exit_diameter_mm=nozzle_exit_diameter_mm,
+        nozzle_exit_mode=inputs.nozzle_exit_mode,
+        nozzle_exit_sizing_status=nozzle_exit_sizing_status,
+        nozzle_exit_pressure_target_kpa=nozzle_exit_pressure_target_kpa,
+        nozzle_exit_pressure_ratio=nozzle_exit_pressure_ratio,
+        nozzle_exit_separation_ratio=nozzle_exit_separation_ratio,
+        nozzle_expansion_bias=nozzle_expansion_bias,
+        nozzle_exit_pressure_relation_label=nozzle_exit_pressure_relation_label,
+        nozzle_exit_manual_override_mm=nozzle_manual_override_mm,
+        nozzle_exit_diameter_limit_mm=nozzle_exit_diameter_limit_mm,
+        nozzle_exit_uncapped_diameter_mm=nozzle_exit_uncapped_diameter_mm,
         nozzle_expansion_ratio=nozzle_expansion_ratio,
         nozzle_converging_angle_deg=nozzle_converging_angle_deg,
         nozzle_diverging_angle_deg=nozzle_diverging_angle_deg,
@@ -1084,11 +1274,20 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
         ]
         _add_measurement_rows(rows, values, regen_rows)
     else:
-        rows.append(MeasurementRow("Regen thermal model status", "not calculated in concept-only mode", None, ""))
-        rows.append(MeasurementRow("Regen minimum thermal margin", "0.0", 0.0, "index"))
+        rows.append(MeasurementRow("Regen thermal model status", "Not active: regenerative cooling disabled", None, ""))
+        rows.append(MeasurementRow("Regen minimum thermal margin", "N/A", None, ""))
 
     nozzle_rows = [
+        ("Nozzle throat sizing method", "nozzle_throat_sizing_method", "", "--"),
+        ("Nozzle throat pressure assumption", "nozzle_throat_pressure_assumption_kpa", "kPa", "--"),
+        ("Nozzle throat thrust coefficient", "nozzle_throat_thrust_coefficient_assumption", "", "--"),
+        ("Nozzle exit sizing mode", "nozzle_exit_mode", "", "--"),
+        ("Nozzle exit sizing status", "nozzle_exit_sizing_status", "", "--"),
+        ("Nozzle expansion setting", "nozzle_expansion_bias", "", "--"),
+        ("Nozzle pressure relation", "nozzle_exit_pressure_relation", "", "--"),
         ("Nozzle inner diameter", "nozzle_inner_diameter_mm", "mm", inputs.nozzle_diameter_mm),
+        ("Nozzle uncapped auto diameter", "nozzle_exit_uncapped_diameter_mm", "mm", "--"),
+        ("Nozzle separation pressure target", "nozzle_exit_pressure_target_kpa", "kPa", "--"),
         ("Nozzle outer diameter", "nozzle_outer_diameter_mm", "mm", inputs.nozzle_diameter_mm),
         ("Nozzle wall thickness", "nozzle_wall_thickness_mm", "mm", 0.0),
     ]
@@ -1117,6 +1316,7 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
 
     if inputs.film_cooling:
         film_rows = [
+            ("Film geometry effect", "film_geometry_effect_note", "", "--"),
             ("Film mass flow", "film_mass_flow_kg_s", "kg/s", "--"),
             ("Film slot height", "film_slot_height_mm", "mm", "--"),
             ("Film slot width", "film_slot_width_mm", "mm", "--"),
@@ -1245,7 +1445,7 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
 
     if inputs.film_cooling:
         notes.append(
-            "Film cooling enabled: the injector-side geometry reserves a perimeter flow feature in the concept rendering."
+            "Film cooling enabled: the concept geometry reserves injector-perimeter film slots, increases injector face diameter, slightly lengthens the diverging nozzle section, and applies thermal-margin relief. It does not add an external coolant jacket."
         )
 
     if not inputs.use_pumps:
@@ -1303,7 +1503,7 @@ class ConceptSolver:
         # Basic station annotator: where the concept solver already computes
         # pressures, mass flows, and nozzle geometry we promote a few human-
         # readable station fields from placeholder text to calculated strings.
-        note = "Not calculated in concept-only mode"
+        note = "Not available in concept preview"
         thermal_note = regen_thermal_note or note
 
         def fmt_kpa(v: float) -> str:
@@ -1470,9 +1670,23 @@ class ConceptSolver:
         oxidizer_tank_length_mm = geometry.oxidizer_tank_length_mm
         chamber_length_mm = geometry.chamber_length_mm
         nozzle_throat_diameter_mm = geometry.nozzle_throat_diameter_mm
+        nozzle_throat_sizing_method = geometry.nozzle_throat_sizing_method
+        nozzle_throat_pressure_assumption_kpa = geometry.nozzle_throat_pressure_assumption_kpa
+        nozzle_throat_thrust_coefficient_assumption = geometry.nozzle_throat_thrust_coefficient_assumption
         nozzle_converging_length_mm = geometry.nozzle_converging_length_mm
         nozzle_diverging_length_mm = geometry.nozzle_diverging_length_mm
         nozzle_length_mm = geometry.nozzle_length_mm
+        nozzle_exit_diameter_mm = geometry.nozzle_exit_diameter_mm
+        nozzle_exit_mode = geometry.nozzle_exit_mode
+        nozzle_exit_sizing_status = geometry.nozzle_exit_sizing_status
+        nozzle_exit_pressure_target_kpa = geometry.nozzle_exit_pressure_target_kpa
+        nozzle_exit_pressure_ratio = geometry.nozzle_exit_pressure_ratio
+        nozzle_exit_separation_ratio = geometry.nozzle_exit_separation_ratio
+        nozzle_expansion_bias = geometry.nozzle_expansion_bias
+        nozzle_exit_pressure_relation_label = geometry.nozzle_exit_pressure_relation_label
+        nozzle_exit_manual_override_mm = geometry.nozzle_exit_manual_override_mm
+        nozzle_exit_diameter_limit_mm = geometry.nozzle_exit_diameter_limit_mm
+        nozzle_exit_uncapped_diameter_mm = geometry.nozzle_exit_uncapped_diameter_mm
         nozzle_expansion_ratio = geometry.nozzle_expansion_ratio
         nozzle_converging_angle_deg = geometry.nozzle_converging_angle_deg
         nozzle_diverging_angle_deg = geometry.nozzle_diverging_angle_deg
@@ -1716,11 +1930,16 @@ class ConceptSolver:
                 ),
             )
 
-        chamber_pressure_kpa = clamp(
+        estimated_chamber_pressure_kpa = clamp(
             680.0
             + thrust_scale * 920.0
             + (170.0 if inputs.use_pumps else 40.0)
             + (90.0 if inputs.regen_cooling else 0.0),
+            600.0,
+            6500.0,
+        )
+        chamber_pressure_kpa = clamp(
+            inputs.target_chamber_pressure_kpa if inputs.target_chamber_pressure_kpa > 0.0 else estimated_chamber_pressure_kpa,
             600.0,
             6500.0,
         )
@@ -2215,10 +2434,23 @@ class ConceptSolver:
                 "electric_motor_envelope_length_mm": rounded(electric_motor_envelope_length_mm),
                 "electric_motor_envelope_height_mm": rounded(electric_motor_envelope_height_mm),
                 "electric_motor_envelope_depth_mm": rounded(electric_motor_envelope_depth_mm),
+                "nozzle_exit_mode": nozzle_exit_mode,
+                "nozzle_exit_sizing_status": nozzle_exit_sizing_status,
+                "nozzle_expansion_bias": nozzle_expansion_bias,
+                "nozzle_exit_pressure_relation": nozzle_exit_pressure_relation_label,
+                "nozzle_exit_pressure_target_kpa": rounded(nozzle_exit_pressure_target_kpa),
+                "nozzle_exit_pressure_ratio": round(nozzle_exit_pressure_ratio, 5),
+                "nozzle_exit_separation_ratio": round(nozzle_exit_separation_ratio, 3),
+                "nozzle_exit_manual_override_mm": rounded(nozzle_exit_manual_override_mm),
+                "nozzle_exit_diameter_limit_mm": rounded(nozzle_exit_diameter_limit_mm),
+                "nozzle_exit_uncapped_diameter_mm": rounded(nozzle_exit_uncapped_diameter_mm),
                 "nozzle_throat_diameter_mm": rounded(nozzle_throat_diameter_mm),
-                "nozzle_inner_diameter_mm": rounded(inputs.nozzle_diameter_mm),
+                "nozzle_throat_sizing_method": nozzle_throat_sizing_method,
+                "nozzle_throat_pressure_assumption_kpa": rounded(nozzle_throat_pressure_assumption_kpa),
+                "nozzle_throat_thrust_coefficient_assumption": round(nozzle_throat_thrust_coefficient_assumption, 4),
+                "nozzle_inner_diameter_mm": rounded(nozzle_exit_diameter_mm),
                 "nozzle_outer_diameter_mm": rounded(nozzle_regen_outer_diameter_mm),
-                "nozzle_wall_thickness_mm": rounded(max(0.0, (nozzle_regen_outer_diameter_mm - inputs.nozzle_diameter_mm) / 2.0)),
+                "nozzle_wall_thickness_mm": rounded(max(0.0, (nozzle_regen_outer_diameter_mm - nozzle_exit_diameter_mm) / 2.0)),
                 "nozzle_structural_wall_thickness_mm": rounded(nozzle_structural_wall_thickness_mm),
                 "nozzle_converging_length_mm": rounded(nozzle_converging_length_mm),
                 "nozzle_diverging_length_mm": rounded(nozzle_diverging_length_mm),
@@ -2290,6 +2522,11 @@ class ConceptSolver:
                 "film_injection_angle_deg": round(film_injection_angle_deg, 2),
                 "film_coverage_fraction": round(film_coverage_fraction, 3),
                 "film_injection_velocity_m_s": rounded(film_injection_velocity_m_s),
+                "film_geometry_effect_note": (
+                    "Injector perimeter slots, larger injector face, slightly longer diverging nozzle, thermal-margin relief"
+                    if inputs.film_cooling
+                    else "Not active"
+                ),
                 "injector_face_diameter_mm": rounded(injector_face_diameter_mm),
                 "injector_face_thickness_mm": rounded(injector_face_thickness_mm),
                 "injector_recess_diameter_mm": rounded(injector_recess_diameter_mm),

@@ -19,7 +19,11 @@ The current report documents:
 - section-based structural and thermal margin relations
 - transient pressure-fed and pump-fed feed-system behavior
 - fast vs refined quasi-1D chamber/nozzle flow modes
+- reduced-order gas, wall, and coolant heat-transfer calculations
+- Rankine-Hugoniot shock diagnostics for overexpanded nozzles
+- material stress, thermal margins, and redesign recommendations
 - live-render geometry fields used by the desktop 3D model views
+- regen rib and film-slot visualization rules used by the live 3D model
 - reconstructed collegiate benchmark cases and internal regression baselines
 
 The desktop app now exposes the same reduced-order histories in its Qt results workspace through a dedicated plots tab:
@@ -28,6 +32,10 @@ The desktop app now exposes the same reduced-order histories in its Qt results w
 - preliminary thrust and mass-flow traces
 - axial pressure / velocity field views
 - chamber-iteration convergence traces
+- Mach and area-ratio evolution
+- thermal and density field trends
+- coupled residual, feed-margin, structural-margin, and material-margin diagnostics
+- axisymmetric 2D nozzle flow-field visualization
 
 ## Regenerate the Example Assets
 

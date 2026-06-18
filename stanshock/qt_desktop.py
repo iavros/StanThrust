@@ -42,7 +42,7 @@ from stanshock.validation_pack import validate_concept_design
 
 try:
     from PyQt5.QtCore import Qt, QLineF, QPointF, QRectF, QTimer
-    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
     from PyQt5.QtWidgets import (
         QApplication,
         QButtonGroup,
@@ -107,6 +107,7 @@ QT_PALETTE = {
     "fuel": "#E1A955",
     "oxidizer": "#6DB4F2",
     "cooling": "#55C2A2",
+    "film": "#B58CFF",
 }
 
 
@@ -120,7 +121,9 @@ FIELD_HELPERS = {
     "target_diameter_mm": "Maximum allowed outside diameter.",
     "tank_diameter_mm": "Maximum tank diameter constraint.",
     "chamber_diameter_mm": "Maximum combustion chamber diameter.",
-    "nozzle_diameter_mm": "Maximum nozzle exit diameter.",
+    "nozzle_diameter_mm": "Optional manual nozzle exit override. Leave automatic sizing enabled unless you need to force a specific exit diameter.",
+    "nozzle_exit_auto": "Automatically sizes the nozzle exit from the pressure-compatible MOC expansion target and separation margin.",
+    "nozzle_expansion_bias": "Controls the automatic exit pressure target: pressure matched, underexpanded, or overexpanded.",
     "mixture_ratio": "Oxidizer to fuel mass ratio.",
     "packaging_bias": "How aggressively to prioritize compact packaging.",
     "factor_of_safety": "Extra structural margin for the engine.",
@@ -152,6 +155,24 @@ FLOW_MODEL_DISPLAY_NAMES = {
     "fast": "Fast Preview",
     "refined": "Refined Solve",
 }
+
+NOZZLE_EXPANSION_DISPLAY_NAMES = {
+    "pressure_matched": "Pressure Matched",
+    "underexpanded": "Underexpanded",
+    "overexpanded": "Overexpanded",
+}
+
+DEFAULT_SOLVER_STATION_COUNT = 60
+
+
+def _display_solver_stage(value: object, flow_model_label: object = "") -> str:
+    text = str(value or "").strip()
+    if text.startswith("stage-2-nozzle-loss-"):
+        flow_model = text.replace("stage-2-nozzle-loss-", "").strip()
+        if flow_model_label:
+            return "{0} nozzle loss model".format(str(flow_model_label))
+        return "{0} quasi-1D nozzle loss model".format(_display_option_name(flow_model))
+    return _display_option_name(text) if text else "--"
 
 
 def _display_injector_name(value: str) -> str:
@@ -616,7 +637,6 @@ class EngineeringPlotCanvas(QWidget):
             legend_x += entry_width
 
         painter.setClipRect(plot_rect.adjusted(-2, -2, 2, 2))
-        label_items: List[Dict[str, object]] = []
         for series in self._primary_series:
             color = QColor(str(series["color"]))
             pen = QPen(color, 2.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -633,19 +653,6 @@ class EngineeringPlotCanvas(QWidget):
                 for x_value, y_value in points[1:]:
                     path.lineTo(map_x(x_value), map_primary(y_value))
                 painter.drawPath(path)
-                if len(points) <= 18:
-                    painter.setBrush(QColor("#11161C"))
-                    for x_value, y_value in points:
-                        painter.drawEllipse(QPointF(map_x(x_value), map_primary(y_value)), 2.8, 2.8)
-            last_x, last_y = points[-1]
-            label_items.append(
-                {
-                    "x": map_x(last_x),
-                    "y": map_primary(last_y),
-                    "label": "{0} {1}".format(series["label"], self._format_axis_value(last_y, primary_span)),
-                    "color": color,
-                }
-            )
         for series in self._secondary_series:
             color = QColor(str(series["color"]))
             pen = QPen(color, 2.2, Qt.DashLine, Qt.RoundCap, Qt.RoundJoin)
@@ -662,36 +669,7 @@ class EngineeringPlotCanvas(QWidget):
                 for x_value, y_value in points[1:]:
                     path.lineTo(map_x(x_value), map_secondary(y_value))
                 painter.drawPath(path)
-                if len(points) <= 18:
-                    painter.setBrush(QColor("#11161C"))
-                    for x_value, y_value in points:
-                        painter.drawEllipse(QPointF(map_x(x_value), map_secondary(y_value)), 2.8, 2.8)
-            last_x, last_y = points[-1]
-            label_items.append(
-                {
-                    "x": map_x(last_x),
-                    "y": map_secondary(last_y),
-                    "label": "{0} {1}".format(series["label"], self._format_axis_value(last_y, secondary_span)),
-                    "color": color,
-                }
-            )
         painter.setClipping(False)
-
-        if plot_rect.width() > 360 and plot_rect.height() > 100:
-            painter.setFont(value_font)
-            value_metrics = QFontMetrics(value_font)
-            self._adjust_label_stack(label_items, plot_rect)
-            for item in label_items:
-                label = str(item["label"])
-                label_width = min(142, value_metrics.horizontalAdvance(label) + 14)
-                label_x = min(max(float(item["x"]) + 8.0, plot_rect.left() + 5.0), plot_rect.right() - label_width - 5.0)
-                label_y = float(item.get("label_y", item["y"]))
-                color = item["color"]
-                painter.setPen(QPen(color, 1))
-                painter.setBrush(QColor(15, 19, 24, 230))
-                painter.drawRoundedRect(QRectF(label_x, label_y, label_width, 17), 4, 4)
-                painter.setPen(QColor(QT_PALETTE["text"]))
-                painter.drawText(QRectF(label_x + 6, label_y, label_width - 10, 17), Qt.AlignLeft | Qt.AlignVCenter, label)
 
 
 class EngineeringPlotCard(QFrame):
@@ -737,6 +715,237 @@ class EngineeringPlotCard(QFrame):
             secondary_series=secondary_series or [],
             empty_message=empty_message,
         )
+
+
+class FlowFieldPlotCanvas(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMinimumHeight(330)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._axial_profile: List[Dict[str, object]] = []
+        self._variable = "mach"
+        self._variable_label = "Mach"
+        self._empty_message = "Run Solve to populate the 2D flow field."
+
+    def set_flow_data(
+        self,
+        axial_profile: List[Dict[str, object]],
+        *,
+        variable: str = "mach",
+        variable_label: str = "Mach",
+        empty_message: str = "Run Solve to populate the 2D flow field.",
+    ) -> None:
+        self._axial_profile = [
+            row for row in axial_profile
+            if _safe_float(row.get("x_mm")) is not None
+            and _safe_float(row.get("radius_mm")) is not None
+            and _safe_float(row.get(variable)) is not None
+        ]
+        self._variable = variable
+        self._variable_label = variable_label
+        self._empty_message = empty_message
+        self.update()
+
+    @staticmethod
+    def _mix_color(left: QColor, right: QColor, blend: float) -> QColor:
+        blend = max(0.0, min(1.0, blend))
+        return QColor(
+            round(left.red() + (right.red() - left.red()) * blend),
+            round(left.green() + (right.green() - left.green()) * blend),
+            round(left.blue() + (right.blue() - left.blue()) * blend),
+        )
+
+    @classmethod
+    def _field_color(cls, normalized_value: float) -> QColor:
+        stops = [
+            (0.00, QColor("#234A7A")),
+            (0.32, QColor("#2B8C7E")),
+            (0.58, QColor("#6FCF97")),
+            (0.78, QColor("#E0A94B")),
+            (1.00, QColor("#E76F51")),
+        ]
+        value = max(0.0, min(1.0, normalized_value))
+        for (left_pos, left_color), (right_pos, right_color) in zip(stops, stops[1:]):
+            if left_pos <= value <= right_pos:
+                return cls._mix_color(left_color, right_color, (value - left_pos) / max(1e-9, right_pos - left_pos))
+        return stops[-1][1]
+
+    def paintEvent(self, _event) -> None:  # pragma: no cover - GUI paint path
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        outer = self.rect().adjusted(0, 0, -1, -1)
+        painter.fillRect(outer, QColor("#11151A"))
+
+        profile = sorted(self._axial_profile, key=lambda row: float(row.get("x_mm", 0.0)))
+        if len(profile) < 2:
+            painter.setPen(QColor(QT_PALETTE["muted"]))
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.drawText(outer, Qt.AlignCenter, self._empty_message)
+            return
+
+        x_values = [float(row.get("x_mm", 0.0)) for row in profile]
+        radius_values = [max(0.1, float(row.get("radius_mm", 0.0))) for row in profile]
+        field_values = [float(row.get(self._variable, 0.0)) for row in profile]
+        x_min = min(x_values)
+        x_max = max(x_values)
+        max_radius = max(radius_values)
+        actual_field_min = min(field_values)
+        actual_field_max = max(field_values)
+        if self._variable.lower() == "mach":
+            field_min = 0.0
+            field_max = max(2.5, actual_field_max)
+        else:
+            field_min = actual_field_min
+            field_max = actual_field_max
+            if abs(field_max - field_min) < 0.15:
+                center = 0.5 * (field_min + field_max)
+                field_min = center - 0.075
+                field_max = center + 0.075
+        if abs(field_max - field_min) < 1e-9:
+            field_max = field_min + 1.0
+
+        left_margin = 62
+        right_margin = 48
+        top_margin = 54
+        bottom_margin = 42
+        plot_rect = QRectF(
+            left_margin,
+            top_margin,
+            max(120.0, outer.width() - left_margin - right_margin),
+            max(110.0, outer.height() - top_margin - bottom_margin),
+        )
+        x_span = max(1e-9, x_max - x_min)
+        y_span = max(1e-9, 2.0 * max_radius)
+        radial_scale = plot_rect.height() / y_span
+        axial_scale = min(plot_rect.width() / x_span, radial_scale * 2.15)
+        field_width = x_span * axial_scale
+        field_height = y_span * radial_scale
+        field_rect = QRectF(
+            plot_rect.left() + max(0.0, (plot_rect.width() - field_width) * 0.5),
+            plot_rect.top() + max(0.0, (plot_rect.height() - field_height) * 0.5),
+            min(plot_rect.width(), field_width),
+            min(plot_rect.height(), field_height),
+        )
+        center_y = field_rect.center().y()
+
+        def map_x(value: float) -> float:
+            return field_rect.left() + (value - x_min) * axial_scale
+
+        def map_radius(value: float) -> float:
+            return value * radial_scale
+
+        def normalize_field(value: float) -> float:
+            return max(0.0, min(1.0, (value - field_min) / max(1e-9, field_max - field_min)))
+
+        painter.setPen(QPen(QColor("#27313A"), 1))
+        painter.setBrush(QColor("#0F1318"))
+        painter.drawRoundedRect(plot_rect.adjusted(-8, -10, 8, 10), 12, 12)
+        painter.setClipRect(plot_rect)
+
+        for first, second in zip(profile, profile[1:]):
+            x0 = map_x(float(first.get("x_mm", 0.0)))
+            x1 = map_x(float(second.get("x_mm", 0.0)))
+            r0 = map_radius(max(0.1, float(first.get("radius_mm", 0.0))))
+            r1 = map_radius(max(0.1, float(second.get("radius_mm", 0.0))))
+            left_color = self._field_color(normalize_field(float(first.get(self._variable, 0.0))))
+            right_color = self._field_color(normalize_field(float(second.get(self._variable, 0.0))))
+            left_color.setAlpha(216)
+            right_color.setAlpha(216)
+            segment_gradient = QLinearGradient(x0, 0.0, x1, 0.0)
+            segment_gradient.setColorAt(0.0, left_color)
+            segment_gradient.setColorAt(1.0, right_color)
+            path = QPainterPath(QPointF(x0, center_y - r0))
+            path.lineTo(x1, center_y - r1)
+            path.lineTo(x1, center_y + r1)
+            path.lineTo(x0, center_y + r0)
+            path.closeSubpath()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(segment_gradient))
+            painter.drawPath(path)
+
+        painter.setClipping(False)
+        contour_top = QPainterPath(QPointF(map_x(x_values[0]), center_y - map_radius(radius_values[0])))
+        contour_bottom = QPainterPath(QPointF(map_x(x_values[0]), center_y + map_radius(radius_values[0])))
+        for x_value, radius in zip(x_values[1:], radius_values[1:]):
+            contour_top.lineTo(map_x(x_value), center_y - map_radius(radius))
+            contour_bottom.lineTo(map_x(x_value), center_y + map_radius(radius))
+        painter.setPen(QPen(QColor(QT_PALETTE["text"]), 1.4))
+        painter.drawPath(contour_top)
+        painter.drawPath(contour_bottom)
+
+        center_pen = QPen(QColor(QT_PALETTE["muted_soft"]), 1, Qt.DashLine)
+        center_pen.setCosmetic(True)
+        painter.setPen(center_pen)
+        painter.drawLine(QLineF(field_rect.left(), center_y, field_rect.right(), center_y))
+
+        throat_index = min(range(len(radius_values)), key=lambda index: radius_values[index])
+        throat_x = map_x(x_values[throat_index])
+        painter.setPen(QPen(QColor(QT_PALETTE["accent_hover"]), 1.4, Qt.DashLine))
+        painter.drawLine(QLineF(throat_x, field_rect.top(), throat_x, field_rect.bottom()))
+
+        label_font = QFont("Segoe UI", 8)
+        bold_font = QFont("Segoe UI", 8, QFont.Bold)
+        painter.setFont(bold_font)
+        painter.setPen(QColor(QT_PALETTE["text"]))
+        painter.drawText(QRectF(plot_rect.left(), 10, plot_rect.width(), 18), Qt.AlignLeft | Qt.AlignVCenter, self._variable_label)
+        painter.setFont(label_font)
+        painter.setPen(QColor(QT_PALETTE["muted"]))
+        painter.drawText(QRectF(field_rect.left(), outer.bottom() - 26, field_rect.width(), 18), Qt.AlignHCenter, "Axial position (mm)")
+        painter.drawText(QRectF(6, plot_rect.top(), left_margin - 14, plot_rect.height()), Qt.AlignRight | Qt.AlignVCenter, "Radius")
+        painter.drawText(QRectF(throat_x + 6, field_rect.top() + 6, 96, 18), Qt.AlignLeft | Qt.AlignVCenter, "Throat")
+
+        legend_width = min(180.0, max(120.0, field_rect.width() * 0.28))
+        legend_height = 10.0
+        legend_x = field_rect.right() - legend_width
+        legend_y = max(26.0, plot_rect.top() - 34.0)
+        legend_gradient = QLinearGradient(legend_x, legend_y, legend_x + legend_width, legend_y)
+        for stop in (0.0, 0.25, 0.50, 0.75, 1.0):
+            legend_gradient.setColorAt(stop, self._field_color(stop))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(legend_gradient))
+        painter.drawRect(QRectF(legend_x, legend_y, legend_width, legend_height))
+        painter.setPen(QColor(QT_PALETTE["muted"]))
+        painter.drawRect(QRectF(legend_x, legend_y, legend_width, legend_height))
+        painter.setFont(label_font)
+        painter.drawText(QRectF(legend_x - 74, legend_y - 3, 66, 16), Qt.AlignRight | Qt.AlignVCenter, self._variable_label)
+        painter.drawText(QRectF(legend_x, legend_y + 12, 68, 16), Qt.AlignLeft | Qt.AlignVCenter, _format_number(field_min, 2))
+        painter.drawText(QRectF(legend_x + legend_width - 68, legend_y + 12, 68, 16), Qt.AlignRight | Qt.AlignVCenter, _format_number(field_max, 2))
+
+
+class FlowFieldPlotCard(QFrame):
+    def __init__(self, title: str, subtitle: str) -> None:
+        super().__init__()
+        self.setObjectName("card")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        title_label = QLabel(title)
+        title_label.setObjectName("sectionTitle")
+        layout.addWidget(title_label)
+        self.subtitle_label = QLabel(subtitle)
+        self.subtitle_label.setObjectName("sectionBody")
+        self.subtitle_label.setWordWrap(True)
+        layout.addWidget(self.subtitle_label)
+        self.canvas = FlowFieldPlotCanvas()
+        layout.addWidget(self.canvas, 1)
+        self.note_label = QLabel("")
+        self.note_label.setObjectName("sectionBody")
+        self.note_label.setWordWrap(True)
+        layout.addWidget(self.note_label)
+
+    def set_flow_data(
+        self,
+        *,
+        subtitle: str,
+        axial_profile: List[Dict[str, object]],
+        variable: str = "mach",
+        variable_label: str = "Mach",
+        note: str = "",
+    ) -> None:
+        self.subtitle_label.setText(subtitle)
+        self.note_label.setText(note)
+        self.canvas.set_flow_data(axial_profile, variable=variable, variable_label=variable_label)
 
 
 class SchematicView(QGraphicsView):
@@ -896,7 +1105,7 @@ class SchematicView(QGraphicsView):
         )
 
         cooling_text = "Regen cooling active" if design.inputs.regen_cooling else "Film cooling active" if design.inputs.film_cooling else "No active cooling"
-        cooling_color = QT_PALETTE["cooling"] if design.inputs.regen_cooling else QT_PALETTE["accent_hover"] if design.inputs.film_cooling else QT_PALETTE["muted"]
+        cooling_color = QT_PALETTE["cooling"] if design.inputs.regen_cooling else QT_PALETTE["film"] if design.inputs.film_cooling else QT_PALETTE["muted"]
         self._add_metric_pill(scene, 852, 146, cooling_text, cooling_color, 176)
 
         profile = self._draw_engine_profile(scene, design, 560, 244, 408, 150)
@@ -950,7 +1159,7 @@ class SchematicView(QGraphicsView):
             )
             scene.addPath(cooling_path, cooling_pen)
         elif design.inputs.film_cooling:
-            film_pen = QPen(QColor(QT_PALETTE["accent_hover"]), 2, Qt.DashLine, Qt.RoundCap)
+            film_pen = QPen(QColor(QT_PALETTE["film"]), 2, Qt.DashLine, Qt.RoundCap)
             scene.addLine(profile["injector_x"] + 8, profile["center_y"] - 22, profile["injector_x"] + 44, profile["center_y"] - 8, film_pen)
 
         self._add_metric_pill(
@@ -1324,6 +1533,10 @@ class Model3DView(QGraphicsView):
                 ring.append((x_mm - max_x * 0.5, radius_mm * math.cos(theta), radius_mm * math.sin(theta)))
             rings.append(ring)
         self._draw_ring_mesh(scene, rings, origin, scale, "#AA2735", "#E16A76", cap_ends=True)
+        if design.inputs.regen_cooling:
+            self._draw_regen_rib_mesh(scene, profile, origin, scale, max_x, phase, values)
+        if design.inputs.film_cooling:
+            self._draw_film_cooling_mesh(scene, profile, origin, scale, max_x, phase, values, chamber_length)
 
         throat_diameter = _format_number(values.get("nozzle_throat_diameter_mm", "--"), 2)
         exit_diameter = _format_number(values.get("nozzle_inner_diameter_mm", design.inputs.nozzle_diameter_mm), 2)
@@ -1344,8 +1557,240 @@ class Model3DView(QGraphicsView):
         self._metric(scene, 790, 166, "Throat", f"{throat_diameter} mm")
         self._metric(scene, 790, 228, "Exit", f"{exit_diameter} mm")
         self._metric(scene, 790, 290, "Contour", contour)
-        cooling = "Regen" if design.inputs.regen_cooling else "Film" if design.inputs.film_cooling else "Passive"
+        cooling = (
+            "Regen + Film"
+            if design.inputs.regen_cooling and design.inputs.film_cooling
+            else "Regen"
+            if design.inputs.regen_cooling
+            else "Film"
+            if design.inputs.film_cooling
+            else "Passive"
+        )
         self._metric(scene, 790, 352, "Cooling", cooling)
+        if design.inputs.regen_cooling:
+            self._metric(
+                scene,
+                790,
+                414,
+                "Channels",
+                "{0} / rib {1} mm".format(
+                    int(round(_safe_float(values.get("regen_channel_count"), 0.0) or 0.0)),
+                    _format_number(values.get("regen_rib_thickness_mm", "--"), 2),
+                ),
+            )
+            if design.inputs.film_cooling:
+                self._metric(
+                    scene,
+                    790,
+                    476,
+                    "Film Slots",
+                    "{0} / {1} mm".format(
+                        int(round(_safe_float(values.get("film_slot_count"), 0.0) or 0.0)),
+                        _format_number(values.get("film_slot_height_mm", "--"), 2),
+                    ),
+                )
+        elif design.inputs.film_cooling:
+            self._metric(
+                scene,
+                790,
+                414,
+                "Film Slots",
+                "{0} / {1} mm".format(
+                    int(round(_safe_float(values.get("film_slot_count"), 0.0) or 0.0)),
+                    _format_number(values.get("film_slot_height_mm", "--"), 2),
+                ),
+            )
+
+    def _draw_regen_rib_mesh(
+        self,
+        scene: QGraphicsScene,
+        profile: List[Tuple[float, float]],
+        origin: Tuple[float, float],
+        scale: float,
+        max_x: float,
+        phase: float,
+        values: Dict[str, object],
+    ) -> None:
+        channel_count = max(0, int(round(_safe_float(values.get("regen_channel_count"), 0.0) or 0.0)))
+        if channel_count <= 0 or len(profile) < 2:
+            return
+        display_count = max(1, min(96, channel_count))
+        rib_height = max(0.2, _safe_float(values.get("regen_rib_height_mm"), 1.0) or 1.0)
+        rib_thickness = max(0.4, _safe_float(values.get("regen_rib_thickness_mm"), 1.0) or 1.0)
+        channel_depth = max(0.2, _safe_float(values.get("regen_channel_depth_mm"), 1.0) or 1.0)
+        angle_span = math.radians(215.0)
+        start_angle = phase - angle_span * 0.5
+
+        for rib_index in range(display_count):
+            theta = start_angle + angle_span * rib_index / max(1, display_count - 1)
+            path = QPainterPath()
+            first_point = True
+            depth_values: List[float] = []
+            for x_mm, radius_mm in profile:
+                display_radius = radius_mm + rib_height * 0.55
+                projected = self._project(
+                    x_mm - max_x * 0.5,
+                    display_radius * math.cos(theta),
+                    display_radius * math.sin(theta),
+                    origin,
+                    scale,
+                )
+                if first_point:
+                    path.moveTo(projected[0], projected[1])
+                    first_point = False
+                else:
+                    path.lineTo(projected[0], projected[1])
+                depth_values.append(projected[2])
+
+            mean_depth = sum(depth_values) / max(1, len(depth_values))
+            alpha = 235 if mean_depth > 0.0 else 110
+            rib_color = QColor(QT_PALETTE["cooling"])
+            rib_color.setAlpha(alpha)
+            pen = QPen(rib_color, max(1.2, rib_thickness * scale * 0.55), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            pen.setCosmetic(True)
+            scene.addPath(path, pen)
+
+        label_point = self._project(
+            profile[min(len(profile) - 1, max(1, len(profile) // 3))][0] - max_x * 0.5,
+            (profile[min(len(profile) - 1, max(1, len(profile) // 3))][1] + channel_depth) * 0.76,
+            (profile[min(len(profile) - 1, max(1, len(profile) // 3))][1] + channel_depth) * 0.65,
+            origin,
+            scale,
+        )
+        self._draw_callout(
+            scene,
+            (label_point[0], label_point[1]),
+            (120.0, 144.0),
+            "Regen ribs {0}x".format(channel_count),
+            QT_PALETTE["cooling"],
+        )
+
+    def _draw_film_cooling_mesh(
+        self,
+        scene: QGraphicsScene,
+        profile: List[Tuple[float, float]],
+        origin: Tuple[float, float],
+        scale: float,
+        max_x: float,
+        phase: float,
+        values: Dict[str, object],
+        chamber_length: float,
+    ) -> None:
+        slot_count = max(0, int(round(_safe_float(values.get("film_slot_count"), 0.0) or 0.0)))
+        if slot_count <= 0 or len(profile) < 2:
+            return
+
+        slot_height = max(0.1, _safe_float(values.get("film_slot_height_mm"), 0.5) or 0.5)
+        chamber_wall = max(0.0, _safe_float(values.get("chamber_wall_thickness_mm"), 0.0) or 0.0)
+        chamber_inner_radius = max(
+            0.35,
+            (_safe_float(values.get("chamber_inner_diameter_mm"), 0.0) or max(profile[0][1] - chamber_wall, 0.35))
+            * 0.5,
+        )
+
+        inlet_x = profile[0][0] - max_x * 0.5
+        inlet_radius = chamber_inner_radius
+        slot_total_width = max(0.1, _safe_float(values.get("film_slot_width_mm"), 1.0) or 1.0)
+        displayed_slot_count = max(1, min(96, slot_count))
+        slot_arc_length = slot_total_width / max(1, slot_count)
+        slot_angle = min(
+            2.0 * math.pi / max(1, displayed_slot_count) * 0.44,
+            max(math.radians(0.65), slot_arc_length / max(0.1, inlet_radius)),
+        )
+        slot_radius = max(0.25, inlet_radius - slot_height * 0.42)
+        slot_width_px = max(1.2, slot_height * scale * 0.95)
+
+        for slot_index in range(displayed_slot_count):
+            theta_center = phase + 2.0 * math.pi * slot_index / max(1, displayed_slot_count)
+            if math.sin(theta_center) < -0.22:
+                continue
+            slot_path = QPainterPath()
+            depth_values: List[float] = []
+            for sample_index in range(4):
+                sample = sample_index / 3.0
+                theta = theta_center - slot_angle * 0.5 + slot_angle * sample
+                point = self._project(
+                    inlet_x,
+                    slot_radius * math.cos(theta),
+                    slot_radius * math.sin(theta),
+                    origin,
+                    scale,
+                )
+                if sample_index == 0:
+                    slot_path.moveTo(point[0], point[1])
+                else:
+                    slot_path.lineTo(point[0], point[1])
+                depth_values.append(point[2])
+            mean_depth = sum(depth_values) / max(1, len(depth_values))
+            slot_color = QColor(QT_PALETTE["film"])
+            slot_color.setAlpha(245 if mean_depth > 0.0 else 55)
+            slot_pen = QPen(slot_color, slot_width_px, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            slot_pen.setCosmetic(True)
+            scene.addPath(slot_path, slot_pen)
+
+        ring_color = QColor(QT_PALETTE["film"])
+        ring_color.setAlpha(115)
+        ring_pen = QPen(
+            ring_color,
+            max(0.8, slot_height * scale * 0.28),
+            Qt.DashLine,
+            Qt.RoundCap,
+            Qt.RoundJoin,
+        )
+        ring_pen.setCosmetic(True)
+        for radius_offset in (slot_height * 0.15, slot_height * 1.05):
+            ring_radius = max(0.2, inlet_radius - radius_offset)
+            ring_path = QPainterPath()
+            for sample_index in range(49):
+                theta = phase + 2.0 * math.pi * sample_index / 48.0
+                point = self._project(
+                    inlet_x,
+                    ring_radius * math.cos(theta),
+                    ring_radius * math.sin(theta),
+                    origin,
+                    scale,
+                )
+                if sample_index == 0:
+                    ring_path.moveTo(point[0], point[1])
+                else:
+                    ring_path.lineTo(point[0], point[1])
+            scene.addPath(ring_path, ring_pen)
+
+        tick_color = QColor(QT_PALETTE["film"])
+        tick_color.setAlpha(170)
+        tick_pen = QPen(
+            tick_color,
+            max(0.9, slot_height * scale * 0.32),
+            Qt.SolidLine,
+            Qt.RoundCap,
+            Qt.RoundJoin,
+        )
+        tick_pen.setCosmetic(True)
+        visible_ticks = min(10, displayed_slot_count)
+        tick_length = min(max(4.0, chamber_length * 0.035), max(4.0, slot_height * 8.0))
+        for tick_index in range(visible_ticks):
+            theta = phase + 2.0 * math.pi * tick_index / max(1, visible_ticks)
+            if math.sin(theta) < -0.2:
+                continue
+            start_point = self._project(
+                inlet_x,
+                slot_radius * math.cos(theta),
+                slot_radius * math.sin(theta),
+                origin,
+                scale,
+            )
+            end_radius = max(0.2, slot_radius - slot_height * 0.45)
+            end_point = self._project(
+                inlet_x + tick_length,
+                end_radius * math.cos(theta),
+                end_radius * math.sin(theta),
+                origin,
+                scale,
+            )
+            path = QPainterPath()
+            path.moveTo(start_point[0], start_point[1])
+            path.lineTo(end_point[0], end_point[1])
+            scene.addPath(path, tick_pen)
 
     def _draw_tanks(self, scene: QGraphicsScene, design) -> None:
         self._component_title(
@@ -2261,6 +2706,7 @@ class StanThrustQtWindow(QMainWindow):
         self.control_sections: Dict[str, QWidget] = {}
         self.control_nav_buttons: Dict[str, QPushButton] = {}
         self.plot_cards: Dict[str, EngineeringPlotCard] = {}
+        self.flow_field_card: Optional[FlowFieldPlotCard] = None
         self.output_tabs: Optional[QTabWidget] = None
         self.summary_text: Optional[QPlainTextEdit] = None
         self.metadata_text: Optional[QPlainTextEdit] = None
@@ -2924,13 +3370,23 @@ class StanThrustQtWindow(QMainWindow):
         definitions = (
             ("pressure_transient", "Burn Transient Pressure", "Chamber, required feed, and supply-side pressure history."),
             ("performance_transient", "Burn Performance", "Estimated thrust trace and propellant flow over the burn."),
+            ("feed_margins", "Feed Margins", "Fuel and oxidizer pressure margin through the burn."),
             ("axial_field", "Axial Flow Field", "Pressure and velocity progression along the engine axis."),
+            ("mach_area", "Mach And Area", "Mach number and area ratio from the solved nozzle contour."),
+            ("thermal_density", "Thermal Field", "Static temperature and density along the quasi-1D flow path."),
             ("convergence", "Solver Convergence", "Chamber iteration pressure and relative error."),
+            ("coupled_margins", "Coupled Margins", "Feed margin, structural margin, and pressure residual by coupled iteration."),
         )
         for index, (key, label, subtitle) in enumerate(definitions):
             card = EngineeringPlotCard(label, subtitle)
             self.plot_cards[key] = card
             grid.addWidget(card, index // 2, index % 2)
+
+        self.flow_field_card = FlowFieldPlotCard(
+            "2D Nozzle Flow Field",
+            "Mach-colored axisymmetric flow preview from the solved nozzle contour.",
+        )
+        grid.addWidget(self.flow_field_card, (len(definitions) + 1) // 2, 0, 1, 2)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3061,10 +3517,18 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["tank_diameter_mm"] = self._spin(10.0, 5000.0, 1.0, 1, " mm")
         self.widgets["chamber_diameter_mm"] = self._spin(10.0, 5000.0, 1.0, 1, " mm")
         self.widgets["nozzle_diameter_mm"] = self._spin(10.0, 5000.0, 1.0, 1, " mm")
+        self.widgets["nozzle_exit_auto"] = QCheckBox("Auto-size nozzle exit")
+        self.widgets["nozzle_exit_auto"].toggled.connect(self._on_nozzle_exit_auto_changed)
+        self.widgets["nozzle_expansion_bias"] = self._combo(
+            ("pressure_matched", "underexpanded", "overexpanded"),
+            NOZZLE_EXPANSION_DISPLAY_NAMES,
+        )
         self._add_form_row(form, "Target Diameter (mm)", self.widgets["target_diameter_mm"], FIELD_HELPERS["target_diameter_mm"])
         self._add_form_row(form, "Tank Diameter (mm)", self.widgets["tank_diameter_mm"], FIELD_HELPERS["tank_diameter_mm"])
         self._add_form_row(form, "Chamber Diameter (mm)", self.widgets["chamber_diameter_mm"], FIELD_HELPERS["chamber_diameter_mm"])
-        self._add_form_row(form, "Nozzle Exit Diameter (mm)", self.widgets["nozzle_diameter_mm"], FIELD_HELPERS["nozzle_diameter_mm"])
+        self._add_form_row(form, "Nozzle Exit Sizing", self.widgets["nozzle_exit_auto"], FIELD_HELPERS["nozzle_exit_auto"])
+        self._add_form_row(form, "Nozzle Expansion", self.widgets["nozzle_expansion_bias"], FIELD_HELPERS["nozzle_expansion_bias"])
+        self._add_form_row(form, "Manual Exit Diameter (mm)", self.widgets["nozzle_diameter_mm"], FIELD_HELPERS["nozzle_diameter_mm"])
         group.layout().addLayout(form)
         layout.addWidget(group)
         layout.addStretch(1)
@@ -3258,6 +3722,26 @@ class StanThrustQtWindow(QMainWindow):
         label.setWordWrap(True)
         return label
 
+    def _set_nozzle_exit_auto(self, enabled: bool) -> None:
+        auto_box = self.widgets.get("nozzle_exit_auto")
+        diameter_box = self.widgets.get("nozzle_diameter_mm")
+        expansion_box = self.widgets.get("nozzle_expansion_bias")
+        if isinstance(auto_box, QCheckBox):
+            auto_box.setChecked(bool(enabled))
+        if isinstance(diameter_box, QDoubleSpinBox):
+            diameter_box.setEnabled(not bool(enabled))
+        if isinstance(expansion_box, QComboBox):
+            expansion_box.setEnabled(bool(enabled))
+
+    def _on_nozzle_exit_auto_changed(self, checked: bool) -> None:
+        diameter_box = self.widgets.get("nozzle_diameter_mm")
+        expansion_box = self.widgets.get("nozzle_expansion_bias")
+        if isinstance(diameter_box, QDoubleSpinBox):
+            diameter_box.setEnabled(not bool(checked))
+        if isinstance(expansion_box, QComboBox):
+            expansion_box.setEnabled(bool(checked))
+        self._on_preview_change()
+
     def _scroll_to_control_section(self, section_key: str) -> None:
         if self.control_scroll_area is None:
             return
@@ -3306,6 +3790,8 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["tank_diameter_mm"].setValue(DEFAULT_STATE.tank_diameter_mm)
         self.widgets["chamber_diameter_mm"].setValue(DEFAULT_STATE.chamber_diameter_mm)
         self.widgets["nozzle_diameter_mm"].setValue(DEFAULT_STATE.nozzle_diameter_mm)
+        self._set_combo_value(self.widgets["nozzle_expansion_bias"], DEFAULT_STATE.nozzle_expansion_bias)
+        self._set_nozzle_exit_auto(DEFAULT_STATE.nozzle_exit_mode == "auto")
         self.widgets["mixture_ratio"].setValue(DEFAULT_STATE.mixture_ratio)
         self._set_combo_value(self.widgets["packaging_bias"], DEFAULT_STATE.packaging_bias)
         self.widgets["feed_mode_pump"].setChecked(DEFAULT_STATE.use_pumps)
@@ -3327,7 +3813,7 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["use_multi_fidelity"].setChecked(False)
         self.widgets["show_uncertainty"].setChecked(False)
         self.widgets["solver_flow_model"].setCurrentIndex(0)
-        self.widgets["solver_station_count"].setValue(25)
+        self.widgets["solver_station_count"].setValue(DEFAULT_SOLVER_STATION_COUNT)
         self.widgets["solver_convergence_tolerance"].setValue(0.005)
         self.widgets["solver_iteration_limit"].setValue(50)
         self.current_ga_result = None
@@ -3352,6 +3838,8 @@ class StanThrustQtWindow(QMainWindow):
             "tank_diameter_mm": float(self.widgets["tank_diameter_mm"].value()),
             "chamber_diameter_mm": float(self.widgets["chamber_diameter_mm"].value()),
             "nozzle_diameter_mm": float(self.widgets["nozzle_diameter_mm"].value()),
+            "nozzle_exit_mode": "auto" if self.widgets["nozzle_exit_auto"].isChecked() else "manual",
+            "nozzle_expansion_bias": self._combo_value(self.widgets["nozzle_expansion_bias"]),
             "factor_of_safety": float(self.widgets["factor_of_safety"].value()),
             "fuel_tank_material": self._combo_value(self.widgets["fuel_tank_material"]),
             "oxidizer_tank_material": self._combo_value(self.widgets["oxidizer_tank_material"]),
@@ -3521,11 +4009,12 @@ class StanThrustQtWindow(QMainWindow):
         payload = dict(self.current_coupled_cycle_result.get("payload", {}))
         convergence = dict(payload.get("convergence", {}))
         self.solver_residual_label.setText(
-            "Pc residual {0} kPa | thrust error {1}% | feed margin {2} kPa | structural margin {3}x".format(
+            "Pc residual {0} kPa | thrust error {1}% | feed {2} kPa | stress {3}x | material {4}x".format(
                 _format_number(convergence.get("final_residual_kpa", "--"), 3),
                 _format_number((_safe_float(convergence.get("thrust_error_fraction"), 0.0) or 0.0) * 100.0, 3),
                 _format_number(convergence.get("minimum_feed_margin_kpa", "--"), 3),
                 _format_number(convergence.get("minimum_structural_margin_ratio", "--"), 3),
+                _format_number(convergence.get("minimum_combined_material_margin_ratio", "--"), 3),
             )
         )
 
@@ -3593,6 +4082,12 @@ class StanThrustQtWindow(QMainWindow):
                 primary_series=[],
                 note="The plots tab uses transient feed history, axial station fields, and convergence traces from the solver.",
             )
+        if self.flow_field_card is not None:
+            self.flow_field_card.set_flow_data(
+                subtitle="Run Solve to generate a Mach-colored nozzle flow preview.",
+                axial_profile=[],
+                note="The 2D field uses the same solved axial stations as the line plots.",
+            )
 
     def _pressure_plot_series(self, time_history: list) -> list:
         if not time_history:
@@ -3657,6 +4152,22 @@ class StanThrustQtWindow(QMainWindow):
         ]
         return thrust_series, mass_flow_series
 
+    def _feed_margin_plot_series(self, time_history: list) -> list:
+        if not time_history:
+            return []
+        return [
+            {
+                "label": "Fuel margin",
+                "color": QT_PALETTE["fuel"],
+                "points": [(row.get("time_s"), row.get("fuel_margin_kpa")) for row in time_history],
+            },
+            {
+                "label": "Ox margin",
+                "color": QT_PALETTE["oxidizer"],
+                "points": [(row.get("time_s"), row.get("oxidizer_margin_kpa")) for row in time_history],
+            },
+        ]
+
     def _axial_plot_series(self, axial_profile: list) -> Tuple[list, list]:
         if not axial_profile:
             return [], []
@@ -3676,6 +4187,44 @@ class StanThrustQtWindow(QMainWindow):
             }
         ]
         return pressure_series, velocity_series
+
+    def _mach_area_plot_series(self, axial_profile: list) -> Tuple[list, list]:
+        if not axial_profile:
+            return [], []
+        mach_series = [
+            {
+                "label": "Mach",
+                "color": QT_PALETTE["accent_hover"],
+                "points": [(row.get("x_mm"), row.get("mach")) for row in axial_profile],
+            }
+        ]
+        area_series = [
+            {
+                "label": "Area ratio",
+                "color": QT_PALETTE["warning"],
+                "points": [(row.get("x_mm"), row.get("area_ratio")) for row in axial_profile],
+            }
+        ]
+        return mach_series, area_series
+
+    def _thermal_density_plot_series(self, axial_profile: list) -> Tuple[list, list]:
+        if not axial_profile:
+            return [], []
+        temperature_series = [
+            {
+                "label": "Temperature",
+                "color": QT_PALETTE["danger"],
+                "points": [(row.get("x_mm"), row.get("temperature_k")) for row in axial_profile],
+            }
+        ]
+        density_series = [
+            {
+                "label": "Density",
+                "color": QT_PALETTE["oxidizer"],
+                "points": [(row.get("x_mm"), row.get("density_kg_m3")) for row in axial_profile],
+            }
+        ]
+        return temperature_series, density_series
 
     def _convergence_plot_series(self, iteration_trace: list) -> Tuple[list, list]:
         if not iteration_trace:
@@ -3710,6 +4259,30 @@ class StanThrustQtWindow(QMainWindow):
         ]
         return pressure_series, error_series
 
+    def _coupled_margin_plot_series(self, iteration_trace: list) -> Tuple[list, list]:
+        if not iteration_trace:
+            return [], []
+        pressure_series = [
+            {
+                "label": "Residual",
+                "color": QT_PALETTE["warning"],
+                "points": [(row.get("iteration"), row.get("residual_kpa")) for row in iteration_trace],
+            },
+            {
+                "label": "Feed margin",
+                "color": QT_PALETTE["accent_hover"],
+                "points": [(row.get("iteration"), row.get("minimum_feed_margin_kpa")) for row in iteration_trace],
+            },
+        ]
+        structural_series = [
+            {
+                "label": "Structural margin",
+                "color": QT_PALETTE["success"],
+                "points": [(row.get("iteration"), row.get("minimum_structural_margin_ratio")) for row in iteration_trace],
+            }
+        ]
+        return pressure_series, structural_series
+
     def _render_plots(self) -> None:
         if not self.plot_cards:
             return
@@ -3743,8 +4316,12 @@ class StanThrustQtWindow(QMainWindow):
 
         pressure_primary = self._pressure_plot_series(time_history)
         performance_primary, performance_secondary = self._performance_plot_series(time_history, predicted_thrust)
+        feed_margin_primary = self._feed_margin_plot_series(time_history)
         axial_primary, axial_secondary = self._axial_plot_series(axial_profile)
+        mach_primary, mach_secondary = self._mach_area_plot_series(axial_profile)
+        thermal_primary, thermal_secondary = self._thermal_density_plot_series(axial_profile)
         convergence_primary, convergence_secondary = self._convergence_plot_series(iteration_trace)
+        coupled_primary, coupled_secondary = self._coupled_margin_plot_series(iteration_trace)
 
         flow_model_label = str(combustion_metadata.get("flow_model_label", combustion_summary.get("flow_model_label", "Current solve")))
         architecture_label = "Pump-fed" if bool(self.current_design.inputs.use_pumps) else "Pressure-fed"
@@ -3766,6 +4343,13 @@ class StanThrustQtWindow(QMainWindow):
             secondary_series=performance_secondary,
             note="This thrust trace is preliminary: it scales the converged steady-state thrust by the transient flow-scale history rather than running a full time-marching combustion solve.",
         )
+        self.plot_cards["feed_margins"].set_plot_data(
+            subtitle="Pressure margin available to each propellant path across the burn.",
+            x_label="Time (s)",
+            primary_label="Margin (kPa)",
+            primary_series=feed_margin_primary,
+            note="Positive margin indicates the feed path can still support the requested chamber and injector pressure at that time step.",
+        )
         self.plot_cards["axial_field"].set_plot_data(
             subtitle="{0} axial station field from the reduced-order combustion path.".format(flow_model_label),
             x_label="Axial position (mm)",
@@ -3774,6 +4358,24 @@ class StanThrustQtWindow(QMainWindow):
             secondary_label="Velocity (m/s)",
             secondary_series=axial_secondary,
             note="Axial station fields come from the same quasi-1D solver used for the measurements and diagnostics tabs.",
+        )
+        self.plot_cards["mach_area"].set_plot_data(
+            subtitle="Mach solution and local area ratio along the solved chamber, throat, and nozzle contour.",
+            x_label="Axial position (mm)",
+            primary_label="Mach",
+            primary_series=mach_primary,
+            secondary_label="Area ratio",
+            secondary_series=mach_secondary,
+            note="This view is useful for checking that the flow chokes at the throat and expands through the bell section.",
+        )
+        self.plot_cards["thermal_density"].set_plot_data(
+            subtitle="Static temperature and density derived from the same area-Mach profile.",
+            x_label="Axial position (mm)",
+            primary_label="Temperature (K)",
+            primary_series=thermal_primary,
+            secondary_label="Density (kg/m3)",
+            secondary_series=thermal_secondary,
+            note="Temperature and density are reduced-order isentropic station values, useful for trend checks and solver sanity checks.",
         )
         self.plot_cards["convergence"].set_plot_data(
             subtitle="Chamber-pressure iteration trace and relative thrust error.",
@@ -3784,6 +4386,23 @@ class StanThrustQtWindow(QMainWindow):
             secondary_series=convergence_secondary,
             note="Use this view to see whether the current solver resolution converged cleanly or simply stopped at the iteration limit.",
         )
+        self.plot_cards["coupled_margins"].set_plot_data(
+            subtitle="Coupled-cycle residual, feed margin, and structural margin by iteration.",
+            x_label="Iteration",
+            primary_label="Pressure (kPa)",
+            primary_series=coupled_primary,
+            secondary_label="Structural margin (x)",
+            secondary_series=coupled_secondary,
+            note="Residual should trend downward while feed and structural margins remain acceptable.",
+        )
+        if self.flow_field_card is not None:
+            self.flow_field_card.set_flow_data(
+                subtitle="Mach-colored 2D flow preview from the calculated nozzle wall radius and axial station solve.",
+                axial_profile=axial_profile,
+                variable="mach",
+                variable_label="Mach field",
+                note="The field is an axisymmetric quasi-1D visualization, not a CFD mesh.",
+            )
 
     def _render_measurements(self) -> None:
         if self.current_design is None:
@@ -3800,18 +4419,79 @@ class StanThrustQtWindow(QMainWindow):
             summary = dict(self.current_combustion_result.get("summary", {}))
             metadata = dict(self.current_combustion_result.get("metadata", {}))
             thermo = dict(metadata.get("thermochemistry", {}))
+            stage_label = str(
+                metadata.get(
+                    "solver_stage_label",
+                    _display_solver_stage(
+                        metadata.get("solver_stage", "--"),
+                        metadata.get("flow_model_label", summary.get("flow_model_label", "")),
+                    ),
+                )
+            )
             cfd_rows = (
                 ("CFD Status", self.current_combustion_result.get("status", "unknown")),
-                ("CFD Stage", metadata.get("solver_stage", "--")),
+                ("CFD Stage", stage_label),
                 ("Thermochemistry", "{0} ({1})".format(thermo.get("provider", "--"), thermo.get("status", "--"))),
                 ("CFD Thrust", "{0} N".format(_format_number(summary.get("predicted_thrust_newtons", "--"), 2))),
                 ("CFD Impulse", "{0} N*s".format(_format_number(summary.get("predicted_impulse_newton_seconds", "--"), 2))),
                 ("CFD Isp", "{0} s".format(_format_number(summary.get("predicted_isp_seconds", "--"), 3))),
                 ("CFD Chamber Pressure", "{0} kPa".format(_format_number(summary.get("chamber_pressure_kpa", "--"), 3))),
+                ("Heat Transfer", str(summary.get("heat_transfer_status", "--"))),
+                ("Heat Load", "{0} kW".format(_format_number(summary.get("heat_load_kw", "--"), 3))),
+                ("Max Hot Wall", "{0} K".format(_format_number(summary.get("max_hot_wall_temperature_k", "--"), 2))),
+                ("Coolant Outlet", "{0} K".format(_format_number(summary.get("coolant_outlet_temperature_k", "--"), 2))),
+                ("Nozzle Shock Regime", "{0} ({1})".format(summary.get("shock_regime", "--"), summary.get("shock_status", "--"))),
             )
             for label, value in cfd_rows:
                 for table_name in ("All", "CFD", "Overall"):
                     self._append_measurement_row(self.measurement_tables[table_name], label, value)
+
+        if isinstance(self.current_structural_result, dict):
+            structural_payload = dict(self.current_structural_result.get("payload", {}))
+            structural_summary = dict(structural_payload.get("summary", {}))
+            material_rows = [
+                (
+                    "Minimum Stress Margin",
+                    "{0} x".format(_format_number(structural_summary.get("minimum_stress_margin_ratio", "--"), 3)),
+                ),
+                (
+                    "Minimum Heat Margin",
+                    "{0} x".format(_format_number(structural_summary.get("minimum_heat_transfer_margin_ratio", "--"), 3)),
+                ),
+                (
+                    "Minimum Material Margin",
+                    "{0} x".format(_format_number(structural_summary.get("minimum_combined_margin_ratio", "--"), 3)),
+                ),
+                (
+                    "Material Redesigns",
+                    str(structural_summary.get("redesign_recommendation_count", 0)),
+                ),
+            ]
+            for label, value in material_rows:
+                for table_name in ("All", "Cooling", "Overall"):
+                    self._append_measurement_row(self.measurement_tables[table_name], label, value)
+            for row in list(structural_payload.get("section_property_rows", [])):
+                if not isinstance(row, dict):
+                    continue
+                section_name = str(row.get("section", "")).replace("_", " ").title()
+                fields = dict(row.get("fields", {}))
+                recommendation_rows = [
+                    (
+                        "{0} Material Status".format(section_name),
+                        str(dict(fields.get("redesign_status", {})).get("status", "--")),
+                    ),
+                    (
+                        "{0} Recommended Material".format(section_name),
+                        str(dict(fields.get("recommended_material", {})).get("value", "--")),
+                    ),
+                    (
+                        "{0} Recommended Wall".format(section_name),
+                        "{0} mm".format(_format_number(dict(fields.get("recommended_wall_thickness_mm", {})).get("value", "--"), 3)),
+                    ),
+                ]
+                for label, value in recommendation_rows:
+                    for table_name in ("All", self._measurement_tab_for_label(label), "Cooling"):
+                        self._append_measurement_row(self.measurement_tables[table_name], label, value)
 
         for table in self.measurement_tables.values():
             table.resizeRowsToContents()
@@ -3939,15 +4619,34 @@ class StanThrustQtWindow(QMainWindow):
             )
         if self.current_combustion_result:
             thermochemistry = dict(combustion_metadata.get("thermochemistry", {}))
+            stage_label = str(
+                combustion_metadata.get(
+                    "solver_stage_label",
+                    _display_solver_stage(
+                        combustion_metadata.get("solver_stage", "--"),
+                        combustion_metadata.get("flow_model_label", combustion_summary.get("flow_model_label", "")),
+                    ),
+                )
+            )
             lines.extend(
                 [
                     "",
                     "Solver",
                     "Status: {0}".format(self.current_combustion_result.get("status", "unknown")),
-                    "Stage: {0}".format(combustion_metadata.get("solver_stage", "--")),
+                    "Stage: {0}".format(stage_label),
                     "Thermochemistry: {0} ({1})".format(
                         thermochemistry.get("provider", "--"),
                         thermochemistry.get("status", "--"),
+                    ),
+                    "Heat transfer: {0}; max wall {1} K; coolant outlet {2} K".format(
+                        combustion_summary.get("heat_transfer_status", "--"),
+                        _format_number(combustion_summary.get("max_hot_wall_temperature_k", "--"), 2),
+                        _format_number(combustion_summary.get("coolant_outlet_temperature_k", "--"), 2),
+                    ),
+                    "Shock diagnostics: {0}; regime {1}; station {2} mm".format(
+                        combustion_summary.get("shock_status", "--"),
+                        combustion_summary.get("shock_regime", "--"),
+                        _format_number(combustion_summary.get("shock_station_x_mm", "--"), 2),
                     ),
                     "Stations: {0}".format(int(combustion_summary.get("station_count", 0))),
                     "Iterations: {0}".format(self.current_combustion_result.get("iterations", 0)),
@@ -4007,6 +4706,10 @@ class StanThrustQtWindow(QMainWindow):
         if self.current_combustion_result:
             metadata = dict(self.current_combustion_result.get("metadata", {}))
             thermochemistry = dict(metadata.get("thermochemistry", {}))
+            combustion_summary = dict(self.current_combustion_result.get("summary", {}))
+            heat_transfer = dict(self.current_combustion_result.get("heat_transfer", {}))
+            heat_summary = dict(heat_transfer.get("summary", {}))
+            shock_analysis = dict(self.current_combustion_result.get("shock_analysis", {}))
             lines.extend(
                 [
                     "stage_1_thermochemistry.requested_mode = {0}".format(thermochemistry.get("requested_mode", "--")),
@@ -4014,10 +4717,39 @@ class StanThrustQtWindow(QMainWindow):
                     "stage_1_thermochemistry.provider = {0}".format(thermochemistry.get("provider", "--")),
                     "stage_1_thermochemistry.status = {0}".format(thermochemistry.get("status", "--")),
                     "stage_2_nozzle_flow.status_detail = {0}".format(self.current_combustion_result.get("status_detail", "--")),
+                    "stage_3_heat_transfer.status = {0}".format(heat_summary.get("status", combustion_summary.get("heat_transfer_status", "--"))),
+                    "stage_3_heat_transfer.total_heat_load_kw = {0}".format(_format_number(heat_summary.get("total_heat_load_kw", combustion_summary.get("heat_load_kw", "--")), 4)),
+                    "stage_3_heat_transfer.max_hot_wall_temperature_k = {0}".format(_format_number(heat_summary.get("max_hot_wall_temperature_k", combustion_summary.get("max_hot_wall_temperature_k", "--")), 4)),
+                    "stage_3_heat_transfer.limiting_section = {0}".format(heat_summary.get("limiting_section", combustion_summary.get("heat_transfer_limiting_section", "--"))),
+                    "stage_3_shock.status = {0}".format(shock_analysis.get("status", combustion_summary.get("shock_status", "--"))),
+                    "stage_3_shock.regime = {0}".format(shock_analysis.get("regime", combustion_summary.get("shock_regime", "--"))),
+                    "stage_3_shock.model = {0}".format(shock_analysis.get("model", "rankine-hugoniot-normal-shock")),
                 ]
             )
             for warning in list(self.current_combustion_result.get("warnings", []))[:3]:
                 lines.append("stage_2_nozzle_flow.warning = {0}".format(warning))
+        if isinstance(self.current_structural_result, dict):
+            structural_payload = dict(self.current_structural_result.get("payload", {}))
+            structural_summary = dict(structural_payload.get("summary", {}))
+            lines.extend(
+                [
+                    "stage_4_material.minimum_stress_margin_ratio = {0}".format(
+                        _format_number(structural_summary.get("minimum_stress_margin_ratio", "--"), 4)
+                    ),
+                    "stage_4_material.minimum_heat_transfer_margin_ratio = {0}".format(
+                        _format_number(structural_summary.get("minimum_heat_transfer_margin_ratio", "--"), 4)
+                    ),
+                    "stage_4_material.minimum_combined_margin_ratio = {0}".format(
+                        _format_number(structural_summary.get("minimum_combined_margin_ratio", "--"), 4)
+                    ),
+                    "stage_4_material.redesign_required = {0}".format(
+                        structural_summary.get("redesign_required", "--")
+                    ),
+                ]
+            )
+            for recommendation in list(structural_payload.get("redesign_recommendations", []))[:5]:
+                if isinstance(recommendation, dict):
+                    lines.append("stage_4_material.recommendation = {0}".format(recommendation.get("note", "--")))
         else:
             lines.append("preview.mode = design-preview")
         if self.current_validation_report is not None:
@@ -4364,6 +5096,16 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["tank_diameter_mm"].setValue(float(state.get("tank_diameter_mm", DEFAULT_STATE.tank_diameter_mm)))
         self.widgets["chamber_diameter_mm"].setValue(float(state.get("chamber_diameter_mm", DEFAULT_STATE.chamber_diameter_mm)))
         self.widgets["nozzle_diameter_mm"].setValue(float(state.get("nozzle_diameter_mm", DEFAULT_STATE.nozzle_diameter_mm)))
+        raw_nozzle_mode = state.get("nozzle_exit_mode")
+        if raw_nozzle_mode is None:
+            nozzle_exit_mode = "manual" if "nozzle_diameter_mm" in state else DEFAULT_STATE.nozzle_exit_mode
+        else:
+            nozzle_exit_mode = str(raw_nozzle_mode or DEFAULT_STATE.nozzle_exit_mode).strip().lower()
+        self._set_combo_value(
+            self.widgets["nozzle_expansion_bias"],
+            str(state.get("nozzle_expansion_bias", DEFAULT_STATE.nozzle_expansion_bias)),
+        )
+        self._set_nozzle_exit_auto(nozzle_exit_mode != "manual")
         self.widgets["factor_of_safety"].setValue(float(state.get("factor_of_safety", DEFAULT_STATE.factor_of_safety)))
         self._set_combo_value(self.widgets["fuel_tank_material"], str(state.get("fuel_tank_material", DEFAULT_STATE.fuel_tank_material)))
         self._set_combo_value(self.widgets["oxidizer_tank_material"], str(state.get("oxidizer_tank_material", DEFAULT_STATE.oxidizer_tank_material)))
@@ -4382,7 +5124,7 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["objective_packaging"].setValue(float(objective_weights.get("packaging", DEFAULT_OBJECTIVE_WEIGHTS["packaging"])))
         self.widgets["objective_thermal"].setValue(float(objective_weights.get("thermal", DEFAULT_OBJECTIVE_WEIGHTS["thermal"])))
         self._set_combo_value(self.widgets["solver_flow_model"], str(state.get("solver_flow_model", "fast")).strip().lower())
-        self.widgets["solver_station_count"].setValue(float(state.get("solver_station_count", 25)))
+        self.widgets["solver_station_count"].setValue(float(state.get("solver_station_count", DEFAULT_SOLVER_STATION_COUNT)))
         self.widgets["solver_convergence_tolerance"].setValue(float(state.get("solver_convergence_tolerance", 0.005)))
         self.widgets["solver_iteration_limit"].setValue(float(state.get("solver_iteration_limit", 50)))
         self._suspend_preview = False

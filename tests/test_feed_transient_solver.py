@@ -21,6 +21,7 @@ def test_pressure_fed_transient_history_has_blowdown_and_tailoff():
     rows = feed_result["payload"]["time_history_rows"]
 
     assert feed_result["metadata"]["solver_mode"] == "stage-2-transient-feed-v1"
+    assert summary["quality_flag"] == "stage-2-transient-feed-v2-iterative-darcy"
     assert len(rows) == int(summary["history_step_count"])
     assert len(rows) >= 11
     assert abs(float(rows[0]["time_s"])) <= 1e-9
@@ -34,6 +35,12 @@ def test_pressure_fed_transient_history_has_blowdown_and_tailoff():
         min(float(row["fuel_margin_kpa"]), float(row["oxidizer_margin_kpa"])) for row in rows
     )
     assert abs(float(summary["minimum_feed_margin_kpa"]) - minimum_margin) < 0.01
+    segments = {row["segment"]: row for row in feed_result["payload"]["segment_rows"]}
+    fuel_branch = segments["fuel_branch_total"]
+    assert fuel_branch["flow_regime"] in {"laminar", "transitional", "turbulent"}
+    assert float(fuel_branch["friction_factor"]) > 0.0
+    assert float(fuel_branch["major_pressure_drop_kpa"]) >= 0.0
+    assert float(fuel_branch["minor_pressure_drop_kpa"]) >= 0.0
 
 
 def test_pump_fed_transient_history_tracks_pump_state():

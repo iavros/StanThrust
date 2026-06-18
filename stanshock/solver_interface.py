@@ -58,6 +58,7 @@ def _build_design_request(raw_state: Dict[str, object]) -> Dict[str, object]:
     design_request = {
         "targets": {
             "target_thrust_newtons": inputs.target_thrust_newtons,
+            "target_chamber_pressure_kpa": inputs.target_chamber_pressure_kpa,
             "target_impulse_newton_seconds": inputs.target_impulse_newton_seconds,
             "target_diameter_mm": inputs.target_diameter_mm,
             "burn_time_seconds": inputs.burn_time_seconds,
@@ -73,6 +74,8 @@ def _build_design_request(raw_state: Dict[str, object]) -> Dict[str, object]:
             "tank_diameter_mm": inputs.tank_diameter_mm,
             "chamber_diameter_mm": inputs.chamber_diameter_mm,
             "nozzle_diameter_mm": inputs.nozzle_diameter_mm,
+            "nozzle_exit_mode": inputs.nozzle_exit_mode,
+            "nozzle_expansion_bias": inputs.nozzle_expansion_bias,
         },
         "materials": {
             "fuel_tank_material": inputs.fuel_tank_material,
@@ -127,12 +130,15 @@ def _request_to_state(design_request: Dict[str, object]) -> Dict[str, object]:
         "oxidizer_name": propellants.get("oxidizer", "Oxidizer"),
         "mixture_ratio": propellants.get("mixture_ratio", 1.4),
         "target_thrust_newtons": targets.get("target_thrust_newtons", 250.0),
+        "target_chamber_pressure_kpa": targets.get("target_chamber_pressure_kpa", 0.0),
         "target_impulse_newton_seconds": targets.get("target_impulse_newton_seconds", 3000.0),
         "target_diameter_mm": targets.get("target_diameter_mm", 110.0),
         "burn_time_seconds": targets.get("burn_time_seconds", 12.0),
         "tank_diameter_mm": geometry_limits.get("tank_diameter_mm", 110.0),
         "chamber_diameter_mm": geometry_limits.get("chamber_diameter_mm", 68.0),
         "nozzle_diameter_mm": geometry_limits.get("nozzle_diameter_mm", 95.0),
+        "nozzle_exit_mode": geometry_limits.get("nozzle_exit_mode", "auto"),
+        "nozzle_expansion_bias": geometry_limits.get("nozzle_expansion_bias", "pressure_matched"),
         "factor_of_safety": analysis.get("factor_of_safety", 2.0),
         "fuel_tank_material": materials.get("fuel_tank_material", "Aluminum 6061-T6"),
         "oxidizer_tank_material": materials.get("oxidizer_tank_material", "Aluminum 6061-T6"),

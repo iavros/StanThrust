@@ -52,6 +52,10 @@ def test_coupled_solver_basic_convergence():
     assert "iteration_trace" in payload, "Payload should have iteration_trace"
     assert "station_field_updates" in payload, "Payload should have station_field_updates"
     assert "structural_solver_result" in payload, "Payload should include structural solver result"
+    feed_summary = payload["feed_solver_result"]["payload"]["summary"]
+    feed_request = payload["feed_solver_result"]["payload"]["request"]
+    assert feed_summary["quality_flag"] == "stage-2-transient-feed-v2-iterative-darcy"
+    assert float(feed_request["fuel_dynamic_viscosity_pa_s"]) > 0.0
 
     print("✓ test_coupled_solver_basic_convergence passed")
 
@@ -80,11 +84,15 @@ def test_convergence_structure():
     assert "thrust_error_fraction" in conv, "Convergence should track thrust residual"
     assert "minimum_feed_margin_kpa" in conv, "Convergence should track feed margin"
     assert "minimum_structural_margin_ratio" in conv, "Convergence should track structural margin"
+    assert "minimum_heat_transfer_margin_ratio" in conv, "Convergence should track heat-transfer material margin"
+    assert "minimum_combined_material_margin_ratio" in conv, "Convergence should track combined material margin"
 
     assert isinstance(conv["iteration_count"], int), "iteration_count should be int"
     assert isinstance(conv["converged"], bool), "converged should be bool"
     assert isinstance(conv["final_residual_kpa"], float), "final_residual_kpa should be float"
     assert isinstance(conv["convergence_tolerance_kpa"], float), "convergence_tolerance_kpa should be float"
+    assert isinstance(conv["minimum_heat_transfer_margin_ratio"], float), "heat-transfer margin should be float"
+    assert isinstance(conv["minimum_combined_material_margin_ratio"], float), "combined material margin should be float"
     assert conv["iteration_count"] >= conv["minimum_iteration_count"], "solver should not stop before the minimum iteration count"
 
     print("✓ test_convergence_structure passed")
