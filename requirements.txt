@@ -1,8 +1,6 @@
 pytest
 PyQt5
 pyinstaller
-numpy
-scipy
 pillow
 cantera
 

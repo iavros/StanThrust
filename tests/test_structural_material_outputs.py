@@ -5,9 +5,11 @@ sys.path.insert(0, r"E:/StanThrust")
 
 from stanshock.design_model import create_engine_design
 from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.solver_assumptions import get_default_solver_assumptions
-from stanshock.material_assignment_solver import assign_materials
-from stanshock.structural_material_solver import build_structural_materials_output
+from stanshock.inputs import get_default_solver_assumptions
+from stanshock.structural_material_solver import (
+    assign_materials,
+    build_structural_materials_output,
+)
 from stanshock.exporter import build_cad_export_payload
 
 

@@ -3,9 +3,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from stanshock.design_model import EngineDesign, clamp, rounded
 from stanshock.heat_transfer_solver import solve_engine_heat_transfer
-from stanshock.propellants import lookup_propellant
+from stanshock.inputs import SolverAssumptions, lookup_propellant
 from stanshock.shock_solver import find_nozzle_normal_shock_candidate
-from stanshock.solver_assumptions import SolverAssumptions
 from stanshock.thermochemistry_provider import (
     CanteraThermochemistryProvider,
     ThermochemistryProvider,

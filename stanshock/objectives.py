@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict
 
 from stanshock.design_model import EngineDesign, clamp
-from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS
+from stanshock.inputs import DEFAULT_OBJECTIVE_WEIGHTS
 
 
 ObjectiveEvaluator = Callable[[EngineDesign], float]

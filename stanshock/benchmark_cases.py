@@ -3,8 +3,7 @@ from typing import Dict, List, Optional
 
 from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
 from stanshock.design_model import create_engine_design
-from stanshock.defaults import DEFAULT_STATE
-from stanshock.solver_assumptions import SolverAssumptions
+from stanshock.inputs import DEFAULT_STATE, SolverAssumptions
 
 
 @dataclass(frozen=True)

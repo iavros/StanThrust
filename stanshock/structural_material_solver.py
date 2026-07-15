@@ -7,15 +7,75 @@ from stanshock.design_model import (
     create_engine_design,
 )
 from stanshock.heat_transfer_solver import MATERIAL_THERMAL_CONDUCTIVITY_W_M_K
-from stanshock.materials import MATERIAL_OPTIONS
+from stanshock.inputs import MATERIAL_OPTIONS
 
 
 SOLVER_NAME = "Structural Material Solver"
 SOLVER_VERSION = "0.3"
+MATERIAL_ASSIGNMENT_VERSION = "1.0"
+SECTION_MATERIAL_KEYS = [
+    ("fuel_tank", "fuel_tank_material"),
+    ("oxidizer_tank", "oxidizer_tank_material"),
+    ("feed_system", "feed_system_material"),
+    ("chamber", "chamber_material"),
+    ("nozzle", "nozzle_material"),
+]
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def assign_materials(
+    design_request: Dict[str, object], design_envelope_result: Dict[str, object]
+) -> Dict[str, object]:
+    """Resolve the selected catalog material for every structural section."""
+    materials = _as_dict(design_request.get("materials"))
+    section_materials: List[Dict[str, object]] = []
+    material_notes: List[str] = []
+    validation_messages: List[str] = []
+    compatibility_flags: Dict[str, bool] = {}
+
+    for section_name, key in SECTION_MATERIAL_KEYS:
+        selected = str(materials.get(key, ""))
+        in_catalog = selected in MATERIAL_OPTIONS
+        compatibility_flags[section_name] = in_catalog
+        section_materials.append(
+            {
+                "section": section_name,
+                "material": selected,
+                "catalog_status": "catalog" if in_catalog else "custom",
+            }
+        )
+        if in_catalog:
+            material_notes.append(f"{section_name}: using catalog material {selected}")
+        else:
+            validation_messages.append(
+                f"{section_name}: custom material accepted ({selected}); "
+                "structural properties must be supplied before release."
+            )
+
+    return {
+        "metadata": {
+            "solver_name": "Material Assignment",
+            "solver_version": MATERIAL_ASSIGNMENT_VERSION,
+            "solver_mode": "design-only",
+            "input_schema_version": "1.0",
+            "output_schema_version": "1.0",
+        },
+        "status": "ok",
+        "payload": {
+            "section_materials": section_materials,
+            "material_notes": material_notes,
+            "validation_messages": validation_messages,
+            "compatibility_flags": compatibility_flags,
+            "geometry_reference": _as_dict(design_envelope_result.get("payload")).get(
+                "geometry_bundle", {}
+            ),
+        },
+        "warnings": validation_messages,
+        "trace": ["Section materials resolved against the material catalog."],
+    }
 
 
 def _field(unit: str, value: Optional[float], status: str) -> Dict[str, object]:

@@ -15,10 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
 from stanshock.design_model import create_engine_design
 from stanshock.feed_pressure_drop_solver import solve as solve_feed_system
-from stanshock.material_assignment_solver import assign_materials
-from stanshock.propellants import lookup_propellant
-from stanshock.solver_assumptions import get_default_solver_assumptions
-from stanshock.structural_material_solver import build_structural_materials_output
+from stanshock.inputs import get_default_solver_assumptions, lookup_propellant
+from stanshock.structural_material_solver import assign_materials, build_structural_materials_output
 
 
 SOLVER_NAME = "Coupled Cycle Loop Solver"

@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.defaults import DEFAULT_STATE
+from stanshock.inputs import DEFAULT_STATE
 from stanshock.design_model import create_engine_design
 from stanshock.exporter import build_cad_export_payload
 from stanshock.solver_interface import solve as solve_solver_interface

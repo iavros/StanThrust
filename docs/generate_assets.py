@@ -33,8 +33,7 @@ from stanshock.benchmark_cases import (
     build_reconstructed_benchmark_rows,
 )
 from stanshock.design_model import _solve_pressure_state, create_engine_design
-from stanshock.defaults import DEFAULT_STATE
-from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.inputs import DEFAULT_STATE, get_default_solver_assumptions
 from stanshock.solver_interface import solve as solve_solver_interface
 from stanshock.thermochemistry_provider import CanteraThermochemistryProvider
 

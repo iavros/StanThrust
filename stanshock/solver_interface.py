@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from stanshock.design_model import DesignInputs, create_engine_design
 from stanshock.feed_pressure_drop_solver import solve as solve_feed_pressure_drop
-from stanshock.materials import MATERIAL_OPTIONS
-from stanshock.propellants import lookup_propellant
+from stanshock.inputs import MATERIAL_OPTIONS, lookup_propellant
 
 
 SOLVER_INTERFACE_VERSION = "1.0"

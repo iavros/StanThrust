@@ -1,5 +1,6 @@
 import csv
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -9,12 +10,69 @@ from stanshock.benchmark_cases import (
     get_public_benchmark_cases,
 )
 from stanshock.design_model import EngineDesign
-from stanshock.uncertainty_provenance import (
+from stanshock.uncertainty import (
     UncertaintyBand,
     ProvenanceField,
     build_uncertainty_summary,
     calculate_field_confidence,
 )
+
+
+PROJECT_SCHEMA_VERSION = 1
+
+
+@dataclass
+class ProjectDocument:
+    version: int
+    generated_at: str
+    state: Dict[str, object]
+    objective_weights: Dict[str, float]
+    ga_result: Optional[Dict[str, object]] = None
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "state": self.state,
+            "objective_weights": self.objective_weights,
+            "ga_result": self.ga_result,
+        }
+
+
+def build_project_document(
+    state: Dict[str, object],
+    objective_weights: Dict[str, float],
+    ga_result: Optional[Dict[str, object]] = None,
+) -> ProjectDocument:
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return ProjectDocument(
+        version=PROJECT_SCHEMA_VERSION,
+        generated_at=generated_at,
+        state=state,
+        objective_weights=objective_weights,
+        ga_result=ga_result,
+    )
+
+
+def save_project(
+    path: Path,
+    state: Dict[str, object],
+    objective_weights: Dict[str, float],
+    ga_result: Optional[Dict[str, object]] = None,
+) -> None:
+    document = build_project_document(state, objective_weights, ga_result)
+    path.write_text(json.dumps(document.as_dict(), indent=2), encoding="utf-8")
+
+
+def load_project(path: Path) -> ProjectDocument:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return ProjectDocument(
+        version=int(raw.get("version", PROJECT_SCHEMA_VERSION)),
+        generated_at=str(raw.get("generated_at", "")),
+        state=dict(raw.get("state", {})),
+        objective_weights=dict(raw.get("objective_weights", {})),
+        ga_result=raw.get("ga_result"),
+    )
 
 
 def _as_dict(value: object) -> Dict[str, object]:
@@ -44,7 +102,7 @@ def _build_analysis_field(
     """Build an analysis field with provenance and confidence data.
     
     Merges value/status from station_field_updates (if available), adds confidence
-    and uncertainty bands using the uncertainty_provenance module.
+    and uncertainty bands using the uncertainty module.
     """
     # Get value and status from station updates or row-level data.
     row_updates = _as_dict(station_field_updates.get(row_label, {}))

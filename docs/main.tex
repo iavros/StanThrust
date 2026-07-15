@@ -39,7 +39,7 @@
 \newcommand{\Rey}{\operatorname{Re}}
 \newcommand{\OF}{\left(\frac{O}{F}\right)}
 
-\title{\textbf{StanThrust Solver Notes}\\\large Detailed Geometry, Feed-System, Cooling, and Quasi-1D Performance Formulation}
+\title{\textbf{StanThrust Solver Notes}\\\large Geometry, Feed-System, MOC, Navier-Stokes, Thermal, and Structural Formulation}
 \author{StanThrust Documentation Package}
 \date{\today}
 
@@ -81,7 +81,7 @@ When reading the report, each section can be interpreted in the same sequence us
 \node[box, right=of ui] (geometry) {Geometry and\\mass closure};
 \node[box, right=of geometry] (pressure) {Feed pressure\\closure};
 \node[box, below=of geometry] (thermo) {Thermochemistry\\provider};
-\node[box, right=of thermo] (combustion) {Quasi-1D chamber\\and nozzle model};
+\node[box, right=of thermo] (combustion) {MOC station field\\and viscous correction};
 \node[box, right=of pressure] (outputs) {Metrics, plots,\\exports, UI};
 
 \draw[line] (ui) -- (geometry);
@@ -100,8 +100,33 @@ The software is therefore a staged closure:
 \item generate a first-pass geometry and flow state;
 \item enforce feed feasibility for either pump-fed or pressure-fed architecture;
 \item obtain $(\gamma, R, T_c)$ from thermochemistry;
-\item compute nozzle performance, mass flow, and predicted thrust.
+\item compute nozzle performance, mass flow, and predicted thrust;
+\item evaluate heat transfer, material stress, redesign requirements, and uncertainty bounds.
 \end{enumerate}
+
+\section{Implementation Architecture}
+The repository keeps shared inputs and output contracts centralized while preserving separate files for physically distinct numerical models. This avoids duplicated constants without combining unrelated equations into one oversized module. The implementation map below links each active runtime path to its source files.
+
+\begin{table}[H]
+\centering
+\caption{Active StanThrust implementation map.}
+\begin{tabular}{p{0.30\textwidth}p{0.61\textwidth}}
+\toprule
+Area & File and responsibility \\
+\midrule
+Inputs & \texttt{inputs.py}. Default state, selectable propellants and materials, objective weights, and numerical assumptions. \\
+Design closure & \texttt{design\_model.py}. Mission normalization, chamber-pressure closure, component sizing, and solved geometry. \\
+Flow solver & \texttt{combustion\_cfd\_solver.py}. Cantera coupling, MOC station fields, shock feedback, and final viscous correction. \\
+Feed system & \texttt{feed\_pressure\_drop\_solver.py}. Pump-fed and pressure-fed transient loss and margin closure. \\
+Nozzle physics & \texttt{moc\_nozzle\_solver.py}, \texttt{shock\_solver.py}. Characteristic-net geometry and Rankine-Hugoniot relations. \\
+Thermal and stress & \texttt{heat\_transfer\_solver.py}, \texttt{structural\_material\_solver.py}. Wall temperature, stress, material ranking, and redesign checks. \\
+Outputs & \texttt{uncertainty.py}, \texttt{exporter.py}. Provenance, uncertainty bands, project files, CSV data, and DXF profiles. \\
+Desktop & \texttt{qt\_desktop.py}. Controls, progress, diagnostics, plots, and calculated-geometry rendering. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The desktop application, documentation generator, and regression tests import these same modules. There is no separate documentation-only physics path. Experimental sensitivity code that was not connected to the final solve has been removed, so every solver method described in this report corresponds to an active application path.
 
 \section{Symbols and Conventions}
 \begin{table}[H]
@@ -1513,9 +1538,9 @@ R=\SI{\SampleGasConstant}{J\,kg^{-1}\,K^{-1}},\qquad
 T_c=\SI{\SampleChamberTemperature}{K}.
 \]
 
-These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the quasi-one-dimensional performance model. Cantera is a required dependency for supported solver runs, and missing thermochemistry is reported as a solver error.
+These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the coupled chamber/nozzle station model. Cantera is a required dependency for supported solver runs, and missing thermochemistry is reported as a solver error.
 
-\section{Quasi-One-Dimensional Chamber and Nozzle Solver}
+\section{Coupled Chamber and Nozzle Flow Solver}
 \subsection{Flow Modes and Final Pass}
 StanThrust exposes three internal flow modes:
 \begin{enumerate}[leftmargin=6mm]
@@ -2609,10 +2634,10 @@ Taken together, the benchmark reconstruction should be read as a \emph{behaviora
 Despite the large number of equations above, StanThrust remains a reduced-order tool. The equations are fast algebraic closures, not first-principles time-marching simulations. In particular:
 \begin{itemize}[leftmargin=5mm]
 \item the feed solver now time-marches pressure and margin over the burn, but it is still a reduced-order lumped model rather than a valve-by-valve fluid network or full pressurant thermodynamics model;
-\item chamber and nozzle performance are quasi-one-dimensional with empirical loss factors;
+\item chamber and nozzle performance begins from an axial station solution and applies an axisymmetric finite-volume viscous correction, but it is not a full multidimensional external CFD mesh;
 \item thermal quantities are bounded engineering calculations;
 \item pump, injector, and cooling dimensions are sizing closures rather than detailed component designs;
-\item the axial field plots are visualization-oriented profiles, not CFD field solutions.
+\item the two-dimensional flow-field plot revolves the solved axial stations across the calculated wall contour; it is a visualization of the station solution rather than an independently meshed CFD domain.
 \end{itemize}
 
 Within those limits, the implementation is internally consistent and well suited to rapid trade studies, packaging iteration, and architecture comparison.

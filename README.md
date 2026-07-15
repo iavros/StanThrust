@@ -25,6 +25,20 @@ python app.py
 
 Python 3.11 is the supported development runtime. Cantera is required; the solver does not use a missing-thermochemistry fallback.
 
+## How It Works
+
+Each solve follows one shared engineering pipeline:
+
+1. Normalize the mission, packaging, propellant, material, and solver inputs from `stanshock/inputs.py`.
+2. Close the engine geometry and chamber-pressure state in `stanshock/design_model.py`.
+3. Solve the pump-fed or pressure-fed transient and verify pressure margin.
+4. Obtain equilibrium thermochemistry from Cantera and construct the MOC nozzle contour.
+5. Run the chamber/nozzle station solve, shock feedback, and final Navier-Stokes viscous correction in `stanshock/combustion_cfd_solver.py`.
+6. Evaluate wall heat transfer, material stress, redesign requirements, and final uncertainty bounds.
+7. Send the same solved geometry and station fields to the desktop plots, 3D views, saved projects, and exports.
+
+The desktop final pass always uses the most detailed flow path with at least 180 axial stations. Fast and refined modes remain available for diagnostic comparisons, but they are not used as the final saved design basis.
+
 ## Features
 
 - Coupled numerical solve across feed system, chamber/nozzle flow, and structural margins.
@@ -61,7 +75,12 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 ## Repository Layout
 
 - `app.py`: desktop entry point
-- `stanshock/`: application package and solver code
+- `stanshock/inputs.py`: defaults, selectable inputs, catalogs, and solver assumptions
+- `stanshock/design_model.py`: coupled engine sizing and solved geometry
+- `stanshock/combustion_cfd_solver.py`: all chamber and nozzle CFD functions
+- `stanshock/*_solver.py`: focused feed, thermal, structural, MOC, and shock solvers
+- `stanshock/uncertainty.py`: uncertainty bounds and output provenance
+- `stanshock/qt_desktop.py`: desktop interface and calculated-geometry rendering
 - `stanshock/data/`: bundled thermochemistry mechanism files
 - `assets/`: icons and application artwork
 - `docs/`: solver report source, PDF, and generated datasets
@@ -70,4 +89,4 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 
 ## Validation
 
-The automated test suite covers solver coupling, thermochemistry, heat-transfer and shock diagnostics, feed transients, geometry fields, optimizer hooks, uncertainty/provenance utilities, and direct report benchmark cases. The public benchmark tests run reconstructed engines through the solver without optimizer fitting. The release workflow runs the suite before publishing installer assets.
+The automated test suite covers solver coupling, thermochemistry, heat-transfer and shock diagnostics, feed transients, geometry fields, optimizer hooks, uncertainty provenance, and direct report benchmark cases. The public benchmark tests run reconstructed engines through the solver without optimizer fitting. The release workflow runs the suite before publishing installer assets.

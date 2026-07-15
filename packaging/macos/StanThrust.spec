@@ -24,10 +24,6 @@ if icon_path.exists():
 analysis_hiddenimports = [
     *collect_submodules("cantera"),
     "cantera",
-    "scipy",
-    "scipy.optimize",
-    "scipy.interpolate",
-    "numpy",
 ]
 
 block_cipher = None

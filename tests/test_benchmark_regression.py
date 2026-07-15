@@ -6,7 +6,7 @@ from stanshock.benchmark_cases import (
     build_reconstructed_benchmark_rows,
     get_public_benchmark_cases,
 )
-from stanshock.solver_assumptions import get_default_solver_assumptions
+from stanshock.inputs import get_default_solver_assumptions
 
 
 def test_public_benchmark_reference_catalog_is_complete():
