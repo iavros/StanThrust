@@ -2,7 +2,7 @@
 
 Provides:
 - LHS (Latin Hypercube Sampling) and uniform random sampling strategies
-- Multi-fidelity ensemble evaluation (concept → coupled cycle → full validation)
+- Multi-fidelity ensemble evaluation (design -> coupled cycle → full validation)
 - Statistical aggregation of outputs (mean, std, percentiles, confidence intervals)
 - Export-ready ensemble summaries compatible with uncertainty_provenance.ProvenanceField
 
@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from stanshock.concept_model import ConceptDesign, create_concept_design
-from stanshock.validation_pack import validate_concept_design
+from stanshock.design_model import EngineDesign, create_engine_design
+from stanshock.validation_pack import validate_engine_design
 
 
 @dataclass
@@ -47,7 +47,7 @@ class EnsembleEvaluation:
     """Results from evaluating one sample through the solver chain."""
     sample_id: int
     input_sample: InputSample
-    design: Optional[ConceptDesign]
+    design: Optional[EngineDesign]
     coupled_cycle_passed: bool
     validation_passed: bool
     dry_mass_index: Optional[float] = None
@@ -144,7 +144,7 @@ class MonteCarloEnsemble:
 
     def __init__(
         self,
-        base_design: ConceptDesign,
+        base_design: EngineDesign,
         input_ranges: Dict[str, Tuple[float, float]],
         sample_size: int = 100,
         sampling_method: str = "lhs",
@@ -152,7 +152,7 @@ class MonteCarloEnsemble:
         """Initialize ensemble sampler.
 
         Args:
-            base_design: Reference ConceptDesign to clone for each sample
+            base_design: Reference EngineDesign to clone for each sample
             input_ranges: Dict mapping parameter name to (min, max) tuple
             sample_size: Number of samples to draw
             sampling_method: "lhs" (Latin Hypercube) or "uniform"
@@ -230,7 +230,7 @@ class MonteCarloEnsemble:
             # Create design with sample inputs
             state = self.base_design.as_input_state()
             state.update(sample.to_state_update())
-            design = create_concept_design(state)
+            design = create_engine_design(state)
 
             # Extract key outputs from derived geometry
             evaluation = EnsembleEvaluation(
@@ -247,7 +247,7 @@ class MonteCarloEnsemble:
 
             # Run validation check
             try:
-                validation_result = validate_concept_design(design)
+                validation_result = validate_engine_design(design)
                 evaluation.validation_passed = validation_result.passed
                 if not validation_result.passed:
                     failed_checks = [
@@ -342,7 +342,7 @@ class MonteCarloEnsemble:
             p75 = float(np.percentile(values_array, 75))
             p95 = float(np.percentile(values_array, 95))
 
-            # 95% confidence interval (normal approximation)
+            # 95% confidence interval using a normal distribution model.
             ci_lower = mean - 1.96 * std_dev / np.sqrt(len(values_array))
             ci_upper = mean + 1.96 * std_dev / np.sqrt(len(values_array))
 

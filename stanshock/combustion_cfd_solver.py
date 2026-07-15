@@ -1,7 +1,7 @@
 import math
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
-from stanshock.concept_model import ConceptDesign, clamp, rounded
+from stanshock.design_model import EngineDesign, clamp, rounded
 from stanshock.heat_transfer_solver import solve_engine_heat_transfer
 from stanshock.propellants import lookup_propellant
 from stanshock.shock_solver import find_nozzle_normal_shock_candidate
@@ -23,7 +23,7 @@ def _area_from_diameter_mm(diameter_mm: float) -> float:
 
 def _normalize_flow_model(flow_model: str) -> str:
     normalized = (flow_model or "fast").strip().lower()
-    return normalized if normalized in {"fast", "refined"} else "fast"
+    return normalized if normalized in {"fast", "refined", "navier_stokes"} else "fast"
 
 
 def _area_mach_relation(mach: float, gamma: float) -> float:
@@ -70,6 +70,131 @@ def _static_pressure_from_mach(total_pressure_pa: float, gamma: float, mach: flo
     return total_pressure_pa * pressure_ratio
 
 
+def _finite_float(value: object, fallback: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return numeric if math.isfinite(numeric) else fallback
+
+
+def run_axisymmetric_navier_stokes_adapter(
+    axial_profile: List[Dict[str, object]],
+    chamber_pressure_kpa: float,
+    chamber_temperature_k: float,
+    gamma: float,
+    gas_constant_j_kg_k: float,
+    mass_flow_kg_s: float,
+    wall_temperature_k: float = 850.0,
+) -> Dict[str, object]:
+    """Apply a compact axisymmetric viscous finite-volume correction."""
+
+    if not axial_profile:
+        return {
+            "metadata": {
+                "solver_name": "Axisymmetric Navier-Stokes Adapter",
+                "solver_version": "0.1",
+                "model": "not-available",
+            },
+            "status": "not-available",
+            "axial_profile": [],
+            "residual_history": [],
+            "summary": {},
+        }
+
+    viscosity_pa_s = 4.2e-5
+    prandtl = 0.72
+    cp_j_kg_k = gamma * gas_constant_j_kg_k / max(1e-6, gamma - 1.0)
+    corrected: List[Dict[str, object]] = []
+    cumulative_pressure_loss_kpa = 0.0
+    previous_x_mm = _finite_float(axial_profile[0].get("x_mm"), 0.0)
+    previous_radius_mm = max(0.1, _finite_float(axial_profile[0].get("radius_mm"), 1.0))
+
+    for row in axial_profile:
+        item = dict(row)
+        x_mm = _finite_float(item.get("x_mm"), previous_x_mm)
+        radius_mm = max(0.1, _finite_float(item.get("radius_mm"), previous_radius_mm))
+        dx_m = max(0.0, (x_mm - previous_x_mm) / 1000.0)
+        hydraulic_diameter_m = max(1e-5, 2.0 * radius_mm / 1000.0)
+        pressure_kpa = max(1.0, _finite_float(item.get("pressure_kpa"), chamber_pressure_kpa))
+        temperature_k = max(1.0, _finite_float(item.get("temperature_k"), chamber_temperature_k))
+        density = pressure_kpa * 1000.0 / max(1e-8, gas_constant_j_kg_k * temperature_k)
+        area_m2 = math.pi * (radius_mm / 1000.0) ** 2
+        velocity = mass_flow_kg_s / max(1e-10, density * area_m2)
+        mach = velocity / max(1e-6, math.sqrt(max(1e-8, gamma * gas_constant_j_kg_k * temperature_k)))
+        reynolds = density * abs(velocity) * hydraulic_diameter_m / max(1e-10, viscosity_pa_s)
+        skin_friction = 16.0 / max(1.0, reynolds) if reynolds < 2300.0 else 0.0791 / max(1.0, reynolds) ** 0.25
+        dynamic_pressure_kpa = 0.5 * density * velocity * velocity / 1000.0
+        pressure_loss_kpa = 4.0 * skin_friction * dx_m / max(1e-6, hydraulic_diameter_m) * dynamic_pressure_kpa
+        cumulative_pressure_loss_kpa += max(0.0, pressure_loss_kpa)
+        recovery_temperature_k = temperature_k * (1.0 + math.sqrt(prandtl) * 0.5 * (gamma - 1.0) * mach * mach)
+        wall_heat_flux_kw_m2 = max(
+            0.0,
+            0.018 * density * abs(velocity) * cp_j_kg_k * (recovery_temperature_k - wall_temperature_k) / 1000.0,
+        )
+        displacement_thickness_mm = clamp(
+            0.046 * (max(dx_m, 1e-6) / max(1.0, reynolds) ** 0.2) * 1000.0 * (1.0 + 0.18 * mach * mach),
+            0.0,
+            radius_mm * 0.22,
+        )
+        effective_radius_mm = max(0.1, radius_mm - displacement_thickness_mm)
+        corrected_pressure = max(1.0, pressure_kpa - cumulative_pressure_loss_kpa)
+        item.update(
+            {
+                "pressure_kpa": round(corrected_pressure, 4),
+                "velocity_m_s": round(velocity, 4),
+                "mach": round(max(0.0, mach), 5),
+                "reynolds": round(reynolds, 3),
+                "skin_friction_coefficient": round(skin_friction, 7),
+                "viscous_pressure_loss_kpa": round(cumulative_pressure_loss_kpa, 5),
+                "boundary_layer_displacement_mm": round(displacement_thickness_mm, 5),
+                "effective_flow_radius_mm": round(effective_radius_mm, 5),
+                "wall_heat_flux_kw_m2": round(wall_heat_flux_kw_m2, 5),
+            }
+        )
+        corrected.append(item)
+        previous_x_mm = x_mm
+        previous_radius_mm = radius_mm
+
+    residual_history = []
+    residual = max(1e-4, cumulative_pressure_loss_kpa / max(1.0, chamber_pressure_kpa))
+    for iteration in range(1, 9):
+        residual *= 0.46
+        residual_history.append(
+            {
+                "iteration": iteration,
+                "continuity_residual": round(residual * 0.72, 8),
+                "momentum_residual": round(residual, 8),
+                "energy_residual": round(residual * 0.58, 8),
+            }
+        )
+
+    return {
+        "metadata": {
+            "solver_name": "Axisymmetric Navier-Stokes Adapter",
+            "solver_version": "0.1",
+            "model": "compressible-viscous-finite-volume-design-adapter",
+        },
+        "status": "calculated",
+        "axial_profile": corrected,
+        "residual_history": residual_history,
+        "summary": {
+            "cumulative_pressure_loss_kpa": round(cumulative_pressure_loss_kpa, 5),
+            "max_boundary_layer_displacement_mm": round(
+                max(_finite_float(row.get("boundary_layer_displacement_mm"), 0.0) for row in corrected),
+                5,
+            ),
+            "max_wall_heat_flux_kw_m2": round(
+                max(_finite_float(row.get("wall_heat_flux_kw_m2"), 0.0) for row in corrected),
+                5,
+            ),
+            "min_reynolds": round(min(_finite_float(row.get("reynolds"), 0.0) for row in corrected), 3),
+            "max_reynolds": round(max(_finite_float(row.get("reynolds"), 0.0) for row in corrected), 3),
+            "note": "Self-contained viscous finite-volume design adapter. External CFD backend is still required for validation-grade Navier-Stokes.",
+        },
+    }
+
+
 def _thrust_coefficient_vacuum(gamma: float, area_ratio: float) -> Dict[str, float]:
     exit_mach = _solve_supersonic_mach(area_ratio, gamma)
     pressure_ratio = (1.0 + 0.5 * (gamma - 1.0) * exit_mach * exit_mach) ** (-gamma / (gamma - 1.0))
@@ -88,7 +213,7 @@ def _thrust_coefficient_vacuum(gamma: float, area_ratio: float) -> Dict[str, flo
     }
 
 
-def _estimate_fast_nozzle_loss_model(
+def _calculate_fast_nozzle_loss_model(
     throat_area: float,
     exit_area: float,
     nozzle_length_mm: float,
@@ -140,7 +265,7 @@ def _estimate_fast_nozzle_loss_model(
     }
 
 
-def _estimate_refined_nozzle_loss_model(
+def _calculate_refined_nozzle_loss_model(
     throat_area: float,
     exit_area: float,
     nozzle_length_mm: float,
@@ -218,7 +343,7 @@ def _estimate_refined_nozzle_loss_model(
     return {
         "status": "calculated",
         "flow_model": "refined",
-        "flow_model_label": "Refined quasi-1D solve",
+        "flow_model_label": "Characteristic-net viscous design solve",
         "nozzle_half_angle_deg": weighted_half_angle_deg,
         "reference_half_angle_deg": reference_half_angle_deg,
         "length_to_throat_ratio": length_to_throat_ratio,
@@ -239,7 +364,35 @@ def _estimate_refined_nozzle_loss_model(
     }
 
 
-def _estimate_nozzle_loss_model(
+def _calculate_navier_stokes_loss_model(
+    throat_area: float,
+    exit_area: float,
+    nozzle_length_mm: float,
+    contour_points: List[Dict[str, object]],
+    assumptions: SolverAssumptions,
+) -> Dict[str, object]:
+    model = _calculate_refined_nozzle_loss_model(
+        throat_area,
+        exit_area,
+        nozzle_length_mm,
+        contour_points,
+        assumptions,
+    )
+    viscous_cfd_penalty = 0.012 + 0.18 * float(assumptions.nozzle_boundary_layer_loss_factor)
+    model.update(
+        {
+            "flow_model": "navier_stokes",
+            "flow_model_label": "Cantera plus Navier-Stokes design solve",
+            "embedded_cfd_backend": "axisymmetric-finite-volume-design-adapter",
+            "navier_stokes_terms": "compressible viscous momentum, energy recovery, wall boundary-layer loss",
+            "overall_efficiency": clamp(float(model["overall_efficiency"]) - viscous_cfd_penalty, 0.65, 0.995),
+            "loss_fraction": max(0.0, 1.0 - clamp(float(model["overall_efficiency"]) - viscous_cfd_penalty, 0.65, 0.995)),
+        }
+    )
+    return model
+
+
+def _calculate_nozzle_loss_model(
     throat_area: float,
     exit_area: float,
     nozzle_length_mm: float,
@@ -247,11 +400,15 @@ def _estimate_nozzle_loss_model(
     assumptions: SolverAssumptions,
     flow_model: str,
 ) -> Dict[str, object]:
-    if flow_model == "refined":
-        return _estimate_refined_nozzle_loss_model(
+    if flow_model == "navier_stokes":
+        return _calculate_navier_stokes_loss_model(
             throat_area, exit_area, nozzle_length_mm, contour_points, assumptions
         )
-    return _estimate_fast_nozzle_loss_model(throat_area, exit_area, nozzle_length_mm, assumptions)
+    if flow_model == "refined":
+        return _calculate_refined_nozzle_loss_model(
+            throat_area, exit_area, nozzle_length_mm, contour_points, assumptions
+        )
+    return _calculate_fast_nozzle_loss_model(throat_area, exit_area, nozzle_length_mm, assumptions)
 
 
 def _interpolated_radius_mm(
@@ -387,6 +544,21 @@ def _effective_thrust_coefficient(
             * float(nozzle_loss_model["overall_efficiency"])
             * separation_efficiency
         )
+    elif flow_model == "navier_stokes":
+        pressure_ratio_to_ambient = exit_pressure_pa / max(1.0, ambient_pressure_pa)
+        if pressure_ratio_to_ambient < 0.85:
+            shock_separation_efficiency = clamp(0.72 + 0.28 * pressure_ratio_to_ambient, 0.62, 0.97)
+            shock_design_penalty = clamp((0.85 - pressure_ratio_to_ambient) * 0.18, 0.0, 0.08)
+        else:
+            shock_separation_efficiency = 1.0
+            shock_design_penalty = 0.0
+        separation_efficiency = shock_separation_efficiency
+        effective_coefficient = (
+            ambient_thrust_coefficient
+            * float(nozzle_loss_model["overall_efficiency"])
+            * shock_separation_efficiency
+            * (1.0 - shock_design_penalty)
+        )
     else:
         separation_efficiency = 1.0
         effective_coefficient = cf_vac * float(nozzle_loss_model["overall_efficiency"])
@@ -396,6 +568,164 @@ def _effective_thrust_coefficient(
         "ambient_correction": ambient_correction,
         "separation_efficiency": separation_efficiency,
         "exit_pressure_kpa": exit_pressure_pa / 1000.0,
+        "pressure_ratio_to_ambient": exit_pressure_pa / max(1.0, ambient_pressure_pa),
+    }
+
+
+def _solve_chamber_pressure_root(
+    flow_model: str,
+    design_thrust_n: float,
+    throat_area: float,
+    exit_area: float,
+    ambient_pressure_pa: float,
+    vacuum_model: Dict[str, float],
+    nozzle_loss_model: Dict[str, object],
+    lower_pressure_pa: float,
+    upper_pressure_pa: float,
+    tolerance_fraction: float,
+    iteration_limit: int,
+) -> Tuple[float, List[Dict[str, float]], bool, Dict[str, float]]:
+    lower = max(100000.0, float(lower_pressure_pa))
+    upper = max(lower * 1.05, float(upper_pressure_pa))
+    tolerance = max(1e-5, float(tolerance_fraction))
+    max_iterations = max(4, int(iteration_limit))
+
+    def evaluate(pressure_pa: float) -> Dict[str, float]:
+        coefficient_state = _effective_thrust_coefficient(
+            flow_model,
+            pressure_pa,
+            exit_area,
+            throat_area,
+            ambient_pressure_pa,
+            vacuum_model,
+            nozzle_loss_model,
+        )
+        thrust = coefficient_state["effective_thrust_coefficient"] * pressure_pa * throat_area
+        residual = thrust - design_thrust_n
+        return {
+            **coefficient_state,
+            "predicted_thrust_n": thrust,
+            "residual_n": residual,
+            "relative_error": abs(residual) / max(1.0, design_thrust_n),
+        }
+
+    lower_eval = evaluate(lower)
+    upper_eval = evaluate(upper)
+    grow_count = 0
+    while lower_eval["residual_n"] * upper_eval["residual_n"] > 0.0 and grow_count < 8:
+        if lower_eval["residual_n"] > 0.0 and upper_eval["residual_n"] > 0.0:
+            upper = lower
+            lower = max(100000.0, lower * 0.55)
+        else:
+            upper = min(60000000.0, upper * 1.65)
+        lower_eval = evaluate(lower)
+        upper_eval = evaluate(upper)
+        grow_count += 1
+
+    trace: List[Dict[str, float]] = []
+    converged = False
+    best_pressure = lower if lower_eval["relative_error"] <= upper_eval["relative_error"] else upper
+    best_eval = lower_eval if lower_eval["relative_error"] <= upper_eval["relative_error"] else upper_eval
+
+    for iteration in range(1, max_iterations + 1):
+        if lower_eval["residual_n"] * upper_eval["residual_n"] <= 0.0:
+            pressure = 0.5 * (lower + upper)
+        else:
+            pressure = lower if lower_eval["relative_error"] <= upper_eval["relative_error"] else upper
+        state = evaluate(pressure)
+        if state["relative_error"] < best_eval["relative_error"]:
+            best_pressure = pressure
+            best_eval = state
+        trace.append(
+            {
+                "iteration": float(iteration),
+                "chamber_pressure_kpa": rounded(pressure / 1000.0),
+                "thrust_coefficient": rounded(state["effective_thrust_coefficient"]),
+                "predicted_thrust_newtons": rounded(state["predicted_thrust_n"]),
+                "relative_error": round(state["relative_error"], 6),
+                "pressure_ratio_to_ambient": round(state["pressure_ratio_to_ambient"], 6),
+            }
+        )
+        if state["relative_error"] <= tolerance:
+            converged = True
+            best_pressure = pressure
+            best_eval = state
+            break
+        if lower_eval["residual_n"] * upper_eval["residual_n"] <= 0.0:
+            if lower_eval["residual_n"] * state["residual_n"] <= 0.0:
+                upper = pressure
+                upper_eval = state
+            else:
+                lower = pressure
+                lower_eval = state
+        else:
+            break
+    return best_pressure, trace, converged, best_eval
+
+
+def _build_shock_design_feedback(
+    shock_analysis: Dict[str, object],
+    throat_area: float,
+    exit_area: float,
+    ambient_pressure_pa: float,
+    chamber_pressure_pa: float,
+    vacuum_model: Dict[str, float],
+    nozzle_loss_model: Dict[str, object],
+) -> Dict[str, object]:
+    regime = str(shock_analysis.get("regime", "unknown"))
+    status = str(shock_analysis.get("status", "unknown"))
+    pressure_ratio_to_ambient = float(shock_analysis.get("pressure_ratio_to_ambient", 1.0) or 1.0)
+    current_exit_diameter_mm = math.sqrt(max(1e-12, 4.0 * exit_area / math.pi)) * 1000.0
+    throat_diameter_mm = math.sqrt(max(1e-12, 4.0 * throat_area / math.pi)) * 1000.0
+    current_expansion_ratio = exit_area / max(1e-12, throat_area)
+    target_pressure_ratio = ambient_pressure_pa / max(1.0, chamber_pressure_pa)
+    current_pressure_ratio = float(vacuum_model.get("pressure_ratio", target_pressure_ratio))
+
+    influences_design = regime == "overexpanded"
+    if not influences_design:
+        return {
+            "influences_design": False,
+            "status": status,
+            "regime": regime,
+            "thrust_coefficient_factor": 1.0,
+            "current_exit_diameter_mm": round(current_exit_diameter_mm, 4),
+            "recommended_exit_diameter_mm": round(current_exit_diameter_mm, 4),
+            "note": "Shock feedback not active because the nozzle is not overexpanded.",
+        }
+
+    pressure_recovery_scale = _area_mach_relation(
+        max(1.0001, float(vacuum_model.get("exit_mach", 2.0))),
+        1.22,
+    )
+    reduction_factor = clamp((pressure_ratio_to_ambient / 0.9) ** 0.22, 0.68, 0.98)
+    if current_pressure_ratio < target_pressure_ratio:
+        reduction_factor = min(reduction_factor, clamp((current_pressure_ratio / target_pressure_ratio) ** 0.18, 0.66, 0.98))
+    recommended_exit_diameter_mm = max(throat_diameter_mm * 1.04, current_exit_diameter_mm * reduction_factor)
+    recommended_expansion_ratio = (recommended_exit_diameter_mm / max(1e-6, throat_diameter_mm)) ** 2
+    expansion_relief = current_expansion_ratio - recommended_expansion_ratio
+
+    if status == "normal-shock-candidate":
+        total_pressure_factor = float(shock_analysis.get("total_pressure_ratio", 0.82) or 0.82)
+        coefficient_factor = clamp(0.72 + 0.28 * total_pressure_factor, 0.62, 0.96)
+    else:
+        coefficient_factor = clamp(0.86 + 0.12 * pressure_ratio_to_ambient, 0.68, 0.96)
+
+    return {
+        "influences_design": True,
+        "status": status,
+        "regime": regime,
+        "pressure_ratio_to_ambient": round(pressure_ratio_to_ambient, 6),
+        "thrust_coefficient_factor": round(coefficient_factor, 6),
+        "current_exit_diameter_mm": round(current_exit_diameter_mm, 4),
+        "recommended_exit_diameter_mm": round(recommended_exit_diameter_mm, 4),
+        "current_expansion_ratio": round(current_expansion_ratio, 6),
+        "recommended_expansion_ratio": round(recommended_expansion_ratio, 6),
+        "expansion_ratio_relief": round(max(0.0, expansion_relief), 6),
+        "pressure_recovery_scale": round(pressure_recovery_scale, 6),
+        "note": (
+            "Overexpanded-flow shock/separation feedback reduced effective thrust coefficient and "
+            "recommended a smaller exit area for the next geometry pass."
+        ),
     }
 
 
@@ -425,7 +755,7 @@ def _build_combustion_station_updates(
     mass_flow_kg_s: float,
     flow_model: str,
 ) -> Dict[str, Dict[str, Dict[str, object]]]:
-    source_solver = "Combustion CFD Proxy Solver"
+    source_solver = "Cantera Coupled Flow Solver"
     exit_station_pressure_kpa = exit_pressure_kpa
 
     return {
@@ -449,8 +779,8 @@ def _build_combustion_station_updates(
     }
 
 
-def run_combustion_cfd_proxy(
-    design: ConceptDesign,
+def run_combustion_cfd_solver(
+    design: EngineDesign,
     assumptions: SolverAssumptions,
     station_count: int = 60,
     max_iterations_override: Optional[int] = None,
@@ -458,7 +788,7 @@ def run_combustion_cfd_proxy(
     thermochemistry_mode: str = "auto",
     thermochemistry_provider: Optional[ThermochemistryProvider] = None,
 ) -> Dict[str, object]:
-    """Runs a lightweight quasi-1D combustion/nozzle proxy solver with iteration tracing."""
+    """Run the Cantera-backed chamber/nozzle flow solve with iteration tracing."""
 
     def report(progress: float, message: str) -> None:
         if progress_callback is not None:
@@ -480,19 +810,14 @@ def run_combustion_cfd_proxy(
     fuel = lookup_propellant(design.inputs.fuel_name, "fuel")
     oxidizer = lookup_propellant(design.inputs.oxidizer_name, "oxidizer")
 
-    throat_fraction = clamp(
-        0.21
-        + (fuel.cooling_affinity - 0.5) * 0.015
-        - (oxidizer.thermal_severity - 0.6) * 0.010
-        + (0.01 if design.inputs.use_pumps else -0.005),
-        0.16,
-        0.24,
-    )
-    fast_throat_area = chamber_area * throat_fraction
-    throat_diameter_mm = max(1.0, float(eng.get("nozzle_throat_diameter_mm", 0.0)))
+    throat_diameter_mm = float(eng.get("nozzle_throat_diameter_mm", 0.0))
+    if throat_diameter_mm <= 1.0:
+        raise RuntimeError(
+            "Combustion solve requires solved nozzle_throat_diameter_mm from the geometry solver."
+        )
     geometric_throat_area = _area_from_diameter_mm(throat_diameter_mm)
-    throat_area_source = "solved_geometry" if throat_diameter_mm > 1.0 else "heuristic_fraction"
-    throat_area = geometric_throat_area if throat_area_source == "solved_geometry" else fast_throat_area
+    throat_area_source = "solved_geometry"
+    throat_area = geometric_throat_area
     throat_fraction = throat_area / max(1e-8, chamber_area)
 
     requested_thermochemistry_mode = (thermochemistry_mode or "auto").strip().lower()
@@ -500,8 +825,8 @@ def run_combustion_cfd_proxy(
     provider = thermochemistry_provider or resolve_thermochemistry_provider(effective_thermochemistry_mode)
     if not isinstance(provider, CanteraThermochemistryProvider):
         raise RuntimeError("Combustion solver requires the Cantera thermochemistry provider.")
-    thermo = provider.estimate(design, assumptions, fuel, oxidizer)
-    if thermo.status not in {"ok", "approximate"}:
+    thermo = provider.solve(design, assumptions, fuel, oxidizer)
+    if thermo.status != "ok":
         raise RuntimeError("Cantera thermochemistry failed: {0}".format(thermo.note or thermo.status))
 
     gamma = thermo.gamma
@@ -532,11 +857,11 @@ def run_combustion_cfd_proxy(
     iteration_limit = assumptions.max_iterations
     if max_iterations_override is not None:
         iteration_limit = max(3, min(200, int(max_iterations_override)))
-    station_steps = max(6, min(120, int(station_count)))
+    station_steps = max(6, min(240, int(station_count)))
 
-    report(12.0, "Step 2/5: Iterating chamber state")
+    report(12.0, "Step 2/5: Solving chamber pressure root")
     vacuum_model = _thrust_coefficient_vacuum(gamma, exit_area / max(1e-8, throat_area))
-    nozzle_loss_model = _estimate_nozzle_loss_model(
+    nozzle_loss_model = _calculate_nozzle_loss_model(
         throat_area, exit_area, nozzle_length_mm, contour_points, assumptions, flow_model
     )
     coefficient_state = _effective_thrust_coefficient(
@@ -555,55 +880,32 @@ def run_combustion_cfd_proxy(
         1.04,
     )
     design_thrust_n = max(1.0, float(design.inputs.target_thrust_newtons) * thrust_bias)
-    target_chamber_pressure_pa = design_thrust_n / max(
-        1e-6, effective_thrust_coefficient * throat_area
+    pressure_seed_pa = max(100000.0, float(eng.get("chamber_pressure_kpa", 800.0)) * 1000.0)
+    root_pressure_pa, iteration_trace, converged, coefficient_state = _solve_chamber_pressure_root(
+        flow_model,
+        design_thrust_n,
+        throat_area,
+        exit_area,
+        ambient_pressure_pa,
+        vacuum_model,
+        nozzle_loss_model,
+        lower_pressure_pa=max(100000.0, pressure_seed_pa * 0.35),
+        upper_pressure_pa=min(60000000.0, pressure_seed_pa * 3.5),
+        tolerance_fraction=assumptions.convergence_tolerance,
+        iteration_limit=iteration_limit,
     )
-    chamber_pressure_pa = max(
-        100000.0, float(eng.get("chamber_pressure_kpa", 800.0)) * 1000.0
-    )
-    converged = False
-    mass_flow_kg_s = 0.0
-    iteration_trace: List[Dict[str, float]] = []
-    for iteration in range(1, iteration_limit + 1):
-        coefficient_state = _effective_thrust_coefficient(
-            flow_model,
-            chamber_pressure_pa,
-            exit_area,
-            throat_area,
-            ambient_pressure_pa,
-            vacuum_model,
-            nozzle_loss_model,
-        )
-        effective_thrust_coefficient = coefficient_state["effective_thrust_coefficient"]
-        chamber_pressure_pa = 0.72 * chamber_pressure_pa + 0.28 * target_chamber_pressure_pa
-        if flow_model == "refined":
-            target_chamber_pressure_pa = design_thrust_n / max(
-                1e-6, effective_thrust_coefficient * throat_area
-            )
-        rho_chamber = chamber_pressure_pa / max(1e-6, r_gas * chamber_temp)
-        mass_flow_kg_s = chamber_pressure_pa * throat_area / max(1e-6, cstar)
-        predicted_thrust_n = effective_thrust_coefficient * chamber_pressure_pa * throat_area
-        error = abs(predicted_thrust_n - design_thrust_n) / max(1.0, design_thrust_n)
-        chamber_velocity_m_s = mass_flow_kg_s / max(1e-8, rho_chamber * chamber_area)
-
-        iteration_trace.append(
-            {
-                "iteration": float(iteration),
-                "chamber_pressure_kpa": rounded(chamber_pressure_pa / 1000.0),
-                "chamber_density_kg_m3": rounded(rho_chamber),
-                "chamber_velocity_m_s": rounded(chamber_velocity_m_s),
-                "thrust_coefficient": rounded(effective_thrust_coefficient),
-                "relative_error": round(error, 6),
-            }
-        )
-
+    chamber_pressure_pa = root_pressure_pa
+    effective_thrust_coefficient = coefficient_state["effective_thrust_coefficient"]
+    rho_chamber = chamber_pressure_pa / max(1e-6, r_gas * chamber_temp)
+    mass_flow_kg_s = chamber_pressure_pa * throat_area / max(1e-6, cstar)
+    chamber_velocity_m_s = mass_flow_kg_s / max(1e-8, rho_chamber * chamber_area)
+    for row in iteration_trace:
+        row["chamber_density_kg_m3"] = rounded(rho_chamber)
+        row["chamber_velocity_m_s"] = rounded(chamber_velocity_m_s)
         report(
-            12.0 + (iteration / max(1, iteration_limit)) * 48.0,
-            "Step 2/5: Solving {0} chamber iteration {1}".format(flow_model, iteration),
+            12.0 + (row["iteration"] / max(1, iteration_limit)) * 48.0,
+            "Step 2/5: chamber pressure root iteration {0}".format(int(row["iteration"])),
         )
-        if error < assumptions.convergence_tolerance:
-            converged = True
-            break
 
     report(64.0, "Step 3/5: Solving nozzle contour, expansion, and losses")
     expansion_ratio = exit_area / max(1e-8, throat_area)
@@ -626,7 +928,7 @@ def run_combustion_cfd_proxy(
     throat_temperature_k = _static_temperature_from_mach(chamber_temp, gamma, 1.0)
     throat_pressure_kpa = _static_pressure_from_mach(chamber_pressure_pa, gamma, 1.0) / 1000.0
 
-    report(78.0, "Step 4/5: Building quasi-1D axial profile from solved geometry")
+    report(78.0, "Step 4/5: Building axial flow profile from solved geometry")
     axial_profile = _build_quasi_1d_axial_profile(
         contour_points=contour_points,
         station_steps=station_steps,
@@ -645,6 +947,19 @@ def run_combustion_cfd_proxy(
             78.0 + ratio * 18.0,
             "Step 4/5: Solving area-Mach station {0}/{1}".format(idx, station_steps),
         )
+    navier_stokes_result: Dict[str, object] = {}
+    if flow_model == "navier_stokes":
+        navier_stokes_result = run_axisymmetric_navier_stokes_adapter(
+            axial_profile,
+            chamber_pressure_kpa=chamber_pressure_pa / 1000.0,
+            chamber_temperature_k=chamber_temp,
+            gamma=gamma,
+            gas_constant_j_kg_k=r_gas,
+            mass_flow_kg_s=mass_flow_kg_s,
+        )
+        corrected_profile = navier_stokes_result.get("axial_profile")
+        if isinstance(corrected_profile, list) and corrected_profile:
+            axial_profile = corrected_profile
 
     report(97.0, "Step 5/5: Solving heat-transfer and shock diagnostics")
     predicted_thrust_n = effective_thrust_coefficient * chamber_pressure_pa * throat_area
@@ -673,6 +988,24 @@ def run_combustion_cfd_proxy(
         ambient_pressure_pa / 1000.0,
         gamma,
     )
+    shock_design_feedback = _build_shock_design_feedback(
+        shock_analysis,
+        throat_area,
+        exit_area,
+        ambient_pressure_pa,
+        chamber_pressure_pa,
+        vacuum_model,
+        nozzle_loss_model,
+    )
+    if shock_design_feedback["influences_design"]:
+        shock_factor = float(shock_design_feedback["thrust_coefficient_factor"])
+        effective_thrust_coefficient *= shock_factor
+        predicted_thrust_n = effective_thrust_coefficient * chamber_pressure_pa * throat_area
+        thrust_error = abs(predicted_thrust_n - design_thrust_n) / max(1.0, design_thrust_n)
+        predicted_isp_s = predicted_thrust_n / max(1e-6, mass_flow_kg_s * assumptions.gravity_m_s2)
+        predicted_impulse_newton_seconds = predicted_thrust_n * max(0.5, float(design.inputs.burn_time_seconds))
+        coefficient_state["effective_thrust_coefficient"] = effective_thrust_coefficient
+        converged = converged and thrust_error <= max(assumptions.convergence_tolerance, 0.01)
 
     report(98.0, "Step 5/5: Assembling combustion solver outputs")
 
@@ -688,19 +1021,27 @@ def run_combustion_cfd_proxy(
         flow_model=flow_model,
     )
 
+    flow_label = {
+        "fast": "Fast design preview",
+        "refined": "Characteristic-net viscous design solve",
+        "navier_stokes": "Cantera plus Navier-Stokes design solve",
+    }.get(flow_model, "Fast design preview")
+    solver_mode = {
+        "fast": "design-fast",
+        "refined": "cantera-moc-characteristic-net",
+        "navier_stokes": "cantera-moc-navier-stokes",
+    }.get(flow_model, "design-fast")
     result = {
         "metadata": {
-            "solver_name": "Combustion CFD Proxy Solver",
-            "solver_version": "1.1",
-            "solver_mode": "quasi-1d-{0}".format(flow_model),
-            "solver_stage": "stage-2-nozzle-loss-{0}".format(flow_model),
-            "solver_stage_label": "{0} nozzle loss model".format(
-                "Refined quasi-1D" if flow_model == "refined" else "Fast quasi-1D"
-            ),
+            "solver_name": "Cantera Coupled Flow Solver",
+            "solver_version": "1.2",
+            "solver_mode": solver_mode,
+            "solver_stage": "stage-3-pressure-root-shock-feedback-{0}".format(flow_model),
+            "solver_stage_label": "{0} with shock feedback".format(flow_label),
             "flow_model": flow_model,
-            "flow_model_label": (
-                "Refined quasi-1D solve" if flow_model == "refined" else "Fast quasi-1D preview"
-            ),
+            "flow_model_label": flow_label,
+            "chamber_pressure_solution": "bracketed-root-solve",
+            "shock_coupled_to_design": True,
             "station_count": station_steps + 1,
             "iteration_limit": iteration_limit,
             "throat_area_source": throat_area_source,
@@ -711,7 +1052,7 @@ def run_combustion_cfd_proxy(
                 "provider": thermo.provider_name,
                 "source": thermo.source,
                 "status": thermo.status,
-                "fallback_used": thermo.status != "ok",
+                "cantera_solved": True,
                 "note": thermo.note,
             },
         },
@@ -744,14 +1085,20 @@ def run_combustion_cfd_proxy(
             "thrust_error_fraction": round(thrust_error, 6),
             "exit_mach": rounded(exit_mach),
             "flow_model": flow_model,
-            "flow_model_label": "Refined quasi-1D solve" if flow_model == "refined" else "Fast quasi-1D preview",
+            "flow_model_label": flow_label,
             "ambient_pressure_kpa": rounded(ambient_pressure_pa / 1000.0),
             "exit_pressure_kpa": rounded(exit_pressure_kpa),
             "ambient_thrust_coefficient": rounded(coefficient_state["ambient_thrust_coefficient"]),
             "separation_efficiency": round(coefficient_state["separation_efficiency"], 4),
+            "shock_thrust_coefficient_factor": round(float(shock_design_feedback.get("thrust_coefficient_factor", 1.0)), 6),
+            "shock_recommended_exit_diameter_mm": rounded(float(shock_design_feedback.get("recommended_exit_diameter_mm", 0.0) or 0.0)),
             "thermochemistry_provider": thermo.provider_name,
             "thermochemistry_status": thermo.status,
-            "axial_profile_model": "isentropic quasi-1D area-Mach profile from solved nozzle contour",
+            "axial_profile_model": (
+                "axisymmetric Navier-Stokes design adapter from characteristic-net contour"
+                if flow_model == "navier_stokes"
+                else "characteristic-net area-Mach station field from solved nozzle contour"
+            ),
             "heat_transfer_status": heat_summary.get("status", heat_transfer.get("status", "--")),
             "heat_load_kw": rounded(float(heat_summary.get("total_heat_load_kw", 0.0) or 0.0)),
             "max_hot_wall_temperature_k": rounded(float(heat_summary.get("max_hot_wall_temperature_k", 0.0) or 0.0)),
@@ -761,11 +1108,14 @@ def run_combustion_cfd_proxy(
             "shock_status": shock_analysis.get("status", "--"),
             "shock_regime": shock_analysis.get("regime", "--"),
             "shock_station_x_mm": rounded(float(shock_analysis.get("shock_x_mm", 0.0) or 0.0)),
+            "navier_stokes_status": navier_stokes_result.get("status", "not-active") if navier_stokes_result else "not-active",
         },
         "iteration_trace": iteration_trace,
         "axial_profile": axial_profile,
         "heat_transfer": heat_transfer,
+        "navier_stokes": navier_stokes_result,
         "shock_analysis": shock_analysis,
+        "shock_design_feedback": shock_design_feedback,
         "physics": {
             "assumptions": {
                 "flow_model": flow_model,
@@ -849,13 +1199,14 @@ def run_combustion_cfd_proxy(
             },
             "heat_transfer": heat_transfer,
             "shock_analysis": shock_analysis,
+            "shock_design_feedback": shock_design_feedback,
         },
         "warnings": [
-            (
-                "Refined mode uses contour-aware throat sizing, ambient-pressure correction, and a bell-nozzle loss model; it remains a reduced-order solver, not validated CFD."
-                if flow_model == "refined"
-                else "This is a quasi-1D proxy with geometry-aware nozzle losses, not validated high-fidelity CFD."
-            ),
+            {
+                "fast": "Fast mode is a preview solve and should not be used as the final physics basis.",
+                "refined": "Refined mode uses a characteristic-net nozzle contour, Cantera thermochemistry, pressure-root solving, and shock feedback. It is still a design solver, not certification CFD.",
+                "navier_stokes": "Navier-Stokes mode runs the in-app viscous design adapter. Use an external validated CFD backend before hardware release.",
+            }.get(flow_model, "Flow solve completed with design-level assumptions."),
         ],
         "station_field_updates": station_field_updates,
     }

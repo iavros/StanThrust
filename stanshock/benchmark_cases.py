@@ -1,8 +1,8 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
-from stanshock.concept_model import create_concept_design
+from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
+from stanshock.design_model import create_engine_design
 from stanshock.defaults import DEFAULT_STATE
 from stanshock.solver_assumptions import SolverAssumptions
 
@@ -254,14 +254,15 @@ def build_reconstructed_benchmark_rows(
     thermochemistry_provider: Optional[object] = None,
 ) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
-    gravity_m_s2 = float(assumptions.gravity_m_s2)
+    benchmark_assumptions = replace(assumptions, flow_model="navier_stokes")
+    gravity_m_s2 = float(benchmark_assumptions.gravity_m_s2)
 
     for case in get_public_benchmark_cases():
-        design = create_concept_design(case.as_state())
-        combustion = run_combustion_cfd_proxy(
+        design = create_engine_design(case.as_state())
+        combustion = run_combustion_cfd_solver(
             design,
-            assumptions,
-            station_count=25,
+            benchmark_assumptions,
+            station_count=160,
             thermochemistry_mode="auto",
             thermochemistry_provider=thermochemistry_provider,
         )
@@ -290,6 +291,9 @@ def build_reconstructed_benchmark_rows(
                 "feed_mode_model": "pump-fed" if case.use_pumps else "pressure-fed",
                 "regen_cooling_model": "yes" if case.regen_cooling else "no",
                 "film_cooling_model": "yes" if case.film_cooling else "no",
+                "solver_validation_path": "direct_navier_stokes_solver",
+                "optimizer_used": "no",
+                "solver_station_count": int(float(summary["station_count"])),
                 "simulated_thrust_n": round(float(summary["predicted_thrust_newtons"]), 5),
                 "simulated_chamber_pressure_kpa": round(float(summary["chamber_pressure_kpa"]), 5),
                 "simulated_mass_flow_kg_s": round(float(summary["mass_flow_kg_s"]), 5),
@@ -316,7 +320,7 @@ def build_internal_baseline_rows() -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
 
     for case in get_internal_baseline_cases():
-        design = create_concept_design(case.state)
+        design = create_engine_design(case.state)
         values = design.derived.engineering_values
         observed = {
             "calculated_thrust_newtons": float(values.get("calculated_thrust_newtons", 0.0)),

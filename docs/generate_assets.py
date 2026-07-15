@@ -26,13 +26,13 @@ _add_user_site()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
 from stanshock.benchmark_cases import (
     build_internal_baseline_rows,
     build_public_benchmark_reference_rows,
     build_reconstructed_benchmark_rows,
 )
-from stanshock.concept_model import _solve_pressure_state, create_concept_design
+from stanshock.design_model import _solve_pressure_state, create_engine_design
 from stanshock.defaults import DEFAULT_STATE
 from stanshock.solver_assumptions import get_default_solver_assumptions
 from stanshock.solver_interface import solve as solve_solver_interface
@@ -80,9 +80,9 @@ def write_macros(path: Path, macros) -> None:
 
 def build_default_case():
     state = asdict(DEFAULT_STATE)
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     assumptions = get_default_solver_assumptions()
-    combustion = run_combustion_cfd_proxy(
+    combustion = run_combustion_cfd_solver(
         design,
         assumptions,
         station_count=25,
@@ -93,9 +93,9 @@ def build_default_case():
 
 def build_case_for_flow_model(flow_model: str):
     state = asdict(DEFAULT_STATE)
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     assumptions = replace(get_default_solver_assumptions(), flow_model=flow_model)
-    combustion = run_combustion_cfd_proxy(
+    combustion = run_combustion_cfd_solver(
         design,
         assumptions,
         station_count=25,
@@ -134,12 +134,13 @@ def build_feed_transient_case_rows(use_pumps: bool):
     return rows, summary
 
 
-def build_flow_mode_comparison_rows(design, fast_combustion, refined_combustion):
+def build_flow_mode_comparison_rows(design, fast_combustion, refined_combustion, navier_stokes_combustion):
     values = design.derived.engineering_values
     rows = []
     for mode_name, result in (
         ("fast", fast_combustion),
         ("refined", refined_combustion),
+        ("navier_stokes", navier_stokes_combustion),
     ):
         summary = result["summary"]
         nozzle = result["physics"]["nozzle"]
@@ -167,7 +168,7 @@ def build_pressure_rows(state):
     for use_pumps, label in ((True, "pump-fed"), (False, "pressure-fed")):
         arch_state = dict(state)
         arch_state["use_pumps"] = use_pumps
-        design = create_concept_design(arch_state)
+        design = create_engine_design(arch_state)
         values = design.derived.engineering_values
         solution = _solve_pressure_state(
             use_pumps=use_pumps,
@@ -348,7 +349,7 @@ def build_cooling_sweep_rows(state):
         variant_state = dict(state)
         variant_state["regen_cooling"] = regen
         variant_state["film_cooling"] = film
-        design = create_concept_design(variant_state)
+        design = create_engine_design(variant_state)
         values = design.derived.engineering_values
         rows.append(
             {
@@ -366,7 +367,8 @@ def build_cooling_sweep_rows(state):
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     state, design, _, fast_combustion = build_case_for_flow_model("fast")
-    _, _, assumptions, combustion = build_case_for_flow_model("refined")
+    _, _, _, refined_combustion = build_case_for_flow_model("refined")
+    _, _, assumptions, combustion = build_case_for_flow_model("navier_stokes")
     pressure_fed_transient_rows, pressure_fed_transient_summary = build_feed_transient_case_rows(False)
     pump_fed_transient_rows, pump_fed_transient_summary = build_feed_transient_case_rows(True)
     values = design.derived.engineering_values
@@ -492,7 +494,7 @@ def main() -> None:
             "nozzle_half_angle_deg",
             "nozzle_expansion_ratio",
         ],
-        build_flow_mode_comparison_rows(design, fast_combustion, combustion),
+        build_flow_mode_comparison_rows(design, fast_combustion, refined_combustion, combustion),
     )
     benchmark_rows = [
         {
@@ -658,7 +660,7 @@ def main() -> None:
 
     macros = {
         "SampleFuel": state["fuel_name"],
-        "SampleFlowMode": str(summary.get("flow_model_label", "Refined quasi-1D solve")),
+        "SampleFlowMode": str(summary.get("flow_model_label", "Cantera plus Navier-Stokes design solve")),
         "SampleOxidizer": state["oxidizer_name"],
         "SampleMixtureRatio": "{0:.2f}".format(state["mixture_ratio"]),
         "SampleTargetThrust": "{0:.1f}".format(state["target_thrust_newtons"]),
@@ -668,7 +670,7 @@ def main() -> None:
         "SampleThroatDiameter": "{0:.1f}".format(values.get("nozzle_throat_diameter_mm", 0.0)),
         "SampleExitDiameter": "{0:.1f}".format(values.get("nozzle_inner_diameter_mm", 0.0)),
         "SampleExpansionRatio": "{0:.3f}".format(values.get("nozzle_expansion_ratio", 0.0)),
-        "SampleContourMethod": str(values.get("nozzle_contour_method_label", "MOC-informed bell contour")),
+        "SampleContourMethod": str(values.get("nozzle_contour_method_label", "MOC characteristic-net bell contour")),
         "SampleReferenceConicalLength": "{0:.1f}".format(values.get("nozzle_reference_conical_length_mm", 0.0)),
         "SampleBellLengthFraction": "{0:.3f}".format(values.get("nozzle_bell_length_fraction", 0.0)),
         "SampleBellEntranceAngle": "{0:.2f}".format(values.get("nozzle_bell_entrance_angle_deg", 0.0)),

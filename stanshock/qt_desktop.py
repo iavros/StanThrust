@@ -16,7 +16,7 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from stanshock import __version__ as APP_VERSION
-from stanshock.concept_model import INJECTOR_TYPES, create_concept_design
+from stanshock.design_model import INJECTOR_TYPES, create_engine_design
 from stanshock.coupled_cycle_solver import solve as solve_coupled_cycle
 from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS, DEFAULT_STATE
 from stanshock.exporter import (
@@ -38,7 +38,7 @@ from stanshock.project_io import load_project, save_project
 from stanshock.propellants import FUEL_NAMES, OXIDIZER_NAMES
 from stanshock.solver_assumptions import get_default_solver_assumptions
 from stanshock.structural_material_solver import build_structural_materials_output
-from stanshock.validation_pack import validate_concept_design
+from stanshock.validation_pack import validate_engine_design
 
 try:
     from PyQt5.QtCore import Qt, QLineF, QPointF, QRectF, QTimer
@@ -127,10 +127,10 @@ FIELD_HELPERS = {
     "mixture_ratio": "Oxidizer to fuel mass ratio.",
     "packaging_bias": "How aggressively to prioritize compact packaging.",
     "factor_of_safety": "Extra structural margin for the engine.",
-    "solver_station_count": "Axial station count used by the proxy solver.",
+    "solver_station_count": "Axial station count used by the flow solver.",
     "solver_convergence_tolerance": "Lower values require tighter convergence.",
     "solver_iteration_limit": "Maximum solver iterations before stopping.",
-    "solver_flow_model": "Fast mode is the default preview-oriented quasi-1D path. Refined mode adds contour-aware throat sizing and ambient-pressure correction for explicit solves.",
+    "solver_flow_model": "Navier-Stokes mode uses the Cantera state, characteristic-net nozzle contour, shock feedback, and viscous station corrections.",
 }
 
 
@@ -152,6 +152,7 @@ INJECTOR_DISPLAY_NAMES = {
 }
 
 FLOW_MODEL_DISPLAY_NAMES = {
+    "navier_stokes": "Navier-Stokes",
     "fast": "Fast Preview",
     "refined": "Refined Solve",
 }
@@ -162,16 +163,17 @@ NOZZLE_EXPANSION_DISPLAY_NAMES = {
     "overexpanded": "Overexpanded",
 }
 
-DEFAULT_SOLVER_STATION_COUNT = 60
+DEFAULT_SOLVER_STATION_COUNT = 160
+FINAL_SOLVER_STATION_COUNT = 180
 
 
 def _display_solver_stage(value: object, flow_model_label: object = "") -> str:
     text = str(value or "").strip()
-    if text.startswith("stage-2-nozzle-loss-"):
-        flow_model = text.replace("stage-2-nozzle-loss-", "").strip()
+    if text.startswith("stage-2-nozzle-loss-") or text.startswith("stage-3-pressure-root-shock-feedback-"):
+        flow_model = text.replace("stage-2-nozzle-loss-", "").replace("stage-3-pressure-root-shock-feedback-", "").strip()
         if flow_model_label:
-            return "{0} nozzle loss model".format(str(flow_model_label))
-        return "{0} quasi-1D nozzle loss model".format(_display_option_name(flow_model))
+            return "{0}".format(str(flow_model_label))
+        return "{0} solver".format(_display_option_name(flow_model))
     return _display_option_name(text) if text else "--"
 
 
@@ -3386,11 +3388,11 @@ class StanThrustQtWindow(QMainWindow):
 
         definitions = (
             ("pressure_transient", "Burn Transient Pressure", "Chamber, required feed, and supply-side pressure history."),
-            ("performance_transient", "Burn Performance", "Estimated thrust trace and propellant flow over the burn."),
+            ("performance_transient", "Burn Performance", "Solved thrust trace and propellant flow over the burn."),
             ("feed_margins", "Feed Margins", "Fuel and oxidizer pressure margin through the burn."),
             ("axial_field", "Axial Flow Field", "Pressure and velocity progression along the engine axis."),
             ("mach_area", "Mach And Area", "Mach number and area ratio from the solved nozzle contour."),
-            ("thermal_density", "Thermal Field", "Static temperature and density along the quasi-1D flow path."),
+            ("thermal_density", "Thermal Field", "Static temperature and density along the solved flow path."),
             ("convergence", "Solver Convergence", "Chamber iteration pressure and relative error."),
             ("coupled_margins", "Coupled Margins", "Feed margin, structural margin, and pressure residual by coupled iteration."),
         )
@@ -3617,7 +3619,7 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["factor_of_safety"] = self._spin(1.0, 10.0, 0.1, 2)
         self._add_form_row(form, "Fuel Tank Material", self.widgets["fuel_tank_material"], "Tank wall material.")
         self._add_form_row(form, "Oxidizer Tank Material", self.widgets["oxidizer_tank_material"], "Tank wall material.")
-        self._add_form_row(form, "Feed System Material", self.widgets["feed_system_material"], "Material placeholder for feed hardware.")
+        self._add_form_row(form, "Feed System Material", self.widgets["feed_system_material"], "Material used for feed hardware material evaluation.")
         self._add_form_row(form, "Chamber Material", self.widgets["chamber_material"], "Chamber material.")
         self._add_form_row(form, "Nozzle Material", self.widgets["nozzle_material"], "Nozzle material.")
         self._add_form_row(form, "Safety Factor", self.widgets["factor_of_safety"], FIELD_HELPERS["factor_of_safety"])
@@ -3644,15 +3646,12 @@ class StanThrustQtWindow(QMainWindow):
         group.layout().addLayout(form)
         self.widgets["ga_enabled"] = QCheckBox("Optimize on Solve")
         self.widgets["feasibility_first"] = QCheckBox("Feasibility-first GA")
-        self.widgets["use_multi_fidelity"] = QCheckBox("Multi-Fidelity Screening")
+        self.widgets["use_multi_fidelity"] = QCheckBox("Solver Fidelity Routing")
         self.widgets["show_uncertainty"] = QCheckBox("Show Uncertainty Summary")
         for key in ("ga_enabled", "feasibility_first", "use_multi_fidelity", "show_uncertainty"):
             checkbox = self.widgets[key]
             checkbox.toggled.connect(self._on_preview_change)
             group.layout().addWidget(checkbox)
-        preview_button = QPushButton("Surrogate Preview")
-        preview_button.clicked.connect(self.on_surrogate_preview)
-        group.layout().addWidget(preview_button)
         layout.addWidget(group)
         layout.addStretch(1)
         return page
@@ -3664,8 +3663,8 @@ class StanThrustQtWindow(QMainWindow):
         group = self._build_section("Solver", "")
         form = QFormLayout()
         self._configure_form_layout(form)
-        self.widgets["solver_flow_model"] = self._combo(("fast", "refined"), FLOW_MODEL_DISPLAY_NAMES)
-        self.widgets["solver_station_count"] = self._spin(6, 120, 1.0, 0)
+        self.widgets["solver_flow_model"] = self._combo(("navier_stokes", "refined", "fast"), FLOW_MODEL_DISPLAY_NAMES)
+        self.widgets["solver_station_count"] = self._spin(6, 240, 1.0, 0)
         self.widgets["solver_convergence_tolerance"] = self._spin(0.0001, 0.1, 0.001, 4)
         self.widgets["solver_iteration_limit"] = self._spin(1, 500, 1.0, 0)
         self._add_form_row(form, "Flow Model", self.widgets["solver_flow_model"], FIELD_HELPERS["solver_flow_model"])
@@ -3904,9 +3903,9 @@ class StanThrustQtWindow(QMainWindow):
         state = self.collect_form_state()
         objective_weights = self.collect_objective_weights()
         self.current_input_state = dict(state)
-        self.current_design = create_concept_design(state)
+        self.current_design = create_engine_design(state)
         self.current_objective_report = evaluate_objectives(self.current_design, objective_weights)
-        self.current_validation_report = validate_concept_design(self.current_design)
+        self.current_validation_report = validate_engine_design(self.current_design)
         self.current_structural_result = self._build_structural_result()
         self._render_status_banner()
         self._render_metric_cards()
@@ -4149,7 +4148,7 @@ class StanThrustQtWindow(QMainWindow):
 
         thrust_series = [
             {
-                "label": "Estimated thrust",
+                "label": "Solved thrust",
                 "color": QT_PALETTE["accent_hover"],
                 "points": [
                     (
@@ -4354,7 +4353,7 @@ class StanThrustQtWindow(QMainWindow):
         self.plot_cards["performance_transient"].set_plot_data(
             subtitle="Preliminary thrust curve scaled from the solved operating point using transient feed state.",
             x_label="Time (s)",
-            primary_label="Estimated thrust (N)",
+            primary_label="Solved thrust (N)",
             primary_series=performance_primary,
             secondary_label="Mass flow (kg/s)",
             secondary_series=performance_secondary,
@@ -4368,13 +4367,13 @@ class StanThrustQtWindow(QMainWindow):
             note="Positive margin indicates the feed path can still support the requested chamber and injector pressure at that time step.",
         )
         self.plot_cards["axial_field"].set_plot_data(
-            subtitle="{0} axial station field from the reduced-order combustion path.".format(flow_model_label),
+            subtitle="{0} axial station field from the chamber/nozzle solve.".format(flow_model_label),
             x_label="Axial position (mm)",
             primary_label="Pressure (kPa)",
             primary_series=axial_primary,
             secondary_label="Velocity (m/s)",
             secondary_series=axial_secondary,
-            note="Axial station fields come from the same quasi-1D solver used for the measurements and diagnostics tabs.",
+            note="Axial station fields come from the same flow solver used for the measurements and diagnostics tabs.",
         )
         self.plot_cards["mach_area"].set_plot_data(
             subtitle="Mach solution and local area ratio along the solved chamber, throat, and nozzle contour.",
@@ -4418,7 +4417,7 @@ class StanThrustQtWindow(QMainWindow):
                 axial_profile=axial_profile,
                 variable="mach",
                 variable_label="Mach field",
-                note="The field is an axisymmetric quasi-1D visualization, not a CFD mesh.",
+                note="The field is an axisymmetric station visualization generated from the active flow model.",
             )
 
     def _render_measurements(self) -> None:
@@ -4910,7 +4909,7 @@ class StanThrustQtWindow(QMainWindow):
                 self.progress_bar.setValue(5)
             if self.widgets["ga_enabled"].isChecked() or self.current_validation_report is None or not self.current_validation_report.passed:
                 self._set_step_progress("optimization", 20, "Running")
-                self.run_concept_ga()
+                self.run_design_ga()
                 self._set_step_progress("optimization", 100, "Solved")
             else:
                 self.current_ga_result = None
@@ -4927,7 +4926,7 @@ class StanThrustQtWindow(QMainWindow):
             self.solve_button.setEnabled(True)
             QApplication.restoreOverrideCursor()
 
-    def run_concept_ga(self) -> None:
+    def run_design_ga(self) -> None:
         if not self.current_design:
             return
         self._append_solver_log("Starting feasibility and objective optimization pass.", "I-GA-001", "INFO")
@@ -4968,7 +4967,17 @@ class StanThrustQtWindow(QMainWindow):
         QApplication.processEvents()
         resolution = self._collect_solver_resolution()
         state = self.collect_form_state()
-        state["solver_flow_model"] = resolution["flow_model"]
+        final_flow_model = "navier_stokes"
+        final_station_count = max(FINAL_SOLVER_STATION_COUNT, resolution["station_count"])
+        final_iteration_limit = max(80, resolution["iteration_limit"])
+        final_convergence_tolerance = min(resolution["convergence_tolerance"], 0.0025)
+        state["solver_flow_model"] = final_flow_model
+        state["solver_station_count"] = final_station_count
+        self._append_solver_log(
+            "Final pass forced to Navier-Stokes with {0} axial stations.".format(final_station_count),
+            "I-SOLVE-010",
+            "INFO",
+        )
         initial_pressure_kpa = _safe_float(
             dict(self.current_design.derived.engineering_values).get("chamber_pressure_kpa"),
             1500.0,
@@ -4978,8 +4987,8 @@ class StanThrustQtWindow(QMainWindow):
             upstream_context={"source": "qt-ui", "stage": "coupled-solve"},
             initial_chamber_pressure_kpa=initial_pressure_kpa,
             initial_design=self.current_design,
-            convergence_tolerance_kpa=max(0.5, resolution["convergence_tolerance"] * 1000.0),
-            max_iterations=resolution["iteration_limit"],
+            convergence_tolerance_kpa=max(0.5, final_convergence_tolerance * 1000.0),
+            max_iterations=final_iteration_limit,
             progress_callback=self._set_solver_progress,
         )
         if self.current_coupled_cycle_result.get("status") == "error":
@@ -5026,7 +5035,7 @@ class StanThrustQtWindow(QMainWindow):
         coupled_convergence = dict(coupled_payload.get("convergence", {}))
         self._set_status(
             "Done. {0}: {1} | coupled: {2}, residual {3} kPa | thermo: {4} ({5})".format(
-                FLOW_MODEL_DISPLAY_NAMES.get(resolution["flow_model"], resolution["flow_model"]),
+                FLOW_MODEL_DISPLAY_NAMES.get(final_flow_model, final_flow_model),
                 self.current_combustion_result.get("status", "unknown"),
                 self.current_coupled_cycle_result.get("status", "unknown"),
                 _format_number(coupled_convergence.get("final_residual_kpa", "--"), 3),
@@ -5048,9 +5057,11 @@ class StanThrustQtWindow(QMainWindow):
         convergence_tolerance = float(self.widgets["solver_convergence_tolerance"].value())
         iteration_limit = int(self.widgets["solver_iteration_limit"].value())
         flow_model = self._combo_value(self.widgets["solver_flow_model"]).strip().lower()
+        if flow_model not in {"fast", "refined", "navier_stokes"}:
+            flow_model = "navier_stokes"
         return {
-            "flow_model": "refined" if flow_model == "refined" else "fast",
-            "station_count": max(6, min(120, station_count)),
+            "flow_model": flow_model,
+            "station_count": max(6, min(240, station_count)),
             "convergence_tolerance": max(0.0001, min(0.1, convergence_tolerance)),
             "iteration_limit": max(3, min(500, iteration_limit)),
         }
@@ -5140,7 +5151,7 @@ class StanThrustQtWindow(QMainWindow):
         self.widgets["objective_mass"].setValue(float(objective_weights.get("mass", DEFAULT_OBJECTIVE_WEIGHTS["mass"])))
         self.widgets["objective_packaging"].setValue(float(objective_weights.get("packaging", DEFAULT_OBJECTIVE_WEIGHTS["packaging"])))
         self.widgets["objective_thermal"].setValue(float(objective_weights.get("thermal", DEFAULT_OBJECTIVE_WEIGHTS["thermal"])))
-        self._set_combo_value(self.widgets["solver_flow_model"], str(state.get("solver_flow_model", "fast")).strip().lower())
+        self._set_combo_value(self.widgets["solver_flow_model"], str(state.get("solver_flow_model", "navier_stokes")).strip().lower())
         self.widgets["solver_station_count"].setValue(float(state.get("solver_station_count", DEFAULT_SOLVER_STATION_COUNT)))
         self.widgets["solver_convergence_tolerance"].setValue(float(state.get("solver_convergence_tolerance", 0.005)))
         self.widgets["solver_iteration_limit"].setValue(float(state.get("solver_iteration_limit", 50)))
@@ -5214,25 +5225,6 @@ class StanThrustQtWindow(QMainWindow):
             self.ga_status_label.text() if self.ga_status_label else "",
             "Exported station CSV.",
         )
-
-    def on_surrogate_preview(self) -> None:
-        if self.summary_text is None:
-            return
-        state = self.collect_form_state()
-        preview_lines = [
-            "Surrogate preview",
-            "",
-            "Fuel: {0}".format(state["fuel_name"]),
-            "Oxidizer: {0}".format(state["oxidizer_name"]),
-            "Target thrust: {0:.0f} N".format(state["target_thrust_newtons"]),
-            "Burn time: {0:.2f} s".format(state["burn_time_seconds"]),
-            "",
-            "This Qt shell preserves the current solver stack and can be extended with a richer surrogate preview next.",
-        ]
-        self.summary_text.setPlainText("\n".join(preview_lines))
-        if self.output_tabs is not None:
-            self.output_tabs.setCurrentIndex(4)
-
 
 def run() -> None:
     app = QApplication.instance() or QApplication(sys.argv)

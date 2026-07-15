@@ -1,6 +1,6 @@
 """Regression tests for Stage 4.1: validation pack.
 
-These tests ensure that concept solver outputs remain stable and fall within
+These tests ensure that design solver outputs remain stable and fall within
 expected physical bounds. They serve as regression gates to catch unintended
 changes in solver behavior.
 """
@@ -9,20 +9,20 @@ import sys
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
-from stanshock.concept_model import create_concept_design
+from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
+from stanshock.design_model import create_engine_design
 from stanshock.solver_assumptions import get_default_solver_assumptions
 from stanshock.validation_pack import (
     get_regression_baseline_cases,
     get_regression_baselines,
-    validate_concept_design,
+    validate_engine_design,
 )
 
 
 def test_default_design_validation():
     """Test that a default design passes all analytical checks."""
-    design = create_concept_design({})
-    report = validate_concept_design(design)
+    design = create_engine_design({})
+    report = validate_engine_design(design)
 
     assert report.passed, (
         f"Validation report failed: {report.summary}\n"
@@ -34,13 +34,13 @@ def test_default_design_validation():
 
 def test_high_thrust_design_validation():
     """Test validation for a high-thrust design."""
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "target_thrust_newtons": 5000.0,
             "burn_time_seconds": 45.0,
         }
     )
-    report = validate_concept_design(design)
+    report = validate_engine_design(design)
 
     assert report.passed, f"High-thrust validation failed: {report.summary}"
     print(f"[ok] test_high_thrust_design_validation passed: {report.summary}")
@@ -48,13 +48,13 @@ def test_high_thrust_design_validation():
 
 def test_low_thrust_design_validation():
     """Test validation for a low-thrust design."""
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "target_thrust_newtons": 250.0,
             "burn_time_seconds": 5.0,
         }
     )
-    report = validate_concept_design(design)
+    report = validate_engine_design(design)
 
     assert report.passed, f"Low-thrust validation failed: {report.summary}"
     print(f"[ok] test_low_thrust_design_validation passed: {report.summary}")
@@ -62,13 +62,13 @@ def test_low_thrust_design_validation():
 
 def test_pump_fed_design_validation():
     """Test validation for a pump-fed design with explicit pump-head closure."""
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "use_pumps": True,
             "regen_cooling": False,
         }
     )
-    report = validate_concept_design(design)
+    report = validate_engine_design(design)
     eng = design.derived.engineering_values
 
     assert report.passed, f"Pump-fed validation failed: {report.summary}"
@@ -82,14 +82,14 @@ def test_pump_fed_design_validation():
 
 def test_blowdown_design_validation():
     """Test validation for a blowdown design."""
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "use_pumps": False,
             "regen_cooling": True,
             "film_cooling": True,
         }
     )
-    report = validate_concept_design(design)
+    report = validate_engine_design(design)
 
     assert report.passed, f"Blowdown validation failed: {report.summary}"
     print(f"[ok] test_blowdown_design_validation passed: {report.summary}")
@@ -97,7 +97,7 @@ def test_blowdown_design_validation():
 
 def test_regression_baselines_within_range():
     """Test that default design meets regression baselines."""
-    design = create_concept_design({})
+    design = create_engine_design({})
     eng_vals = design.derived.engineering_values
     baselines = dict(get_regression_baselines())
     baselines["nozzle_expansion_ratio"] = (1.0, 16.0)
@@ -146,21 +146,21 @@ def test_regression_baselines_within_range():
 
 def test_section_margin_outputs_exist():
     """Test that section-based structural and thermal outputs are populated."""
-    design = create_concept_design({})
+    design = create_engine_design({})
     values = design.derived.engineering_values
 
     for prefix in ("fuel_tank", "oxidizer_tank", "chamber", "throat", "nozzle"):
         assert f"{prefix}_hoop_stress_mpa" in values
         assert f"{prefix}_allowable_stress_mpa" in values
         assert f"{prefix}_structural_margin_ratio" in values
-        assert f"{prefix}_estimated_wall_temperature_k" in values
+        assert f"{prefix}_wall_temperature_k" in values
         assert f"{prefix}_thermal_margin_k" in values
         assert float(values[f"{prefix}_structural_margin_ratio"]) >= 1.0
 
 
 def test_maximum_diameter_is_hard_capped_and_reported():
     """Test that the solved outer envelope honors the target diameter and reports uncapped demand."""
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "target_diameter_mm": 90.0,
             "tank_diameter_mm": 110.0,
@@ -182,8 +182,8 @@ def test_internal_regression_baseline_cases_pass_and_stay_in_range():
     baseline_cases = get_regression_baseline_cases()
 
     for case_id, case in baseline_cases.items():
-        design = create_concept_design(case["state"])
-        report = validate_concept_design(design)
+        design = create_engine_design(case["state"])
+        report = validate_engine_design(design)
         values = design.derived.engineering_values
 
         assert report.passed, f"{case_id} validation failed: {report.summary}"
@@ -210,10 +210,10 @@ def test_internal_regression_baseline_cases_pass_and_stay_in_range():
 
 
 def test_combustion_solver_consistency():
-    """Test that combustion solver output integrates consistently with concept design."""
-    design = create_concept_design({})
+    """Test that combustion solver output integrates consistently with design."""
+    design = create_engine_design({})
     assumptions = get_default_solver_assumptions()
-    result = run_combustion_cfd_proxy(design, assumptions)
+    result = run_combustion_cfd_solver(design, assumptions)
 
     assert isinstance(result, dict), "Combustion result must be a dict"
     assert "station_field_updates" in result, "Result must contain 'station_field_updates'"
@@ -241,14 +241,14 @@ def test_refined_flow_mode_metadata():
     """Test that refined flow mode is surfaced in combustion metadata and summary."""
     from dataclasses import replace
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     assumptions = replace(get_default_solver_assumptions(), flow_model="refined")
-    result = run_combustion_cfd_proxy(design, assumptions)
+    result = run_combustion_cfd_solver(design, assumptions)
 
     metadata = result.get("metadata", {})
     summary = result.get("summary", {})
     assert metadata.get("flow_model") == "refined"
-    assert metadata.get("solver_mode") == "quasi-1d-refined"
+    assert metadata.get("solver_mode") == "cantera-moc-characteristic-net"
     assert summary.get("flow_model") == "refined"
     assert summary.get("exit_pressure_kpa", 0.0) > 0.0
     assert summary.get("predicted_isp_seconds", 0.0) > 120.0

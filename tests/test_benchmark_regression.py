@@ -57,22 +57,26 @@ def test_reconstructed_public_benchmark_outputs_are_stable_with_cantera():
 
     rows = build_reconstructed_benchmark_rows(get_default_solver_assumptions())
     rows_by_engine = {row["engine"]: row for row in rows}
+    for row in rows:
+        assert row["optimizer_used"] == "no"
+        assert row["solver_validation_path"] == "direct_navier_stokes_solver"
+        assert int(row["solver_station_count"]) >= 160
 
     expected_windows = {
         "Elysium": {
-            "simulated_thrust_n": (1200.0, 1380.0),
-            "simulated_chamber_pressure_kpa": (850.0, 980.0),
-            "simulated_isp_seconds": (160.0, 178.0),
+            "simulated_thrust_n": (1180.0, 1265.0),
+            "simulated_chamber_pressure_kpa": (890.0, 970.0),
+            "simulated_isp_seconds": (150.0, 162.0),
         },
         "Juno": {
-            "simulated_thrust_n": (1400.0, 1600.0),
-            "simulated_chamber_pressure_kpa": (2400.0, 2700.0),
-            "simulated_isp_seconds": (195.0, 225.0),
+            "simulated_thrust_n": (1375.0, 1460.0),
+            "simulated_chamber_pressure_kpa": (2520.0, 2665.0),
+            "simulated_isp_seconds": (188.0, 200.0),
         },
         "Iron Lotus": {
-            "simulated_thrust_n": (10400.0, 11550.0),
-            "simulated_chamber_pressure_kpa": (2700.0, 3000.0),
-            "simulated_isp_seconds": (175.0, 195.0),
+            "simulated_thrust_n": (9950.0, 10580.0),
+            "simulated_chamber_pressure_kpa": (2950.0, 3125.0),
+            "simulated_isp_seconds": (152.0, 166.0),
         },
     }
 

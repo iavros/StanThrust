@@ -1,9 +1,9 @@
 import math
 from typing import Dict, List, Mapping, Optional
 
-from stanshock.concept_model import (
+from stanshock.design_model import (
     AMBIENT_TEMPERATURE_K,
-    ConceptDesign,
+    EngineDesign,
     MATERIAL_TEMPERATURE_LIMIT_K,
     PROPELLANT_DENSITY_KG_M3,
     clamp,
@@ -82,7 +82,7 @@ def _coolant_properties(fuel_name: str, density_kg_m3: float) -> Dict[str, float
     return base
 
 
-def estimate_gas_side_heat_transfer(
+def solve_gas_side_heat_transfer(
     chamber_pressure_kpa: float,
     chamber_temperature_k: float,
     mach: float,
@@ -90,7 +90,7 @@ def estimate_gas_side_heat_transfer(
     gamma: float = 1.22,
     gas_constant_j_kg_k: float = 355.0,
 ) -> Dict[str, float]:
-    """Estimate gas-side convection from the local station state."""
+    """Solve gas-side convection from the local station state."""
 
     local_mach = max(0.01, float(mach))
     diameter_m = max(1e-5, float(hydraulic_diameter_mm) / 1000.0)
@@ -135,7 +135,7 @@ def estimate_gas_side_heat_transfer(
     )
 
 
-def estimate_coolant_side_heat_transfer(
+def solve_coolant_side_heat_transfer(
     coolant_mass_flow_kg_s: float,
     channel_count: float,
     channel_width_mm: float,
@@ -146,7 +146,7 @@ def estimate_coolant_side_heat_transfer(
     coolant_viscosity_pa_s: float,
     coolant_conductivity_w_m_k: float,
 ) -> Dict[str, float]:
-    """Estimate coolant-side convection in rectangular regen channels."""
+    """Solve coolant-side convection in rectangular regen channels."""
 
     channel_count_value = max(1.0, float(channel_count))
     width_m = max(1e-5, float(channel_width_mm) / 1000.0)
@@ -209,7 +209,7 @@ def _solve_wall_section(
     coolant_bulk_temperature_k: float,
     film_effectiveness: float,
 ) -> Dict[str, object]:
-    gas = estimate_gas_side_heat_transfer(
+    gas = solve_gas_side_heat_transfer(
         chamber_pressure_kpa=chamber_pressure_kpa,
         chamber_temperature_k=chamber_temperature_k,
         mach=mach,
@@ -227,7 +227,7 @@ def _solve_wall_section(
     wall_resistance = max(1e-6, wall_thickness_mm / 1000.0) / max(1e-6, wall_conductivity_w_m_k)
 
     if coolant_state is not None:
-        coolant = estimate_coolant_side_heat_transfer(
+        coolant = solve_coolant_side_heat_transfer(
             coolant_mass_flow_kg_s=coolant_state["mass_flow_kg_s"],
             channel_count=coolant_state["channel_count"],
             channel_width_mm=coolant_state["channel_width_mm"],
@@ -290,7 +290,7 @@ def _solve_wall_section(
 
 
 def solve_engine_heat_transfer(
-    design: ConceptDesign,
+    design: EngineDesign,
     combustion_result: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, object]:
     """Solve a reduced-order wall heat-transfer model for the current engine."""

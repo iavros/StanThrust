@@ -14,22 +14,24 @@ This folder is an Overleaf-ready LaTeX report describing the current StanThrust 
 The current report documents:
 
 - input normalization and geometry closure
-- MOC-informed nozzle contour construction
+- MOC characteristic-net nozzle contour construction
 - thrust, impulse, mass-flow, and propellant closure
 - section-based structural and thermal margin relations
 - transient pressure-fed and pump-fed feed-system behavior
-- fast vs refined quasi-1D chamber/nozzle flow modes
-- reduced-order gas, wall, and coolant heat-transfer calculations
-- Rankine-Hugoniot shock diagnostics for overexpanded nozzles
+- fast, refined, and Navier-Stokes chamber/nozzle flow modes
+- final-pass uncertainty bounds for pressure, thrust, mass flow, specific impulse, wall temperature, and material margin
+- gas, wall, coolant, and viscous station heat-transfer calculations
+- Rankine-Hugoniot shock diagnostics and shock-driven design feedback for overexpanded nozzles
 - material stress, thermal margins, and redesign recommendations
 - live-render geometry fields used by the desktop 3D model views
 - regen rib and film-slot visualization rules used by the live 3D model
 - reconstructed collegiate benchmark cases and internal regression baselines
+- direct benchmark solver runs with no optimizer fitting
 
-The desktop app now exposes the same reduced-order histories in its Qt results workspace through a dedicated plots tab:
+The desktop app now exposes the same solver histories in its Qt results workspace through a dedicated plots tab:
 
 - burn-time pressure history
-- preliminary thrust and mass-flow traces
+- solved thrust and mass-flow traces
 - axial pressure / velocity field views
 - chamber-iteration convergence traces
 - Mach and area-ratio evolution
@@ -69,7 +71,9 @@ The script writes:
 
 The benchmark CSV files are generated from the shared solver registry in
 `stanshock/benchmark_cases.py`, so the report, exports, and automated
-regression tests all use the same benchmark definitions.
+regression tests all use the same benchmark definitions. Public benchmark
+cases are run directly through the Navier-Stokes solver path. The generator
+does not run an optimizer or tune the cases to match the reference values.
 
 The transient feed CSV files are generated from the same solver-interface path used by the app, so the report plots reflect the same burn-time feed behavior shown in the desktop UI and exports.
 

@@ -3,7 +3,7 @@
 [![CI Tests](https://github.com/iavros/StanThrust/actions/workflows/tests.yml/badge.svg)](https://github.com/iavros/StanThrust/actions/workflows/tests.yml)
 [![Build Installers](https://github.com/iavros/StanThrust/actions/workflows/package.yml/badge.svg)](https://github.com/iavros/StanThrust/actions/workflows/package.yml)
 
-StanThrust is a desktop engineering tool for preliminary liquid-engine sizing, coupled feed and chamber analysis, Cantera-backed thermochemistry, and live solved-geometry visualization.
+StanThrust is a desktop engineering tool for preliminary liquid-engine sizing, coupled feed and chamber analysis, Cantera-backed thermochemistry, and live solved-geometry visualization. The final design pass uses the most detailed in-app path: coupled feed pressure, Cantera thermochemistry, MOC nozzle geometry, shock feedback, Navier-Stokes viscous station corrections, heat transfer, and material evaluation.
 
 ## Download
 
@@ -28,6 +28,8 @@ Python 3.11 is the supported development runtime. Cantera is required; the solve
 ## Features
 
 - Coupled numerical solve across feed system, chamber/nozzle flow, and structural margins.
+- Final solve automatically escalates to the Navier-Stokes path with dense axial stations.
+- Final coupled payload includes uncertainty bounds for headline pressure, thrust, mass flow, specific impulse, wall temperature, and material margin values.
 - Cantera-backed thermochemistry using bundled mechanism files.
 - MOC-informed bell nozzle contour with explicit geometry fields.
 - Automatic nozzle exit sizing with pressure-matched, underexpanded, and overexpanded targets.
@@ -37,6 +39,7 @@ Python 3.11 is the supported development runtime. Cantera is required; the solve
 - Pressure-fed and pump-fed transient feed histories.
 - Live calculated-geometry 3D views for chamber/nozzle, injector, pumps, tanks, regen ribs, and film slots.
 - Engineering plots, 2D flow-field visualization, measurements, diagnostics, and CSV/DXF exports.
+- Direct real-engine benchmark reconstructions, with no optimizer fitting, to compare solver output against published operating points.
 - GitHub Actions release builds for Windows and macOS installer artifacts.
 
 ## Solver Report
@@ -67,4 +70,4 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 
 ## Validation
 
-The automated test suite covers solver coupling, thermochemistry, heat-transfer and shock diagnostics, feed transients, geometry fields, optimizer hooks, uncertainty/provenance utilities, and report benchmark cases. The release workflow runs the suite before publishing installer assets.
+The automated test suite covers solver coupling, thermochemistry, heat-transfer and shock diagnostics, feed transients, geometry fields, optimizer hooks, uncertainty/provenance utilities, and direct report benchmark cases. The public benchmark tests run reconstructed engines through the solver without optimizer fitting. The release workflow runs the suite before publishing installer assets.

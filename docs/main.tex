@@ -47,9 +47,9 @@
 \maketitle
 
 \section{Purpose}
-StanThrust is a liquid-engine sizing and analysis tool with a deliberately fast reduced-order solver stack. The software takes a mission request, converts it into a geometry bundle, enforces an architecture-aware feed-pressure state, evaluates a burn-time feed transient, calls a thermochemistry provider, and then evaluates thrust, impulse, structural margins, and export geometry with a quasi-one-dimensional chamber and nozzle model. The software now exposes both a fast preview-oriented flow mode and a refined quasi-one-dimensional mode for explicit solves, while keeping benchmark and regression cases machine-readable and reproducible.
+StanThrust is a liquid-engine sizing and analysis tool with a coupled design solver stack. The software takes a mission request, converts it into a geometry bundle, enforces an architecture-aware feed-pressure state, evaluates a burn-time feed transient, calls a Cantera thermochemistry provider, and then evaluates thrust, impulse, structural margins, and export geometry with a chamber/nozzle flow model. The software exposes fast preview, refined characteristic-net, and Navier-Stokes design modes for explicit solves. The final desktop solve always escalates to the Navier-Stokes design path so the saved design state is based on the most detailed in-app simulation.
 
-This report is written as an engineering methods note for the \emph{current StanThrust solver}. The goal is to show, in explicit algebraic form, how the program moves from a mission request to geometry, flow quantities, pressures, and performance estimates. The representative plots in this document come from the default packaged case:
+This report is written as an engineering methods note for the \emph{current StanThrust solver}. The goal is to show, in explicit algebraic form, how the program moves from a mission request to geometry, flow quantities, pressures, and performance values. The representative plots in this document come from the default packaged case:
 \[
 \text{fuel}=\text{\SampleFuel}, \qquad
 \text{oxidizer}=\text{\SampleOxidizer}, \qquad
@@ -57,7 +57,7 @@ This report is written as an engineering methods note for the \emph{current Stan
 F_{\text{target}}=\SI{\SampleTargetThrust}{N}, \qquad
 t_b=\SI{\SampleBurnTime}{s}.
 \]
-The same reduced-order histories used to generate the report figures are also exposed directly in the Qt desktop application through a dedicated plots tab, so the packaged UI and this document refer to the same transient, axial, and convergence data products.
+The same solver histories used to generate the report figures are also exposed directly in the Qt desktop application through a dedicated plots tab, so the packaged UI and this document refer to the same transient, axial, and convergence data products.
 
 When reading the report, each section can be interpreted in the same sequence used during preliminary engine sizing:
 \begin{enumerate}[leftmargin=6mm]
@@ -532,7 +532,7 @@ d_e=\SI{\SampleExitDiameter}{mm}, \qquad
 \addlegendentry{Nozzle contour}
 \end{axis}
 \end{tikzpicture}
-\caption{Sampled MOC-informed bell contour generated from the current geometry closure.}
+\caption{Sampled MOC characteristic-net bell contour generated from the current geometry closure.}
 \end{figure}
 
 \subsection{Overall Stack and Surface Proxies}
@@ -655,7 +655,7 @@ I_{\text{calc}}=F_{\text{calc}}\,t_{b,\text{calc}}.
 \end{equation}
 
 \subsection{Effective Exhaust Velocity and Mass Flow}
-Before the quasi-1D solver is run, the geometry model estimates an effective exhaust velocity with
+Before the chamber/nozzle flow solver is run, the geometry model calculates an effective exhaust velocity with
 \begin{equation}
 v_{e,\text{eff}}
 =
@@ -785,7 +785,7 @@ L_{ox,\text{req}}=\frac{V_{ox}}{A_{ox}}\times 1000
 \end{equation}
 in millimeters.
 
-\section{Architecture Metrics and Proxy Indices}
+\section{Architecture Metrics and Indices}
 StanThrust also maintains bounded engineering indices used in the UI and optimization summaries.
 
 The complexity index is
@@ -865,9 +865,9 @@ M_T
 The feed-pressure solver is executed before the chamber/nozzle model, but it is no longer a single steady algebraic closure. StanThrust now advances a reduced-order feed state over burn time and stores the resulting pressure, margin, and pump-state histories.
 
 \subsection{Common Relations}
-At every time step, the nominal total propellant flow is split by mixture ratio:
+At every time step, the total propellant flow supplied by the design or coupled solver is split by mixture ratio:
 \begin{equation}
-\dot{m}_p=\frac{T}{g_0 I_{sp,\text{proxy}}},
+\dot{m}_p=\dot{m}_{p,\text{solver}},
 \qquad
 \dot{m}_{ox}=\frac{(O/F)}{1+O/F}\dot{m}_p,
 \qquad
@@ -1030,10 +1030,10 @@ P_{\text{pump},k}
 -\frac{1}{2}\left(P_{t,f,k}+P_{t,ox,k}\right),
 \label{eq:pump-head-transient}
 \end{equation}
-and the corresponding nondimensional pump-speed proxy is
+and the corresponding nondimensional pump-speed index is
 \begin{equation}
 N_k^*=\clip\!\left(\frac{P_{\text{pump},k}}{P_{\text{pump},0}},\,0.82,\,1.18\right).
-\label{eq:pump-speed-proxy}
+\label{eq:pump-speed-index}
 \end{equation}
 This is still a reduced-order model, but it produces a usable burn history for pump differential pressure and pump-control effort instead of a single steady value.
 
@@ -1151,12 +1151,12 @@ This is still a reduced-order model, but it produces a usable burn history for p
 \addlegendentry{$N^*(t)$}
 \end{axis}
 \end{tikzpicture}
-\caption{Pump-fed transient history. The chamber pressure remains close to its nominal value while the pump differential pressure and pump-speed proxy drift over the burn.}
+\caption{Pump-fed transient history. The chamber pressure remains close to its nominal value while the pump differential pressure and pump-speed index drift over the burn.}
 \end{figure}
 
 \section{Pump, Injector, and Cooling Submodels}
-\subsection{Pump Geometry and Drive Proxies}
-If pump-fed mode is active, pump efficiency is estimated as
+\subsection{Pump Geometry and Drive Indices}
+If pump-fed mode is active, pump efficiency is calculated as
 \begin{equation}
 \eta_{\text{pump}}
 =
@@ -1280,7 +1280,7 @@ s_{\text{pair}}=\clip(0.085\,d_c,\,3.0,\,12.0)
 \end{equation}
 with the present implementation using two element pairs.
 
-\subsection{Regenerative Cooling Proxy}
+\subsection{Regenerative Cooling Closure}
 If regenerative cooling is enabled, the jacket thickness is
 \begin{equation}
 t_{\text{jacket}}=\clip(0.085\,d_c,\,4.0,\,14.0).
@@ -1329,7 +1329,7 @@ and the coolant mass flow is
 \label{eq:regen-mdot}
 \end{equation}
 
-The effective coolant density is approximated as
+The effective coolant density is calculated as
 \begin{equation}
 \rho_{\text{cool}}=\max(120,0.82\,\rho_f)
 \label{eq:coolant-density}
@@ -1350,7 +1350,7 @@ D_h=\max\!\left(0.5,\frac{2w_{\text{ch}}h_{\text{ch}}}{w_{\text{ch}}+h_{\text{ch
 \label{eq:hydraulic-diameter}
 \end{equation}
 
-The cooling pressure-drop estimate is
+The cooling pressure-drop calculation is
 \begin{equation}
 \Delta P_{\text{regen}}
 =
@@ -1446,7 +1446,7 @@ where $\delta_{\text{arch}}=4.5$ for pump-fed and $1.0$ for pressure-fed mode.
 \caption{Cooling-mode sweep showing how thermal margin and regenerative-cooling pressure drop change when film and regen options are toggled.}
 \end{figure}
 
-\subsection{Film Cooling Proxy}
+\subsection{Film Cooling Closure}
 If film cooling is enabled, the film mass flow is
 \begin{equation}
 \mdot_{\text{film}}
@@ -1495,7 +1495,7 @@ u_{\text{film}}
 \right)
 \label{eq:film-velocity}
 \end{equation}
-and the slot count estimate is
+and the slot count calculation is
 \begin{equation}
 N_{\text{slot}}=\max\!\left(8,\operatorname{round}(0.55\,d_{\text{inj}})\right).
 \label{eq:film-slots}
@@ -1516,12 +1516,14 @@ T_c=\SI{\SampleChamberTemperature}{K}.
 These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the quasi-one-dimensional performance model. Cantera is a required dependency for supported solver runs, and missing thermochemistry is reported as a solver error.
 
 \section{Quasi-One-Dimensional Chamber and Nozzle Solver}
-\subsection{Fast and Refined Flow Modes}
-StanThrust now exposes two internal flow modes:
+\subsection{Flow Modes and Final Pass}
+StanThrust exposes three internal flow modes:
 \begin{enumerate}[leftmargin=6mm]
 \item \textbf{Fast preview mode}, which preserves the original constant-coefficient quasi-one-dimensional closure and is intended for quick design iteration.
 \item \textbf{Refined mode}, which uses the solved throat diameter directly, applies a contour-aware bell-nozzle loss model, and subtracts an ambient-pressure correction from the vacuum thrust coefficient.
+\item \textbf{Navier-Stokes mode}, which starts from the Cantera and MOC station field, applies shock feedback, and then applies the in-app axisymmetric viscous finite-volume correction.
 \end{enumerate}
+The final solve performed by the desktop app forces Navier-Stokes mode with a dense axial station count. Lower modes remain useful for comparison plots and quick inspection, but they are not the final design basis.
 
 For the report case, the detailed derivation below uses
 \[
@@ -1558,9 +1560,9 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
   height=0.62\textwidth,
   ybar,
   bar width=10pt,
-  symbolic x coords={fast,refined},
+  symbolic x coords={fast,refined,navier_stokes},
   xtick=data,
-  xticklabels={Fast,Refined},
+  xticklabels={Fast,Refined,Navier-Stokes},
   ylabel={Thrust [N]},
   grid=major,
 ]
@@ -1577,9 +1579,9 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
   height=0.62\textwidth,
   ybar,
   bar width=10pt,
-  symbolic x coords={fast,refined},
+  symbolic x coords={fast,refined,navier_stokes},
   xtick=data,
-  xticklabels={Fast,Refined},
+  xticklabels={Fast,Refined,Navier-Stokes},
   ylabel={$I_{sp}$ [s]},
   grid=major,
 ]
@@ -1587,8 +1589,26 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
 \end{axis}
 \end{tikzpicture}
 \end{minipage}
-\caption{Fast-versus-refined flow-mode comparison for the packaged sample case.}
+\caption{Flow-mode comparison for the packaged sample case. The final app solve uses the Navier-Stokes path.}
 \end{figure}
+
+\subsection{Final-Pass Uncertainty Bounds}
+The final coupled result includes local uncertainty bounds for the headline outputs. These are not optimizer weights and they are not calibration factors. They are solver diagnostics derived from the final Navier-Stokes pass:
+\begin{itemize}[leftmargin=5mm]
+\item coupled pressure residual;
+\item final thrust residual;
+\item shock-feedback state;
+\item final Navier-Stokes momentum residual;
+\item heat-transfer and material-margin state.
+\end{itemize}
+For a solved value $y$, StanThrust reports
+\begin{equation}
+y_{\mathrm{low}}=y\left(1-\frac{u_-}{100}\right),
+\qquad
+y_{\mathrm{high}}=y\left(1+\frac{u_+}{100}\right),
+\label{eq:uncertainty-bounds}
+\end{equation}
+where $u_-$ and $u_+$ are field-specific percentages. The pressure, thrust, mass-flow, specific-impulse, wall-temperature, and combined material-margin rows are exported in the coupled solver payload. The bounds are intended for design review and regression comparison. External CFD and hot-fire data are still required before treating the numbers as hardware-validation values.
 
 \subsection{Area Relations}
 The chamber and exit areas are
@@ -1880,7 +1900,7 @@ F^{(k)}=C_{F,\text{eff}}P_c^{(k)}A_t.
 \label{eq:thrust-iter}
 \end{equation}
 
-The chamber velocity estimate is
+The chamber velocity calculation is
 \begin{equation}
 u_c^{(k)}=\frac{\mdotp^{(k)}}{\rho_c^{(k)}A_c}
 \label{eq:chamber-velocity}
@@ -1992,7 +2012,7 @@ The gas Reynolds number is
 \Rey_g=\frac{\rho_s u_s D_h}{\mu_g}
 \label{eq:gas-reynolds}
 \end{equation}
-where $\mu_g$ is estimated with a Sutherland-law temperature correction. The gas Nusselt number is
+where $\mu_g$ is calculated with a Sutherland-law temperature correction. The gas Nusselt number is
 \begin{equation}
 \mathrm{Nu}_g=
 \begin{cases}
@@ -2132,7 +2152,7 @@ M_{\mathrm{mat}}=\min(M_\sigma,M_T).
 \end{equation}
 If $M_{\mathrm{mat}}<1$, the solver ranks the available material catalog at the same section state and reports a redesign recommendation. Stress failures recommend a minimum wall thickness; thermal failures recommend a better material when one exists, or more cooling capacity when no catalog material clears the combined margin.
 
-\section{Axial Proxy Fields}
+\section{Axial Field Model}
 For visualization and exports, StanThrust creates a simple axial field model across the entire engine length. If
 \[
 \xi=\frac{x}{L_{\text{stack}}}\in[0,1],
@@ -2203,7 +2223,7 @@ These are display-oriented field proxies, not a discretized conservation-law sol
 \end{figure}
 
 \section{Representative Output}
-For the default report case, the current solver returned approximately
+For the default report case, the current solver returned
 \[
 P_c=\SI{\SampleChamberPressure}{kPa}, \qquad
 F=\SI{\SampleThrust}{N}, \qquad
@@ -2214,10 +2234,10 @@ M_e=\SampleExitMach.
 
 The output should be read as the result of the staged closure above:
 \begin{enumerate}[leftmargin=6mm]
-\item geometry and mass heuristics establish $d_t$, $L_n$, and flow scales;
+\item geometry and mass closures establish $d_t$, $L_n$, and flow scales;
 \item pressure closure enforces architecture feasibility;
 \item thermochemistry provides $(\gamma,R,T_c)$;
-\item the quasi-1D solver returns $P_c$, $\mdotp$, $F$, and $I_{sp}$.
+\item the chamber/nozzle solver returns $P_c$, $\mdotp$, $F$, and $I_{sp}$ using pressure-root solving, nozzle losses, and shock feedback.
 \end{enumerate}
 
 \section{Validation Workflow}
@@ -2225,7 +2245,7 @@ StanThrust validation is intentionally split into several checks rather than a s
 
 For a solver change to be considered healthy, the expected path is:
 \begin{enumerate}[leftmargin=6mm]
-\item regenerate this report's CSV assets with \texttt{docs/overleaf\_solver\_report/generate\_assets.py};
+\item regenerate this report's CSV assets with \texttt{docs/generate\_assets.py};
 \item run the automated test suite, including benchmark regression and render-geometry field checks;
 \item inspect the live Qt diagnostics log for solver-stage status and error codes;
 \item build the platform installer from the tracked packaging scripts or the GitHub packaging workflow.
@@ -2233,12 +2253,12 @@ For a solver change to be considered healthy, the expected path is:
 This keeps method documentation, UI-visible geometry, and packaged application behavior tied to the same code path.
 
 \section{Benchmark Against Real Student Engines}
-The most useful benchmark is not a simple side-by-side list of thrust levels. A better engineering check is to reconstruct a small set of public student engines, run those reconstructed cases through the same StanThrust solver used for the default design, and then compare the solver output against the published operating point.
+The most useful benchmark is not a simple side-by-side list of thrust levels. A better engineering check is to reconstruct a small set of public student engines, run those reconstructed cases through the same StanThrust solver used for the final design pass, and then compare the solver output against the published operating point. The benchmark code does not run an optimizer and does not tune inputs to match the references. Each case is a direct Navier-Stokes solver call from the public operating-point data and the stated reconstruction assumptions.
 
 This report therefore uses a two-level benchmark:
 \begin{enumerate}[leftmargin=6mm]
 \item a \emph{scale comparison}, which shows where the packaged default case sits relative to public collegiate hardware;
-\item a \emph{reconstructed case study set}, where published engine data are turned into StanThrust input states and solved directly.
+\item a \emph{reconstructed case study set}, where published engine data are turned into StanThrust input states and solved directly without optimizer fitting.
 \end{enumerate}
 
 For unit conversion,
@@ -2590,8 +2610,8 @@ Despite the large number of equations above, StanThrust remains a reduced-order 
 \begin{itemize}[leftmargin=5mm]
 \item the feed solver now time-marches pressure and margin over the burn, but it is still a reduced-order lumped model rather than a valve-by-valve fluid network or full pressurant thermodynamics model;
 \item chamber and nozzle performance are quasi-one-dimensional with empirical loss factors;
-\item thermal quantities are bounded engineering proxies;
-\item pump, injector, and cooling dimensions are sizing heuristics rather than detailed component designs;
+\item thermal quantities are bounded engineering calculations;
+\item pump, injector, and cooling dimensions are sizing closures rather than detailed component designs;
 \item the axial field plots are visualization-oriented profiles, not CFD field solutions.
 \end{itemize}
 

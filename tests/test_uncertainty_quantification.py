@@ -8,7 +8,7 @@ Covers:
 """
 
 import pytest
-from stanshock.concept_model import create_concept_design
+from stanshock.design_model import create_engine_design
 from stanshock.monte_carlo_sampler import (
     MonteCarloEnsemble,
     InputSample,
@@ -19,7 +19,7 @@ from stanshock.sobol_analyzer import SobolAnalyzer
 # Fixtures
 @pytest.fixture
 def base_design():
-    """Create a baseline concept design for ensemble testing."""
+    """Create a baseline design for ensemble testing."""
     state = {
         "mixture_ratio": 2.0,
         "burn_time_seconds": 20.0,
@@ -29,7 +29,7 @@ def base_design():
         "fuel_name": "RP-1",
         "oxidizer_name": "LOX",
     }
-    return create_concept_design(state)
+    return create_engine_design(state)
 
 
 @pytest.fixture

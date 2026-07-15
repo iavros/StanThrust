@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 
 
-def test_generated_equilibrium_mechanism_loads_and_estimates():
+def test_generated_equilibrium_mechanism_loads_and_solves():
     import cantera as ct
 
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.propellants import lookup_propellant
     from stanshock.solver_assumptions import get_default_solver_assumptions
     from stanshock.thermochemistry_provider import (
@@ -19,9 +19,9 @@ def test_generated_equilibrium_mechanism_loads_and_estimates():
     gas = ct.Solution(str(EQUILIBRIUM_MECHANISM_PATH), "rocket_detailed")
     assert gas.n_species >= 20
 
-    design = create_concept_design({"fuel_name": "Ethanol", "oxidizer_name": "Liquid Oxygen"})
+    design = create_engine_design({"fuel_name": "Ethanol", "oxidizer_name": "Liquid Oxygen"})
     provider = CanteraThermochemistryProvider()
-    thermo = provider.estimate(
+    thermo = provider.solve(
         design,
         get_default_solver_assumptions(),
         lookup_propellant("Ethanol", "fuel"),
@@ -37,7 +37,7 @@ def test_public_benchmark_propellant_pairs_are_supported():
     import cantera  # noqa: F401
 
     from stanshock.benchmark_cases import get_public_benchmark_cases
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.propellants import lookup_propellant
     from stanshock.solver_assumptions import get_default_solver_assumptions
     from stanshock.thermochemistry_provider import CanteraThermochemistryProvider
@@ -46,8 +46,8 @@ def test_public_benchmark_propellant_pairs_are_supported():
     assumptions = get_default_solver_assumptions()
 
     for case in get_public_benchmark_cases():
-        design = create_concept_design(case.as_state())
-        thermo = provider.estimate(
+        design = create_engine_design(case.as_state())
+        thermo = provider.solve(
             design,
             assumptions,
             lookup_propellant(case.fuel_name, "fuel"),

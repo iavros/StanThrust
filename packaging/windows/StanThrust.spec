@@ -16,10 +16,7 @@ cantera_binaries = collect_dynamic_libs("cantera")
 analysis_datas = cantera_datas + [
     (str(asset_dir / "Logo.png"), "assets"),
     (str(asset_dir / "Logo.svg"), "assets"),
-    (str(project_root / "stanshock" / "data" / "default_mechanism.json"), "stanshock/data"),
     (str(project_root / "stanshock" / "data" / "rocket_mech_equilibrium.yaml"), "stanshock/data"),
-    (str(project_root / "stanshock" / "data" / "rocket_mech.yaml"), "stanshock/data"),
-    (str(project_root / "stanshock" / "data" / "rocket_mech_minimal.yaml"), "stanshock/data"),
 ]
 if icon_path.exists():
     analysis_datas.append((str(icon_path), "."))
@@ -27,10 +24,6 @@ if icon_path.exists():
 analysis_hiddenimports = [
     *collect_submodules("cantera"),
     "cantera",
-    "sklearn.gaussian_process",
-    "sklearn.gaussian_process.kernels",
-    "sklearn.preprocessing",
-    "sklearn.pipeline",
     "scipy",
     "scipy.optimize",
     "scipy.interpolate",

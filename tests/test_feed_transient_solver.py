@@ -6,7 +6,7 @@ from dataclasses import asdict
 sys.path.insert(0, r"E:/StanThrust")
 
 from stanshock.defaults import DEFAULT_STATE
-from stanshock.concept_model import create_concept_design
+from stanshock.design_model import create_engine_design
 from stanshock.exporter import build_cad_export_payload
 from stanshock.solver_interface import solve as solve_solver_interface
 
@@ -62,7 +62,7 @@ def test_pump_fed_transient_history_tracks_pump_state():
 def test_export_payload_carries_feed_transient_history():
     state = asdict(DEFAULT_STATE)
     solver_result = solve_solver_interface(state, upstream_context={"source": "test"})
-    design = create_concept_design(state)
+    design = create_engine_design(state)
 
     payload = build_cad_export_payload(
         design,

@@ -3,8 +3,8 @@ import sys
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.concept_model import create_concept_design
-from stanshock.combustion_cfd_solver import run_combustion_cfd_proxy
+from stanshock.design_model import create_engine_design
+from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
 from stanshock.solver_assumptions import get_default_solver_assumptions
 from stanshock.material_assignment_solver import assign_materials
 from stanshock.structural_material_solver import build_structural_materials_output
@@ -12,9 +12,9 @@ from stanshock.exporter import build_cad_export_payload
 
 
 def test_structural_materials_output_contains_sections():
-	design = create_concept_design({})
+	design = create_engine_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = run_combustion_cfd_proxy(design, assumptions)
+	comb = run_combustion_cfd_solver(design, assumptions)
 	# prepare a material assignment using inputs as 'materials' mapping
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
@@ -53,15 +53,15 @@ def test_structural_materials_output_contains_sections():
 
 
 def test_exporter_includes_thermal_margin_in_analysis_fields():
-	design = create_concept_design({})
+	design = create_engine_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = run_combustion_cfd_proxy(design, assumptions)
+	comb = run_combustion_cfd_solver(design, assumptions)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)
 
 	payload = build_cad_export_payload(design, {"total_score": 1.0}, None, comb, None, struct)
-	rows = payload.get("concept_station_rows", [])
+	rows = payload.get("design_station_rows", [])
 	assert isinstance(rows, list)
 	# each analysis_fields should include thermal_margin with source_solver
 	for r in rows:
@@ -69,13 +69,13 @@ def test_exporter_includes_thermal_margin_in_analysis_fields():
 		assert "thermal_margin" in af
 		tm = af["thermal_margin"]
 		assert "source_solver" in tm
-		assert tm["source_solver"] in ("concept-solver", "Combustion CFD Proxy Solver", "Structural Material Solver")
+		assert tm["source_solver"] in ("design-solver", "Cantera Coupled Flow Solver", "Structural Material Solver")
 
 
 def test_section_margins_are_numeric_and_positive_for_default_design():
-	design = create_concept_design({})
+	design = create_engine_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = run_combustion_cfd_proxy(design, assumptions)
+	comb = run_combustion_cfd_solver(design, assumptions)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)
@@ -90,9 +90,9 @@ def test_section_margins_are_numeric_and_positive_for_default_design():
 
 
 def test_material_redesign_recommendations_include_stress_and_heat_transfer():
-	design = create_concept_design({})
+	design = create_engine_design({})
 	assumptions = get_default_solver_assumptions()
-	comb = run_combustion_cfd_proxy(design, assumptions, station_count=12)
+	comb = run_combustion_cfd_solver(design, assumptions, station_count=12)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)
@@ -109,9 +109,9 @@ def test_material_redesign_recommendations_include_stress_and_heat_transfer():
 
 
 def test_material_catalog_evaluation_can_recommend_current_material_when_it_passes():
-	design = create_concept_design({"fuel_tank_material": "Aluminum 6061-T6"})
+	design = create_engine_design({"fuel_tank_material": "Aluminum 6061-T6"})
 	assumptions = get_default_solver_assumptions()
-	comb = run_combustion_cfd_proxy(design, assumptions, station_count=12)
+	comb = run_combustion_cfd_solver(design, assumptions, station_count=12)
 	design_request = {"materials": design.inputs.as_state()}
 	mat = assign_materials(design_request, {})
 	struct = build_structural_materials_output(design_request, {}, mat, comb)

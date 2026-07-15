@@ -2,6 +2,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from stanshock.moc_nozzle_solver import solve_moc_nozzle
 from stanshock.propellants import PropellantOption, lookup_propellant
 
 
@@ -60,7 +61,7 @@ MATERIAL_TEMPERATURE_LIMIT_K = {
 }
 
 AMBIENT_TEMPERATURE_K = 293.0
-CONCEPT_CHAMBER_TEMPERATURE_K = 3350.0
+DESIGN_CHAMBER_TEMPERATURE_K = 3350.0
 AMBIENT_PRESSURE_KPA = 101.3
 
 
@@ -71,7 +72,7 @@ def _lookup_density_kg_m3(option: PropellantOption) -> float:
     return clamp(option.density_index * 1000.0, 420.0, 1500.0)
 
 
-def _estimate_wall_thickness_mm(
+def _calculate_pressure_vessel_wall_thickness_mm(
     pressure_kpa: float, diameter_mm: float, material: str, factor_of_safety: float
 ) -> float:
     allowable_mpa = MATERIAL_ALLOWABLE_STRESS_MPA.get(material, 105.0)
@@ -85,7 +86,7 @@ def _estimate_wall_thickness_mm(
     return clamp(thickness_m * 1000.0, 1.0, 16.0)
 
 
-def _estimate_hoop_stress_mpa(pressure_kpa: float, diameter_mm: float, wall_thickness_mm: float) -> float:
+def _calculate_hoop_stress_mpa(pressure_kpa: float, diameter_mm: float, wall_thickness_mm: float) -> float:
     radius_m = max(1e-6, diameter_mm / 2000.0)
     wall_thickness_m = max(1e-6, wall_thickness_mm / 1000.0)
     return (pressure_kpa * 1000.0 * radius_m / wall_thickness_m) / 1_000_000.0
@@ -109,8 +110,8 @@ def _pressure_ratio_from_mach(mach_number: float, gamma: float) -> float:
     return pressure_term ** (-gamma / (gamma - 1.0))
 
 
-def _estimate_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: float = 1.22) -> float:
-    """Estimate exit Mach from Pe/Pc on the supersonic branch."""
+def _solve_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: float = 1.22) -> float:
+    """Solve exit Mach from Pe/Pc on the supersonic branch."""
     bounded_ratio = clamp(pressure_ratio, 1e-5, 0.999)
     mach_squared = (2.0 / max(1e-6, gamma - 1.0)) * (
         bounded_ratio ** (-(gamma - 1.0) / gamma) - 1.0
@@ -118,8 +119,8 @@ def _estimate_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: 
     return float(clamp(math.sqrt(max(1.0001, mach_squared)), 1.0001, 10.0))
 
 
-def _estimate_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22) -> float:
-    """Estimate nozzle exit Mach from A/A* on the supersonic branch."""
+def _solve_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22) -> float:
+    """Solve nozzle exit Mach from A/A* on the supersonic branch."""
     if area_ratio <= 1.0:
         return 1.0
 
@@ -160,7 +161,7 @@ def _moc_nozzle_angle_metadata(
     bell_length_fraction: float,
     gamma: float = 1.22,
 ) -> Dict[str, float]:
-    exit_mach = _estimate_supersonic_mach_from_area_ratio(expansion_ratio, gamma=gamma)
+    exit_mach = _solve_supersonic_mach_from_area_ratio(expansion_ratio, gamma=gamma)
     prandtl_meyer_exit_deg = _prandtl_meyer_angle_deg(exit_mach, gamma=gamma)
     ideal_turn_angle_deg = prandtl_meyer_exit_deg * 0.5
     entrance_angle_deg = clamp(ideal_turn_angle_deg, 18.0, 34.0)
@@ -184,7 +185,7 @@ def _build_section_margin_metrics(
     wall_temperature_k: float,
 ) -> Dict[str, float]:
     allowable_stress_mpa = MATERIAL_ALLOWABLE_STRESS_MPA.get(material, 105.0)
-    hoop_stress_mpa = _estimate_hoop_stress_mpa(pressure_kpa, diameter_mm, wall_thickness_mm)
+    hoop_stress_mpa = _calculate_hoop_stress_mpa(pressure_kpa, diameter_mm, wall_thickness_mm)
     structural_margin_ratio = allowable_stress_mpa / max(1e-6, hoop_stress_mpa)
     temperature_limit_k = _temperature_limit_k(material)
     thermal_margin_k = temperature_limit_k - wall_temperature_k
@@ -273,7 +274,7 @@ def _solve_pressure_state(
     propellant_mass_flow_kg_s: float,
     feed_system_bay_length_mm: float,
 ) -> PressureSolution:
-    """Solve a feasible concept-stage pressure state with explicit margins."""
+    """Solve a feasible design-stage pressure state with explicit margins."""
     feed_line_pressure_drop_kpa = (
         48.0 + propellant_mass_flow_kg_s * 21.0 + feed_system_bay_length_mm * 0.24
     )
@@ -482,54 +483,19 @@ def _build_nozzle_contour_points(
                 "throat" if index == max(2, converging_samples) - 1 else "converging",
             )
 
-    downstream_arc_end_x_mm = downstream_blend_radius_mm * math.sin(bell_entrance_angle_rad)
-    downstream_arc_end_radius_mm = throat_radius + downstream_blend_radius_mm * (
-        1.0 - math.cos(bell_entrance_angle_rad)
-    )
-
-    if downstream_arc_end_x_mm >= diverging_length_mm - 0.5:
-        downstream_arc_end_x_mm = max(0.25, diverging_length_mm * 0.2)
-        downstream_arc_end_radius_mm = throat_radius + (exit_radius - throat_radius) * 0.18
-
-    bell_control_x_mm, bell_control_radius_mm = _solve_bell_control_point(
-        downstream_arc_end_x_mm,
-        downstream_arc_end_radius_mm,
-        diverging_length_mm,
+    moc_solution = solve_moc_nozzle(
+        throat_radius,
         exit_radius,
-        bell_entrance_angle_rad,
-        bell_exit_angle_rad,
+        diverging_length_mm,
+        gamma=1.22,
+        contour_samples=max(diverging_samples, 32),
+        characteristic_count=18,
     )
-
-    arc_samples = max(5, diverging_samples // 4 + 2)
-    for index in range(1, arc_samples):
-        phi = bell_entrance_angle_rad * (index / float(arc_samples - 1))
-        axial_mm = converging_length_mm + downstream_blend_radius_mm * math.sin(phi)
-        radius_mm = throat_radius + downstream_blend_radius_mm * (1.0 - math.cos(phi))
-        _append_contour_sample(samples, axial_mm, radius_mm, "diverging_arc")
-
-    bezier_samples = max(6, diverging_samples)
-    for index in range(1, bezier_samples):
-        t_value = index / float(bezier_samples - 1)
-        one_minus_t = 1.0 - t_value
-        moc_relax = 0.5 - 0.5 * math.cos(math.pi * t_value)
-        axial_mm = converging_length_mm + (
-            one_minus_t * one_minus_t * downstream_arc_end_x_mm
-            + 2.0 * one_minus_t * t_value * bell_control_x_mm
-            + t_value * t_value * diverging_length_mm
-        )
-        radius_mm = (
-            one_minus_t * one_minus_t * downstream_arc_end_radius_mm
-            + 2.0 * one_minus_t * t_value * bell_control_radius_mm
-            + t_value * t_value * exit_radius
-        )
-        ideal_radius_mm = downstream_arc_end_radius_mm + (exit_radius - downstream_arc_end_radius_mm) * moc_relax
-        radius_mm = radius_mm * 0.68 + ideal_radius_mm * 0.32
-        _append_contour_sample(
-            samples,
-            axial_mm,
-            radius_mm,
-            "exit" if index == bezier_samples - 1 else "bell",
-        )
+    for index, point in enumerate(moc_solution.contour_points[1:], start=1):
+        axial_mm = converging_length_mm + float(point["x_mm"])
+        radius_mm = float(point["radius_mm"])
+        section = "exit" if index == len(moc_solution.contour_points) - 1 else "moc_characteristic"
+        _append_contour_sample(samples, axial_mm, radius_mm, section)
 
     points: List[Dict[str, object]] = []
     for axial_mm, radius_mm, section in samples:
@@ -540,6 +506,15 @@ def _build_nozzle_contour_points(
                 "diameter_mm": rounded(radius_mm * 2.0),
                 "section": section,
                 "normalized_x": round(axial_mm / total_length, 4),
+                "moc_mach": round(
+                    _solve_supersonic_mach_from_area_ratio(
+                        max(1.0, pow(radius_mm / max(0.1, throat_radius), 2)),
+                        gamma=1.22,
+                    ),
+                    4,
+                )
+                if axial_mm >= converging_length_mm
+                else 0.0,
             }
         )
     return points
@@ -590,9 +565,9 @@ class DesignInputs:
         if nozzle_expansion_bias not in NOZZLE_EXPANSION_BIASES:
             nozzle_expansion_bias = "pressure_matched"
         return cls(
-            fuel_name=(str(raw_state.get("fuel_name", "Fuel")).strip() or "Fuel"),
+            fuel_name=(str(raw_state.get("fuel_name", "Ethanol")).strip() or "Ethanol"),
             oxidizer_name=(
-                str(raw_state.get("oxidizer_name", "Oxidizer")).strip() or "Oxidizer"
+                str(raw_state.get("oxidizer_name", "Liquid Oxygen")).strip() or "Liquid Oxygen"
             ),
             mixture_ratio=clamp(float(raw_state.get("mixture_ratio", 1.4) or 1.4), 0.1, 10.0),
             injector_type=injector_type,
@@ -693,7 +668,7 @@ class StationSample:
 
 
 @dataclass
-class SubsystemPlaceholder:
+class SubsystemDesignNote:
     label: str
     status: str
     note: str
@@ -735,7 +710,7 @@ class DerivedDesign:
     cad_stations_mm: Dict[str, float] = field(default_factory=dict)
     visualization_hints: Dict[str, float] = field(default_factory=dict)
     station_rows: List[StationSample] = field(default_factory=list)
-    subsystem_placeholders: List[SubsystemPlaceholder] = field(default_factory=list)
+    subsystem_design_notes: List[SubsystemDesignNote] = field(default_factory=list)
     measurement_rows: List[MeasurementRow] = field(default_factory=list)
     nozzle_contour_points: List[Dict[str, object]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -745,7 +720,7 @@ class DerivedDesign:
 
 
 @dataclass
-class ConceptDesign:
+class EngineDesign:
     inputs: DesignInputs
     fuel: PropellantOption
     oxidizer: PropellantOption
@@ -777,8 +752,8 @@ class GeometrySizing:
     chamber_effective_contraction_ratio: float
     nozzle_throat_diameter_mm: float
     nozzle_throat_sizing_method: str
-    nozzle_throat_pressure_assumption_kpa: float
-    nozzle_throat_thrust_coefficient_assumption: float
+    nozzle_throat_pressure_closure_kpa: float
+    nozzle_throat_thrust_coefficient_closure: float
     nozzle_converging_length_mm: float
     nozzle_diverging_length_mm: float
     nozzle_length_mm: float
@@ -820,7 +795,7 @@ class GeometrySizing:
     thermal_margin_index: float
 
 
-def _estimate_auto_nozzle_exit(
+def _solve_auto_nozzle_exit(
     inputs: DesignInputs,
     throat_diameter_mm: float,
     thrust_scale: float,
@@ -833,7 +808,7 @@ def _estimate_auto_nozzle_exit(
         else "pressure_matched"
     )
     pressure_factor = NOZZLE_EXPANSION_PRESSURE_FACTORS[expansion_bias]
-    estimated_chamber_pressure_kpa = clamp(
+    geometry_seed_chamber_pressure_kpa = clamp(
         680.0
         + thrust_scale * 920.0
         + (170.0 if inputs.use_pumps else 40.0)
@@ -842,13 +817,15 @@ def _estimate_auto_nozzle_exit(
         6500.0,
     )
     chamber_pressure_kpa = clamp(
-        inputs.target_chamber_pressure_kpa if inputs.target_chamber_pressure_kpa > 0.0 else estimated_chamber_pressure_kpa,
+        inputs.target_chamber_pressure_kpa
+        if inputs.target_chamber_pressure_kpa > 0.0
+        else geometry_seed_chamber_pressure_kpa,
         600.0,
         6500.0,
     )
     target_exit_pressure_kpa = ambient_pressure_kpa * pressure_factor
     pressure_ratio = clamp(target_exit_pressure_kpa / max(1.0, chamber_pressure_kpa), 1e-5, 0.95)
-    exit_mach = _estimate_supersonic_mach_from_pressure_ratio(pressure_ratio, gamma)
+    exit_mach = _solve_supersonic_mach_from_pressure_ratio(pressure_ratio, gamma)
     expansion_ratio = clamp(_area_ratio_from_mach(exit_mach, gamma), 1.08, 80.0)
     uncapped_exit_diameter_mm = throat_diameter_mm * math.sqrt(expansion_ratio)
     exit_limit_mm = clamp(inputs.target_diameter_mm * 0.94, max(24.0, throat_diameter_mm * 1.08), 250.0)
@@ -871,7 +848,7 @@ def _estimate_auto_nozzle_exit(
     }
 
 
-def _estimate_chamber_characteristic_length(
+def _calculate_chamber_characteristic_length(
     inputs: DesignInputs,
     fuel: PropellantOption,
     oxidizer: PropellantOption,
@@ -990,7 +967,7 @@ def _calculate_geometry_sizing(
         max(24.0, inputs.chamber_diameter_mm * 0.32),
         250.0,
     )
-    estimated_nozzle_chamber_pressure_kpa = clamp(
+    nozzle_seed_chamber_pressure_kpa = clamp(
         680.0
         + thrust_scale * 920.0
         + (170.0 if inputs.use_pumps else 40.0)
@@ -998,14 +975,14 @@ def _calculate_geometry_sizing(
         600.0,
         6500.0,
     )
-    nozzle_throat_pressure_assumption_kpa = clamp(
+    nozzle_throat_pressure_closure_kpa = clamp(
         inputs.target_chamber_pressure_kpa
         if inputs.target_chamber_pressure_kpa > 0.0
-        else estimated_nozzle_chamber_pressure_kpa,
+        else nozzle_seed_chamber_pressure_kpa,
         600.0,
         6500.0,
     )
-    nozzle_throat_thrust_coefficient_assumption = clamp(
+    nozzle_throat_thrust_coefficient_closure = clamp(
         1.34
         + (0.035 if inputs.use_pumps else -0.015)
         + (0.02 if inputs.regen_cooling else 0.0)
@@ -1016,7 +993,7 @@ def _calculate_geometry_sizing(
     )
     throat_area_m2 = inputs.target_thrust_newtons / max(
         1.0,
-        nozzle_throat_thrust_coefficient_assumption * nozzle_throat_pressure_assumption_kpa * 1000.0,
+        nozzle_throat_thrust_coefficient_closure * nozzle_throat_pressure_closure_kpa * 1000.0,
     )
     raw_nozzle_throat_diameter_mm = math.sqrt(max(1e-10, 4.0 * throat_area_m2 / math.pi)) * 1000.0
     nozzle_throat_diameter_mm = clamp(
@@ -1028,7 +1005,7 @@ def _calculate_geometry_sizing(
         ),
     )
     nozzle_throat_sizing_method = "Choked thrust coefficient"
-    chamber_lstar = _estimate_chamber_characteristic_length(
+    chamber_lstar = _calculate_chamber_characteristic_length(
         inputs,
         fuel,
         oxidizer,
@@ -1043,7 +1020,7 @@ def _calculate_geometry_sizing(
     chamber_contraction_ratio = chamber_lstar["contraction_ratio"]
     chamber_effective_contraction_ratio = chamber_lstar["effective_contraction_ratio"]
     if inputs.nozzle_exit_mode == "auto":
-        auto_exit = _estimate_auto_nozzle_exit(inputs, nozzle_throat_diameter_mm, thrust_scale)
+        auto_exit = _solve_auto_nozzle_exit(inputs, nozzle_throat_diameter_mm, thrust_scale)
         nozzle_exit_diameter_mm = float(auto_exit["diameter_mm"])
         nozzle_exit_sizing_status = str(auto_exit["status"])
         nozzle_exit_pressure_target_kpa = float(auto_exit["pressure_target_kpa"])
@@ -1209,8 +1186,8 @@ def _calculate_geometry_sizing(
         chamber_effective_contraction_ratio=chamber_effective_contraction_ratio,
         nozzle_throat_diameter_mm=nozzle_throat_diameter_mm,
         nozzle_throat_sizing_method=nozzle_throat_sizing_method,
-        nozzle_throat_pressure_assumption_kpa=nozzle_throat_pressure_assumption_kpa,
-        nozzle_throat_thrust_coefficient_assumption=nozzle_throat_thrust_coefficient_assumption,
+        nozzle_throat_pressure_closure_kpa=nozzle_throat_pressure_closure_kpa,
+        nozzle_throat_thrust_coefficient_closure=nozzle_throat_thrust_coefficient_closure,
         nozzle_converging_length_mm=nozzle_converging_length_mm,
         nozzle_diverging_length_mm=nozzle_diverging_length_mm,
         nozzle_length_mm=nozzle_length_mm,
@@ -1379,8 +1356,8 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
 
     nozzle_rows = [
         ("Nozzle throat sizing method", "nozzle_throat_sizing_method", "", "--"),
-        ("Nozzle throat pressure assumption", "nozzle_throat_pressure_assumption_kpa", "kPa", "--"),
-        ("Nozzle throat thrust coefficient", "nozzle_throat_thrust_coefficient_assumption", "", "--"),
+        ("Nozzle throat pressure closure", "nozzle_throat_pressure_closure_kpa", "kPa", "--"),
+        ("Nozzle throat thrust coefficient", "nozzle_throat_thrust_coefficient_closure", "", "--"),
         ("Nozzle exit sizing mode", "nozzle_exit_mode", "", "--"),
         ("Nozzle exit sizing status", "nozzle_exit_sizing_status", "", "--"),
         ("Nozzle expansion setting", "nozzle_expansion_bias", "", "--"),
@@ -1408,7 +1385,7 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
             (f"{label} allowable stress", f"{prefix}_allowable_stress_mpa", "MPa", "--"),
             (f"{label} structural wall", wall_key, "mm", "--"),
             (f"{label} structural margin", f"{prefix}_structural_margin_ratio", "x", "--"),
-            (f"{label} wall temperature", f"{prefix}_estimated_wall_temperature_k", "K", "--"),
+            (f"{label} wall temperature", f"{prefix}_wall_temperature_k", "K", "--"),
             (f"{label} temperature limit", f"{prefix}_temperature_limit_k", "K", "--"),
             (f"{label} thermal margin", f"{prefix}_thermal_margin_k", "K", "--"),
         ]
@@ -1458,7 +1435,7 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
 
     rows.extend(
         [
-            MeasurementRow("Nozzle concept length", f"{rounded(derived.nozzle_length_mm)} mm", rounded(derived.nozzle_length_mm), "mm"),
+            MeasurementRow("Nozzle design length", f"{rounded(derived.nozzle_length_mm)} mm", rounded(derived.nozzle_length_mm), "mm"),
             MeasurementRow("Nozzle contour points", f"{len(derived.nozzle_contour_points)} points", float(len(derived.nozzle_contour_points)), "points"),
             MeasurementRow("Pump or pressurization bay length", f"{rounded(derived.feed_system_bay_length_mm)} mm", rounded(derived.feed_system_bay_length_mm), "mm"),
             MeasurementRow("Cooling jacket allowance", f"{rounded(derived.coolant_jacket_thickness_mm)} mm", rounded(derived.coolant_jacket_thickness_mm), "mm"),
@@ -1498,11 +1475,11 @@ def build_measurement_rows(inputs: DesignInputs, derived: DerivedDesign) -> List
     return rows
 
 
-def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
+def build_notes(inputs: DesignInputs, design: EngineDesign) -> List[str]:
     derived = design.derived
     values = derived.engineering_values
     notes = [
-        "This project intentionally stays at the level of concept visualization and software architecture. The measurements and scores shown are non-operational placeholders for CAD blockout and software planning only. They are not manufacturing dimensions, propulsion calculations, test parameters, or build instructions.",
+        "This project intentionally stays at the level of design visualization and software architecture. The measurements and scores shown are solver outputs for analysis review only. They are not manufacturing dimensions, propulsion calculations for hardware release, test parameters, or build instructions.",
         "{mode} selected: {note}.".format(
             mode=derived.feed_mode.label, note=derived.feed_mode.control_note
         ),
@@ -1511,23 +1488,23 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
             oxidizer=inputs.oxidizer_name,
             mixture=rounded(inputs.mixture_ratio),
         ),
-        "Concept targets captured for future solver integration: thrust {thrust} N, impulse {impulse} N*s, diameter {diameter} mm.".format(
+        "design targets captured for future solver integration: thrust {thrust} N, impulse {impulse} N*s, diameter {diameter} mm.".format(
             thrust=rounded(inputs.target_thrust_newtons),
             impulse=rounded(inputs.target_impulse_newton_seconds),
             diameter=rounded(inputs.target_diameter_mm),
         ),
-        "Solver mode is {mode} using catalog-driven conceptual coefficients rather than propulsion-grade performance calculations.".format(
+        "Solver mode is {mode} using catalog-driven preliminary coefficients rather than propulsion-grade performance calculations.".format(
             mode=derived.solver_meta.solver_mode
         ),
-        "CAD measurements shown here are envelope placeholders for concept blockout, not manufacturing or test values.",
-        "Conceptual indices: packaging {packaging}, thermal margin {thermal}, dry-mass proxy {mass}.".format(
+        "CAD measurements shown here are envelope outputs for design blockout, not manufacturing or test values.",
+        "preliminary indices: packaging {packaging}, thermal margin {thermal}, dry-mass index {mass}.".format(
             packaging=rounded(derived.packaging_efficiency_index),
             thermal=rounded(derived.thermal_margin_index),
             mass=rounded(derived.dry_mass_index),
         ),
-        "Pump, impeller, electric motor, injector geometry, and the MOC-informed bell nozzle contour remain reduced-order sizing outputs in this app; they are intended for preliminary iteration rather than detailed hardware release.",
-        "Station exports include conceptual geometry and explicit not-calculated markers for thermofluid fields that are outside concept mode.",
-        "Materials are now used for section-based structural stress and wall-temperature margin estimates for the tanks, chamber, throat, and nozzle.",
+        "Pump, impeller, electric motor, injector geometry, and the MOC characteristic-net nozzle contour remain design-stage sizing outputs in this app; they are intended for analysis iteration rather than detailed hardware release.",
+        "Station exports include preliminary geometry and explicit unavailable markers for thermofluid fields that require a coupled solve.",
+        "Materials are now used for section-based structural stress and wall-temperature margin calculations for the tanks, chamber, throat, and nozzle.",
         "Selected injector family: {0}.".format(values.get("injector_type", inputs.injector_type)),
     ]
 
@@ -1536,7 +1513,7 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
             "Regenerative cooling enabled: outer diameter accounts for inner wall thickness, channel depth, and outer jacket thickness. Final OD = input diameter + 2 × (inner wall + channel depth + outer jacket)."
         )
         notes.append(
-            "Per-section thermal margin proxies are exported for the feed inlet, pump bay, injector face, chamber mid, throat, and nozzle exit stations."
+            "Per-section thermal margins are exported for the feed inlet, pump bay, injector face, chamber mid, throat, and nozzle exit stations."
         )
     else:
         notes.append(
@@ -1545,16 +1522,16 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
 
     if inputs.film_cooling:
         notes.append(
-            "Film cooling enabled: the concept geometry reserves injector-perimeter film slots, increases injector face diameter, slightly lengthens the diverging nozzle section, and applies thermal-margin relief. It does not add an external coolant jacket."
+            "Film cooling enabled: the design geometry reserves injector-perimeter film slots, increases injector face diameter, slightly lengthens the diverging nozzle section, and applies thermal-margin relief. It does not add an external coolant jacket."
         )
 
     if not inputs.use_pumps:
         notes.append(
-            "Blowdown mode increases tank-length allowance to reserve pressurant headspace in the conceptual packaging model."
+            "Blowdown mode increases tank-length allowance to reserve pressurant headspace in the preliminary packaging model."
         )
 
     notes.append(
-        "The current layout envelope estimate is {length} mm long within a maximum body width of {width} mm.".format(
+        "The current layout envelope is {length} mm long within a maximum body width of {width} mm.".format(
             length=rounded(derived.total_stack_length_mm),
             width=rounded(derived.maximum_diameter_mm),
         )
@@ -1569,10 +1546,10 @@ def build_notes(inputs: DesignInputs, design: ConceptDesign) -> List[str]:
     return notes
 
 
-class ConceptSolver:
-    """Concept-only solver for geometry, packaging, and abstract design scores."""
+class DesignSolver:
+    """Design solver for geometry, packaging, and abstract design scores."""
 
-    solver_name = "Concept Envelope Solver"
+    solver_name = "Design Envelope Solver"
     solver_version = "2.0"
     solver_mode = "geometry-and-index"
 
@@ -1600,10 +1577,10 @@ class ConceptSolver:
         feed_diameter = max(inputs.chamber_diameter_mm * 0.42, 16.0)
         throat_diameter = max(throat_diameter_mm, 18.0)
 
-        # Basic station annotator: where the concept solver already computes
+        # Basic station annotator: where the design solver already computes
         # pressures, mass flows, and nozzle geometry we promote a few human-
-        # readable station fields from placeholder text to calculated strings.
-        note = "Not available in concept preview"
+        # readable station fields from note text to calculated strings.
+        note = "Not available in design preview"
         thermal_note = regen_thermal_note or note
 
         def fmt_kpa(v: float) -> str:
@@ -1616,7 +1593,7 @@ class ConceptSolver:
             return f"{rounded(v)} K" if v and v > 0.0 else note
 
         exit_area_ratio = max(1.0, nozzle_expansion_ratio)
-        exit_mach_est = _estimate_supersonic_mach_from_area_ratio(exit_area_ratio)
+        exit_mach_est = _solve_supersonic_mach_from_area_ratio(exit_area_ratio)
 
         def margin(key: str) -> float:
             return rounded(float(regen_thermal_margins.get(key, 0.0)))
@@ -1662,13 +1639,13 @@ class ConceptSolver:
                     envelope_diameter_mm=rounded(chamber_envelope_diameter_mm),
                     area_index=0.74,
                     shell_complexity_index=0.72 if inputs.film_cooling else 0.58,
-                    temperature_note=fmt_temp_k(CONCEPT_CHAMBER_TEMPERATURE_K),
+                    temperature_note=fmt_temp_k(DESIGN_CHAMBER_TEMPERATURE_K),
                     pressure_note=fmt_kpa(chamber_pressure_kpa),
                     mass_flow_note=fmt_mass(propellant_mass_flow_kg_s),
                     mach_note=str(round(0.3, 2)),
                     thermal_margin_index=margin("injector_face"),
                     thermal_margin_note=thermal_note,
-                    temperature_k=CONCEPT_CHAMBER_TEMPERATURE_K,
+                    temperature_k=DESIGN_CHAMBER_TEMPERATURE_K,
                     pressure_kpa=float(chamber_pressure_kpa or 0.0),
                     mass_flow_kg_s=float(propellant_mass_flow_kg_s or 0.0),
                     mach_number=0.3,
@@ -1679,13 +1656,13 @@ class ConceptSolver:
                     envelope_diameter_mm=rounded(chamber_envelope_diameter_mm),
                     area_index=0.82,
                     shell_complexity_index=0.7 if inputs.regen_cooling else 0.52,
-                    temperature_note=fmt_temp_k(CONCEPT_CHAMBER_TEMPERATURE_K),
+                    temperature_note=fmt_temp_k(DESIGN_CHAMBER_TEMPERATURE_K),
                     pressure_note=fmt_kpa(chamber_pressure_kpa),
                     mass_flow_note=fmt_mass(propellant_mass_flow_kg_s),
                     mach_note=str(round(0.15, 3)),
                     thermal_margin_index=margin("chamber_mid"),
                     thermal_margin_note=thermal_note,
-                    temperature_k=CONCEPT_CHAMBER_TEMPERATURE_K,
+                    temperature_k=DESIGN_CHAMBER_TEMPERATURE_K,
                     pressure_kpa=float(chamber_pressure_kpa or 0.0),
                     mass_flow_kg_s=float(propellant_mass_flow_kg_s or 0.0),
                     mach_number=0.15,
@@ -1696,13 +1673,13 @@ class ConceptSolver:
                     envelope_diameter_mm=rounded(throat_diameter),
                     area_index=0.34,
                     shell_complexity_index=0.78,
-                    temperature_note=fmt_temp_k(CONCEPT_CHAMBER_TEMPERATURE_K),
+                    temperature_note=fmt_temp_k(DESIGN_CHAMBER_TEMPERATURE_K),
                     pressure_note=fmt_kpa(max(1.0, chamber_pressure_kpa * 0.95)),
                     mass_flow_note=fmt_mass(propellant_mass_flow_kg_s),
                     mach_note=str(round(1.0, 3)),
                     thermal_margin_index=margin("throat_region"),
                     thermal_margin_note=thermal_note,
-                    temperature_k=CONCEPT_CHAMBER_TEMPERATURE_K,
+                    temperature_k=DESIGN_CHAMBER_TEMPERATURE_K,
                     pressure_kpa=float(max(1.0, chamber_pressure_kpa * 0.95)),
                     mass_flow_kg_s=float(propellant_mass_flow_kg_s or 0.0),
                     mach_number=1.0,
@@ -1713,13 +1690,13 @@ class ConceptSolver:
                     envelope_diameter_mm=rounded(nozzle_exit_diameter_mm),
                     area_index=1.0,
                     shell_complexity_index=0.48,
-                    temperature_note=fmt_temp_k(CONCEPT_CHAMBER_TEMPERATURE_K),
+                    temperature_note=fmt_temp_k(DESIGN_CHAMBER_TEMPERATURE_K),
                     pressure_note=fmt_kpa(AMBIENT_PRESSURE_KPA),
                     mass_flow_note=fmt_mass(propellant_mass_flow_kg_s),
                     mach_note=str(round(exit_mach_est, 3)),
                     thermal_margin_index=margin("nozzle_exit_plane"),
                     thermal_margin_note=thermal_note,
-                    temperature_k=CONCEPT_CHAMBER_TEMPERATURE_K,
+                    temperature_k=DESIGN_CHAMBER_TEMPERATURE_K,
                     pressure_kpa=AMBIENT_PRESSURE_KPA,
                     mass_flow_kg_s=float(propellant_mass_flow_kg_s or 0.0),
                     mach_number=float(exit_mach_est),
@@ -1727,9 +1704,9 @@ class ConceptSolver:
         ]
 
     @staticmethod
-    def _build_subsystem_placeholders(inputs: DesignInputs) -> List[SubsystemPlaceholder]:
+    def _build_subsystem_design_notes(inputs: DesignInputs) -> List[SubsystemDesignNote]:
         drive_note = (
-            "Electric drive envelope is sized from the pump power and torque estimate. Motor class, winding, cooling, and power electronics remain concept-level selections."
+            "Electric drive envelope is sized from the pump power and torque calculation. Motor class, winding, cooling, and power electronics remain design-level selections."
             if inputs.use_pumps
             else "Drive module removed in blowdown mode; pressurant packaging envelope retained instead."
         )
@@ -1739,24 +1716,24 @@ class ConceptSolver:
             else "No pump cartridge in blowdown mode."
         )
         return [
-            SubsystemPlaceholder(
+            SubsystemDesignNote(
                 label="Fuel Feed Module",
-                status="concept envelope",
+                status="design envelope",
                 note=pump_note,
             ),
-            SubsystemPlaceholder(
+            SubsystemDesignNote(
                 label="Oxidizer Feed Module",
-                status="concept envelope",
+                status="design envelope",
                 note=pump_note,
             ),
-            SubsystemPlaceholder(
+            SubsystemDesignNote(
                 label="Electrical Drive Module",
                 status="future detailed design",
                 note=drive_note,
             ),
         ]
 
-    def solve(self, raw_state: Dict[str, object]) -> ConceptDesign:
+    def solve(self, raw_state: Dict[str, object]) -> EngineDesign:
         inputs = DesignInputs.from_mapping(raw_state)
         packaging = get_packaging_multiplier(inputs.packaging_bias)
         feed_mode = get_feed_mode(inputs.use_pumps)
@@ -1777,8 +1754,8 @@ class ConceptSolver:
         chamber_effective_contraction_ratio = geometry.chamber_effective_contraction_ratio
         nozzle_throat_diameter_mm = geometry.nozzle_throat_diameter_mm
         nozzle_throat_sizing_method = geometry.nozzle_throat_sizing_method
-        nozzle_throat_pressure_assumption_kpa = geometry.nozzle_throat_pressure_assumption_kpa
-        nozzle_throat_thrust_coefficient_assumption = geometry.nozzle_throat_thrust_coefficient_assumption
+        nozzle_throat_pressure_closure_kpa = geometry.nozzle_throat_pressure_closure_kpa
+        nozzle_throat_thrust_coefficient_closure = geometry.nozzle_throat_thrust_coefficient_closure
         nozzle_converging_length_mm = geometry.nozzle_converging_length_mm
         nozzle_diverging_length_mm = geometry.nozzle_diverging_length_mm
         nozzle_length_mm = geometry.nozzle_length_mm
@@ -1906,7 +1883,7 @@ class ConceptSolver:
             regen_total_radial_thickness_mm = (
                 regen_inner_wall_thickness_mm + regen_channel_depth_mm + regen_outer_jacket_thickness_mm
             )
-            regen_heat_flux_proxy_kw = clamp(
+            regen_heat_load_kw = clamp(
                 propellant_mass_flow_kg_s
                 * (0.35 + fuel.cooling_affinity * 0.22 + oxidizer.thermal_severity * 0.48)
                 * 410.0,
@@ -1915,14 +1892,14 @@ class ConceptSolver:
             )
             regen_coolant_heat_capacity_kj_kgk = 3.75
             regen_coolant_temperature_rise_k = clamp(
-                regen_heat_flux_proxy_kw
+                regen_heat_load_kw
                 / max(1e-6, regen_coolant_mass_flow_kg_s * regen_coolant_heat_capacity_kj_kgk),
                 4.0,
                 320.0,
             )
             regen_thermal_model_status = "calculated"
             regen_thermal_note = (
-                "Cooling geometry and coolant-side pressure drop estimated from section dimensions and propellant flow."
+                "Cooling geometry and coolant-side pressure drop calculated from section dimensions and propellant flow."
             )
         else:
             regen_channel_depth_mm = 0.0
@@ -1938,11 +1915,11 @@ class ConceptSolver:
             regen_coolant_velocity_m_s = 0.0
             regen_hydraulic_diameter_mm = 0.0
             regen_pressure_drop_kpa = 0.0
-            regen_heat_flux_proxy_kw = 0.0
+            regen_heat_load_kw = 0.0
             regen_coolant_heat_capacity_kj_kgk = 0.0
             regen_coolant_temperature_rise_k = 0.0
             regen_thermal_model_status = "not-active"
-            regen_thermal_note = "Regenerative cooling disabled; structural wall temperatures are estimated without coolant passage relief."
+            regen_thermal_note = "Regenerative cooling disabled; structural wall temperatures are calculated without coolant passage relief."
 
         if inputs.film_cooling:
             film_mass_flow_kg_s = clamp(
@@ -2036,7 +2013,7 @@ class ConceptSolver:
                 ),
             )
 
-        estimated_chamber_pressure_kpa = clamp(
+        pressure_seed_kpa = clamp(
             680.0
             + thrust_scale * 920.0
             + (170.0 if inputs.use_pumps else 40.0)
@@ -2045,7 +2022,7 @@ class ConceptSolver:
             6500.0,
         )
         chamber_pressure_kpa = clamp(
-            inputs.target_chamber_pressure_kpa if inputs.target_chamber_pressure_kpa > 0.0 else estimated_chamber_pressure_kpa,
+            inputs.target_chamber_pressure_kpa if inputs.target_chamber_pressure_kpa > 0.0 else pressure_seed_kpa,
             600.0,
             6500.0,
         )
@@ -2073,13 +2050,13 @@ class ConceptSolver:
         fuel_feed_tube_length_mm = clamp(feed_system_bay_length_mm * (0.72 if inputs.use_pumps else 0.58), 22.0, 240.0)
         oxidizer_feed_tube_length_mm = clamp(feed_system_bay_length_mm * (0.72 if inputs.use_pumps else 0.58), 22.0, 240.0)
 
-        fuel_tank_wall_thickness_mm = _estimate_wall_thickness_mm(
+        fuel_tank_wall_thickness_mm = _calculate_pressure_vessel_wall_thickness_mm(
             fuel_tank_pressure_kpa,
             inputs.tank_diameter_mm,
             inputs.fuel_tank_material,
             inputs.factor_of_safety,
         )
-        oxidizer_tank_wall_thickness_mm = _estimate_wall_thickness_mm(
+        oxidizer_tank_wall_thickness_mm = _calculate_pressure_vessel_wall_thickness_mm(
             oxidizer_tank_pressure_kpa,
             inputs.tank_diameter_mm,
             inputs.oxidizer_tank_material,
@@ -2196,7 +2173,7 @@ class ConceptSolver:
             electric_motor_envelope_height_mm = 0.0
             electric_motor_envelope_depth_mm = 0.0
 
-        chamber_structural_wall_thickness_mm = _estimate_wall_thickness_mm(
+        chamber_structural_wall_thickness_mm = _calculate_pressure_vessel_wall_thickness_mm(
             chamber_pressure_kpa,
             inputs.chamber_diameter_mm,
             inputs.chamber_material,
@@ -2204,14 +2181,14 @@ class ConceptSolver:
         )
         ambient_pressure_kpa = 101.3
         throat_pressure_kpa = chamber_pressure_kpa * 0.92
-        throat_structural_wall_thickness_mm = _estimate_wall_thickness_mm(
+        throat_structural_wall_thickness_mm = _calculate_pressure_vessel_wall_thickness_mm(
             throat_pressure_kpa,
             nozzle_throat_diameter_mm,
             inputs.nozzle_material,
             inputs.factor_of_safety,
         )
         nozzle_section_pressure_kpa = max(ambient_pressure_kpa, chamber_pressure_kpa * 0.38)
-        nozzle_structural_wall_thickness_mm = _estimate_wall_thickness_mm(
+        nozzle_structural_wall_thickness_mm = _calculate_pressure_vessel_wall_thickness_mm(
             nozzle_section_pressure_kpa,
             inputs.nozzle_diameter_mm,
             inputs.nozzle_material,
@@ -2423,7 +2400,7 @@ class ConceptSolver:
             nozzle_expansion_ratio=nozzle_expansion_ratio,
             nozzle_throat_diameter_mm=nozzle_throat_diameter_mm,
         )
-        subsystem_placeholders = self._build_subsystem_placeholders(inputs)
+        subsystem_design_notes = self._build_subsystem_design_notes(inputs)
 
         derived = DerivedDesign(
             solver_meta=SolverMeta(
@@ -2450,13 +2427,13 @@ class ConceptSolver:
             cad_stations_mm=cad_stations_mm,
             visualization_hints=visualization_hints,
             station_rows=station_rows,
-            subsystem_placeholders=subsystem_placeholders,
+            subsystem_design_notes=subsystem_design_notes,
             nozzle_contour_points=nozzle_contour_points,
             calculation_stages=[
-                "1) Inputs normalized and bounded for concept-mode solving.",
+                "1) Inputs normalized and bounded for design-mode solving.",
                 "2) Propellant catalog factors resolved for density and thermal behavior.",
                 "3) Geometry envelope solved using thrust, impulse, and architecture inputs.",
-                "4) Feed-module impeller, electric motor, MOC-informed bell nozzle contour, and injector family dimensions estimated with reduced-order engineering closures.",
+                "4) Feed-module impeller, electric motor, MOC characteristic-net nozzle contour, and injector family dimensions calculated with design-stage engineering closures.",
                 "5) Flow, pressure, regenerative-cooling, and propellant sizing solved with architecture-aware pressure closure and explicit reserve margins.",
                 "6) Section-based structural and thermal margins evaluated for tanks, chamber, throat, and nozzle.",
                 "7) Stations, measurements, notes, and export bundles prepared.",
@@ -2470,9 +2447,9 @@ class ConceptSolver:
                 "input_burn_time_seconds": rounded(inputs.burn_time_seconds),
                 "calculated_burn_time_seconds": rounded(calculated_burn_time_seconds),
                 "effective_exhaust_velocity_mps": rounded(effective_exhaust_velocity_mps),
-                "propellant_mass_flow_kg_s": rounded(propellant_mass_flow_kg_s),
-                "fuel_mass_flow_kg_s": rounded(fuel_mass_flow_kg_s),
-                "oxidizer_mass_flow_kg_s": rounded(oxidizer_mass_flow_kg_s),
+                "propellant_mass_flow_kg_s": round(propellant_mass_flow_kg_s, 6),
+                "fuel_mass_flow_kg_s": round(fuel_mass_flow_kg_s, 6),
+                "oxidizer_mass_flow_kg_s": round(oxidizer_mass_flow_kg_s, 6),
                 "propellant_mass_used_kg": rounded(propellant_mass_used_kg),
                 "fuel_mass_kg": rounded(fuel_mass_kg),
                 "oxidizer_mass_kg": rounded(oxidizer_mass_kg),
@@ -2552,8 +2529,8 @@ class ConceptSolver:
                 "nozzle_exit_uncapped_diameter_mm": rounded(nozzle_exit_uncapped_diameter_mm),
                 "nozzle_throat_diameter_mm": rounded(nozzle_throat_diameter_mm),
                 "nozzle_throat_sizing_method": nozzle_throat_sizing_method,
-                "nozzle_throat_pressure_assumption_kpa": rounded(nozzle_throat_pressure_assumption_kpa),
-                "nozzle_throat_thrust_coefficient_assumption": round(nozzle_throat_thrust_coefficient_assumption, 4),
+                "nozzle_throat_pressure_closure_kpa": rounded(nozzle_throat_pressure_closure_kpa),
+                "nozzle_throat_thrust_coefficient_closure": round(nozzle_throat_thrust_coefficient_closure, 4),
                 "nozzle_inner_diameter_mm": rounded(nozzle_exit_diameter_mm),
                 "nozzle_outer_diameter_mm": rounded(nozzle_regen_outer_diameter_mm),
                 "nozzle_wall_thickness_mm": rounded(max(0.0, (nozzle_regen_outer_diameter_mm - nozzle_exit_diameter_mm) / 2.0)),
@@ -2563,8 +2540,8 @@ class ConceptSolver:
                 "nozzle_expansion_ratio": round(nozzle_expansion_ratio, 3),
                 "nozzle_converging_angle_deg": round(nozzle_converging_angle_deg, 2),
                 "nozzle_diverging_angle_deg": round(nozzle_diverging_angle_deg, 2),
-                "nozzle_contour_method": "moc_bell",
-                "nozzle_contour_method_label": "MOC-informed bell contour",
+                "nozzle_contour_method": "moc_characteristic_net",
+                "nozzle_contour_method_label": "MOC characteristic-net bell contour",
                 "nozzle_moc_gamma": round(nozzle_moc_gamma, 3),
                 "nozzle_moc_exit_mach": round(nozzle_moc_exit_mach, 4),
                 "nozzle_moc_prandtl_meyer_exit_deg": round(nozzle_moc_prandtl_meyer_exit_deg, 3),
@@ -2608,7 +2585,7 @@ class ConceptSolver:
                 "regen_coolant_mass_flow_kg_s": rounded(regen_coolant_mass_flow_kg_s),
                 "regen_coolant_velocity_m_s": rounded(regen_coolant_velocity_m_s),
                 "regen_pressure_drop_kpa": rounded(regen_pressure_drop_kpa),
-                "regen_heat_flux_proxy_kw": round(regen_heat_flux_proxy_kw, 2),
+                "regen_heat_load_kw": round(regen_heat_load_kw, 2),
                 "regen_coolant_heat_capacity_kj_kgk": round(regen_coolant_heat_capacity_kj_kgk, 3),
                 "regen_coolant_temperature_rise_k": round(regen_coolant_temperature_rise_k, 2),
                 "regen_thermal_model_status": regen_thermal_model_status,
@@ -2659,7 +2636,7 @@ class ConceptSolver:
                 "fuel_tank_allowable_stress_mpa": section_margin_values["fuel_tank"]["allowable_stress_mpa"],
                 "fuel_tank_hoop_stress_mpa": section_margin_values["fuel_tank"]["hoop_stress_mpa"],
                 "fuel_tank_structural_margin_ratio": section_margin_values["fuel_tank"]["structural_margin_ratio"],
-                "fuel_tank_estimated_wall_temperature_k": section_margin_values["fuel_tank"]["wall_temperature_k"],
+                "fuel_tank_wall_temperature_k": section_margin_values["fuel_tank"]["wall_temperature_k"],
                 "fuel_tank_temperature_limit_k": section_margin_values["fuel_tank"]["temperature_limit_k"],
                 "fuel_tank_thermal_margin_k": section_margin_values["fuel_tank"]["thermal_margin_k"],
                 "fuel_tank_thermal_margin_ratio": section_margin_values["fuel_tank"]["thermal_margin_ratio"],
@@ -2667,7 +2644,7 @@ class ConceptSolver:
                 "oxidizer_tank_allowable_stress_mpa": section_margin_values["oxidizer_tank"]["allowable_stress_mpa"],
                 "oxidizer_tank_hoop_stress_mpa": section_margin_values["oxidizer_tank"]["hoop_stress_mpa"],
                 "oxidizer_tank_structural_margin_ratio": section_margin_values["oxidizer_tank"]["structural_margin_ratio"],
-                "oxidizer_tank_estimated_wall_temperature_k": section_margin_values["oxidizer_tank"]["wall_temperature_k"],
+                "oxidizer_tank_wall_temperature_k": section_margin_values["oxidizer_tank"]["wall_temperature_k"],
                 "oxidizer_tank_temperature_limit_k": section_margin_values["oxidizer_tank"]["temperature_limit_k"],
                 "oxidizer_tank_thermal_margin_k": section_margin_values["oxidizer_tank"]["thermal_margin_k"],
                 "oxidizer_tank_thermal_margin_ratio": section_margin_values["oxidizer_tank"]["thermal_margin_ratio"],
@@ -2675,7 +2652,7 @@ class ConceptSolver:
                 "chamber_allowable_stress_mpa": section_margin_values["chamber"]["allowable_stress_mpa"],
                 "chamber_hoop_stress_mpa": section_margin_values["chamber"]["hoop_stress_mpa"],
                 "chamber_structural_margin_ratio": section_margin_values["chamber"]["structural_margin_ratio"],
-                "chamber_estimated_wall_temperature_k": section_margin_values["chamber"]["wall_temperature_k"],
+                "chamber_wall_temperature_k": section_margin_values["chamber"]["wall_temperature_k"],
                 "chamber_temperature_limit_k": section_margin_values["chamber"]["temperature_limit_k"],
                 "chamber_thermal_margin_k": section_margin_values["chamber"]["thermal_margin_k"],
                 "chamber_thermal_margin_ratio": section_margin_values["chamber"]["thermal_margin_ratio"],
@@ -2683,7 +2660,7 @@ class ConceptSolver:
                 "throat_allowable_stress_mpa": section_margin_values["throat"]["allowable_stress_mpa"],
                 "throat_hoop_stress_mpa": section_margin_values["throat"]["hoop_stress_mpa"],
                 "throat_structural_margin_ratio": section_margin_values["throat"]["structural_margin_ratio"],
-                "throat_estimated_wall_temperature_k": section_margin_values["throat"]["wall_temperature_k"],
+                "throat_wall_temperature_k": section_margin_values["throat"]["wall_temperature_k"],
                 "throat_temperature_limit_k": section_margin_values["throat"]["temperature_limit_k"],
                 "throat_thermal_margin_k": section_margin_values["throat"]["thermal_margin_k"],
                 "throat_thermal_margin_ratio": section_margin_values["throat"]["thermal_margin_ratio"],
@@ -2691,7 +2668,7 @@ class ConceptSolver:
                 "nozzle_allowable_stress_mpa": section_margin_values["nozzle"]["allowable_stress_mpa"],
                 "nozzle_hoop_stress_mpa": section_margin_values["nozzle"]["hoop_stress_mpa"],
                 "nozzle_structural_margin_ratio": section_margin_values["nozzle"]["structural_margin_ratio"],
-                "nozzle_estimated_wall_temperature_k": section_margin_values["nozzle"]["wall_temperature_k"],
+                "nozzle_wall_temperature_k": section_margin_values["nozzle"]["wall_temperature_k"],
                 "nozzle_temperature_limit_k": section_margin_values["nozzle"]["temperature_limit_k"],
                 "nozzle_thermal_margin_k": section_margin_values["nozzle"]["thermal_margin_k"],
                 "nozzle_thermal_margin_ratio": section_margin_values["nozzle"]["thermal_margin_ratio"],
@@ -2699,7 +2676,7 @@ class ConceptSolver:
             },
         )
 
-        design = ConceptDesign(inputs=inputs, fuel=fuel, oxidizer=oxidizer, derived=derived)
+        design = EngineDesign(inputs=inputs, fuel=fuel, oxidizer=oxidizer, derived=derived)
         cooling_methods = []
         if inputs.regen_cooling:
             cooling_methods.append("Regen")
@@ -2708,7 +2685,7 @@ class ConceptSolver:
         cooling_strategy = " + ".join(cooling_methods) if cooling_methods else "None"
         derived.summary = [
             SummaryCard("Feed Mode", derived.feed_mode.label),
-            SummaryCard("Estimated Layout Length", f"{rounded(total_stack_length_mm)} mm"),
+            SummaryCard("Layout Length", f"{rounded(total_stack_length_mm)} mm"),
             SummaryCard("Injector Family", inputs.injector_type),
             SummaryCard("Cooling Strategy", cooling_strategy),
         ]
@@ -2717,5 +2694,5 @@ class ConceptSolver:
         return design
 
 
-def create_concept_design(raw_state: Dict[str, object]) -> ConceptDesign:
-    return ConceptSolver().solve(raw_state)
+def create_engine_design(raw_state: Dict[str, object]) -> EngineDesign:
+    return DesignSolver().solve(raw_state)

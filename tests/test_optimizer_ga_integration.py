@@ -10,7 +10,7 @@ from stanshock.optimizer_hooks import (
     GeneticAlgorithmResult,
     _summarize_tier_usage,
 )
-from stanshock.concept_model import create_concept_design
+from stanshock.design_model import create_engine_design
 import stanshock.qt_desktop as desktop_module
 
 
@@ -19,7 +19,7 @@ class TestGAIntegrationBasics:
 
     def test_run_genetic_optimizer_with_fidelity_returns_result(self):
         """GA with fidelity should return a GeneticAlgorithmResult."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=2, population_size=4, random_seed=42
@@ -31,7 +31,7 @@ class TestGAIntegrationBasics:
 
     def test_fidelity_result_includes_metadata(self):
         """GA with fidelity should include fidelity_metadata in result."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=1, population_size=4, random_seed=42, budget_ms=50000
@@ -43,7 +43,7 @@ class TestGAIntegrationBasics:
 
     def test_fidelity_result_contains_key_metadata_fields(self):
         """Fidelity metadata should include routing and allocation info."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed,
@@ -62,7 +62,7 @@ class TestGAIntegrationBasics:
 
     def test_fidelity_metadata_includes_decisions_per_generation(self):
         """Metadata should track routing decisions for each generation."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=2, population_size=4, random_seed=42
@@ -81,7 +81,7 @@ class TestFidelityTierAllocation:
 
     def test_tier_allocation_respects_budget(self):
         """Pool should not allocate candidates beyond budget."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         # Very small budget: only 50ms = one design candidate
         result = run_genetic_optimizer_with_fidelity(
@@ -99,7 +99,7 @@ class TestFidelityTierAllocation:
 
     def test_tier_usage_summary_in_history(self):
         """Generation history should include fidelity tier usage summary."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=2, population_size=6, random_seed=42
@@ -107,15 +107,14 @@ class TestFidelityTierAllocation:
         for gen_entry in result.history:
             assert "fidelity_tiers_used" in gen_entry
             tier_summary = gen_entry["fidelity_tiers_used"]
-            assert "heuristic" in tier_summary
-            assert "concept" in tier_summary
+            assert "fast" in tier_summary
+            assert "design" in tier_summary
             assert "coupled_cycle" in tier_summary
-            # At least concept should be used (default fallback)
-            assert tier_summary["concept"] > 0
+            assert tier_summary["design"] > 0
 
     def test_tier_allocation_cost_tracking(self):
-        """History should track estimated cost per generation."""
-        design = create_concept_design({})
+        """History should track allocated cost per generation."""
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed,
@@ -132,25 +131,10 @@ class TestFidelityTierAllocation:
             assert cost <= 20000
 
 
-class TestRetrainingSchedule:
-    """Tests for periodic surrogate retraining during GA."""
-
-    def test_retraining_interval_param_accepted(self):
-        """GA should accept retrain_interval_generations parameter."""
-        design = create_concept_design({})
-        seed = build_optimizer_seed(design)
-        result = run_genetic_optimizer_with_fidelity(
-            seed,
-            generations=3,
-            population_size=4,
-            random_seed=42,
-            retrain_interval_generations=2,
-        )
-        assert result.fidelity_metadata["retrain_interval_generations"] == 2
-
+class TestFidelityOptions:
     def test_coupled_cycle_flag_propagates(self):
         """enable_coupled_cycle flag should be stored in metadata."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed,
@@ -167,7 +151,7 @@ class TestFidelityMetadataComparison:
 
     def test_fidelity_garesult_vs_regular_garesult(self):
         """Both GA variants should return comparable result structures."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
 
         result_regular = run_genetic_optimizer(
@@ -193,7 +177,7 @@ class TestGAGenerationCount:
 
     def test_generation_counter_in_history(self):
         """Each history entry should have correct generation number."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=5, population_size=4, random_seed=42
@@ -204,7 +188,7 @@ class TestGAGenerationCount:
 
     def test_consistent_generation_tracking_in_metadata(self):
         """Decisions by generation should match history generations."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=3, population_size=4, random_seed=42
@@ -222,7 +206,7 @@ class TestBestCandidateTracking:
 
     def test_best_score_improves_or_maintains(self):
         """Best score should never decrease across generations."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=4, population_size=8, random_seed=42
@@ -235,7 +219,7 @@ class TestBestCandidateTracking:
 
     def test_final_best_matches_history(self):
         """Result best_score should match the final history entry."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=3, population_size=6, random_seed=42
@@ -250,21 +234,21 @@ class TestTierUsageSummary:
     def test_summarize_tier_usage_counts_correctly(self):
         """Tier usage summary should count candidates by tier."""
         candidates = [
-            {"tier": "heuristic"},
-            {"tier": "heuristic"},
-            {"tier": "concept"},
+            {"tier": "fast"},
+            {"tier": "fast"},
+            {"tier": "design"},
             {"tier": "coupled_cycle"},
         ]
         summary = _summarize_tier_usage(candidates)
-        assert summary["heuristic"] == 2
-        assert summary["concept"] == 1
+        assert summary["fast"] == 2
+        assert summary["design"] == 1
         assert summary["coupled_cycle"] == 1
 
 
 class TestQtInputPreservation:
     """Qt workflow tests ensuring GA does not overwrite live form inputs."""
 
-    def test_run_concept_ga_preserves_live_inputs(self):
+    def test_run_design_ga_preserves_live_inputs(self):
         app_instance = QApplication.instance() or QApplication([])
         app_instance.setQuitOnLastWindowClosed(False)
         window = desktop_module.StanThrustQtWindow()
@@ -288,7 +272,7 @@ class TestQtInputPreservation:
             original_runner = desktop_module.run_feasibility_first_optimizer
             desktop_module.run_feasibility_first_optimizer = lambda seed: fake_result
             try:
-                window.run_concept_ga()
+                window.run_design_ga()
             finally:
                 desktop_module.run_feasibility_first_optimizer = original_runner
 
@@ -300,11 +284,11 @@ class TestQtInputPreservation:
             window.close()
 
     def test_summarize_tier_usage_handles_missing_tier(self):
-        """Tier usage summary should default missing tier to 'concept'."""
-        candidates = [{"tier": "heuristic"}, {}]  # Second has no tier
+        """Tier usage summary should default missing tier to design."""
+        candidates = [{"tier": "fast"}, {}]
         summary = _summarize_tier_usage(candidates)
-        assert summary["heuristic"] == 1
-        assert summary["concept"] == 1  # Missing tier defaults to concept
+        assert summary["fast"] == 1
+        assert summary["design"] == 1
 
     def test_plot_tab_has_expanded_solver_views(self):
         """Plot tab should expose transient, axial, 2D field, and convergence views."""
@@ -335,8 +319,8 @@ class TestQtInputPreservation:
         app_instance = QApplication.instance() or QApplication([])
         app_instance.setQuitOnLastWindowClosed(False)
         scenarios = [
-            create_concept_design({"regen_cooling": True}),
-            create_concept_design({"film_cooling": True}),
+            create_engine_design({"regen_cooling": True}),
+            create_engine_design({"film_cooling": True}),
         ]
         for design in scenarios:
             view = desktop_module.Model3DView("chamber_nozzle")
@@ -357,7 +341,7 @@ class TestFidelityMetadataExportable:
 
     def test_result_as_dict_includes_fidelity_metadata(self):
         """Result.as_dict() should include fidelity_metadata."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=1, population_size=4, random_seed=42
@@ -368,7 +352,7 @@ class TestFidelityMetadataExportable:
 
     def test_result_as_dict_for_regular_ga(self):
         """Regular GA result as_dict() should have empty fidelity_metadata."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer(
             seed, generations=1, population_size=4, random_seed=42
@@ -383,7 +367,7 @@ class TestIntegration:
 
     def test_full_ga_run_with_all_fidelity_options(self):
         """Full GA run should work with all fidelity options enabled."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed,
@@ -392,17 +376,15 @@ class TestIntegration:
             random_seed=45,
             budget_ms=150000,
             enable_coupled_cycle=True,
-            retrain_interval_generations=1,
         )
         assert result.best_score > 0
         assert len(result.history) == 3
         assert result.fidelity_metadata["budget_ms"] == 150000
         assert result.fidelity_metadata["enable_coupled_cycle"] is True
-        assert result.fidelity_metadata["retrain_interval_generations"] == 1
 
     def test_ga_convergence_with_fidelity(self):
         """GA with fidelity should show convergence trend over generations."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=6, population_size=12, random_seed=123
@@ -416,7 +398,7 @@ class TestIntegration:
 
     def test_metadata_routing_decisions_have_structure(self):
         """Routing decisions in metadata should have required fields."""
-        design = create_concept_design({})
+        design = create_engine_design({})
         seed = build_optimizer_seed(design)
         result = run_genetic_optimizer_with_fidelity(
             seed, generations=1, population_size=4, random_seed=42
@@ -427,7 +409,7 @@ class TestIntegration:
             for decision in routing_decisions:
                 assert "candidate_id" in decision
                 assert "assigned_tier" in decision
-                assert "surrogate_confidence" in decision
+                assert "requested_accuracy" in decision
                 assert "sobol_sensitivity_score" in decision
 
 

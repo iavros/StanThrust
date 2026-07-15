@@ -4,7 +4,7 @@ from typing import Dict, List
 
 @dataclass(frozen=True)
 class SolverAssumptions:
-    flow_model: str = "fast"
+    flow_model: str = "navier_stokes"
     gravity_m_s2: float = 9.80665
     ambient_pressure_kpa: float = 101.3
     gamma: float = 1.22

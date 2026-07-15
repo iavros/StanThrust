@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from typing import Callable, Dict
 
-from stanshock.concept_model import ConceptDesign, clamp
+from stanshock.design_model import EngineDesign, clamp
 from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS
 
 
-ObjectiveEvaluator = Callable[[ConceptDesign], float]
+ObjectiveEvaluator = Callable[[EngineDesign], float]
 
 
 @dataclass(frozen=True)
@@ -16,21 +16,21 @@ class ObjectiveDefinition:
     evaluator: ObjectiveEvaluator
 
 
-def _mass_efficiency(design: ConceptDesign) -> float:
+def _mass_efficiency(design: EngineDesign) -> float:
     return clamp(1.0 - design.derived.dry_mass_index / 100.0, 0.0, 1.0)
 
 
-def _thrust_alignment(design: ConceptDesign) -> float:
+def _thrust_alignment(design: EngineDesign) -> float:
     target = max(1.0, float(design.inputs.target_thrust_newtons))
     predicted = float(design.derived.engineering_values.get("calculated_thrust_newtons", target))
     return clamp(1.0 - abs(predicted - target) / target, 0.0, 1.0)
 
 
-def _packaging_efficiency(design: ConceptDesign) -> float:
+def _packaging_efficiency(design: EngineDesign) -> float:
     return clamp(design.derived.packaging_efficiency_index / 100.0, 0.0, 1.0)
 
 
-def _thermal_margin(design: ConceptDesign) -> float:
+def _thermal_margin(design: EngineDesign) -> float:
     return clamp(design.derived.thermal_margin_index / 100.0, 0.0, 1.0)
 
 
@@ -38,13 +38,13 @@ OBJECTIVES: Dict[str, ObjectiveDefinition] = {
     "thrust": ObjectiveDefinition(
         key="thrust",
         label="Thrust",
-        description="Favors concept states that match the target thrust more closely.",
+        description="Favors design states that match the target thrust more closely.",
         evaluator=_thrust_alignment,
     ),
     "mass": ObjectiveDefinition(
         key="mass",
         label="Weight",
-        description="Favors lower conceptual dry-mass proxy and reduced system burden.",
+        description="Favors lower preliminary dry-mass index and reduced system burden.",
         evaluator=_mass_efficiency,
     ),
     "packaging": ObjectiveDefinition(
@@ -56,7 +56,7 @@ OBJECTIVES: Dict[str, ObjectiveDefinition] = {
     "thermal": ObjectiveDefinition(
         key="thermal",
         label="Thermal Margin",
-        description="Favors more robust conceptual thermal margin in the cooling architecture.",
+        description="Favors more robust preliminary thermal margin in the cooling architecture.",
         evaluator=_thermal_margin,
     ),
 }
@@ -72,7 +72,7 @@ def normalize_objective_weights(weights: Dict[str, float]) -> Dict[str, float]:
     return {key: value / total for key, value in merged.items()}
 
 
-def evaluate_objectives(design: ConceptDesign, weights: Dict[str, float]) -> Dict[str, object]:
+def evaluate_objectives(design: EngineDesign, weights: Dict[str, float]) -> Dict[str, object]:
     normalized = normalize_objective_weights(weights)
     raw_scores = {
         key: round(definition.evaluator(design), 4) for key, definition in OBJECTIVES.items()

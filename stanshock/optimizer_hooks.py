@@ -2,16 +2,11 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from stanshock.concept_model import ConceptDesign, create_concept_design
 from stanshock.defaults import DEFAULT_OBJECTIVE_WEIGHTS
+from stanshock.design_model import EngineDesign, create_engine_design
+from stanshock.fidelity_coordinator import AdaptiveSamplingPool, FidelityRouter
 from stanshock.objectives import evaluate_objectives, normalize_objective_weights
-from stanshock.multifidelity_adapter import MultiFidelityScreener
-from stanshock.validation_pack import validate_concept_design
-from stanshock.fidelity_coordinator import (
-    FidelityRouter,
-    AdaptiveSamplingPool,
-    SurrogateRetrainingScheduler,
-)
+from stanshock.validation_pack import validate_engine_design
 
 
 PACKAGING_BIAS_OPTIONS = ["balanced", "compact", "serviceable"]
@@ -67,7 +62,7 @@ def _build_bounds(base_state: Dict[str, object]) -> Dict[str, tuple]:
 
 
 def build_optimizer_seed(
-    design: ConceptDesign,
+    design: EngineDesign,
     base_state: Optional[Dict[str, object]] = None,
     objective_weights: Optional[Dict[str, float]] = None,
 ) -> OptimizerSeed:
@@ -99,7 +94,10 @@ def decode_genome(seed: OptimizerSeed, genome: Dict[str, float]) -> Dict[str, ob
     state = dict(seed.base_state)
     state.update(
         {
-            "mixture_ratio": max(bounds["mixture_ratio"][0], min(bounds["mixture_ratio"][1], genome["mixture_ratio"])),
+            "mixture_ratio": max(
+                bounds["mixture_ratio"][0],
+                min(bounds["mixture_ratio"][1], genome["mixture_ratio"]),
+            ),
             "burn_time_seconds": max(
                 bounds["burn_time_seconds"][0],
                 min(bounds["burn_time_seconds"][1], genome["burn_time_seconds"]),
@@ -138,7 +136,7 @@ def _crossover(parent_a: Dict[str, float], parent_b: Dict[str, float], rng: rand
 
 def _evaluate(seed: OptimizerSeed, genome: Dict[str, float]) -> Dict[str, object]:
     state = decode_genome(seed, genome)
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     breakdown = evaluate_objectives(design, seed.objectives)
     return {
         "genome": genome,
@@ -203,72 +201,52 @@ def run_genetic_optimizer(
 def apply_multifidelity_confirmation(
     result: GeneticAlgorithmResult,
     confirmation_ratio: float = 0.15,
-    surrogate_threshold: float = 0.60,
+    score_threshold: float = 0.0,
 ) -> Dict[str, object]:
-    """Apply surrogate-based multi-fidelity screening to confirm GA result.
+    """Confirm the GA result with the direct design validator."""
 
-    Takes a full-fidelity GA result and re-screens the top candidates using the
-    ConceptSurrogateModel to identify which candidates pass a confidence threshold.
-    Returns metadata about the screening process (candidates screened, confirmed).
-
-    Args:
-        result: GeneticAlgorithmResult from full GA run
-        confirmation_ratio: fraction of GA population to re-screen (default 15%)
-        surrogate_threshold: surrogate confidence cutoff (default 0.60)
-
-    Returns:
-        Dict with screening_results, candidates_screened, candidates_confirmed
-    """
     try:
-        screener = MultiFidelityScreener(
-            surrogate_threshold=surrogate_threshold,
-            confirmation_ratio=confirmation_ratio,
-        )
-
-        # Create candidate list from best_state and history
-        candidate_list = [
-            {"state": result.best_state, "score": result.best_score}
-        ]
-
-        screened, unscreened = screener.screen_candidates(candidate_list)
-
+        confirmed_design = create_engine_design(result.best_state)
+        validation = validate_engine_design(confirmed_design)
+        score_ok = float(result.best_score) >= float(score_threshold)
+        passed = bool(validation.passed and score_ok)
         return {
             "screening_applied": True,
-            "surrogate_threshold": surrogate_threshold,
             "confirmation_ratio": confirmation_ratio,
-            "candidates_evaluated": len(candidate_list),
-            "candidates_confirmed": len(screened),
-            "candidates_rejected": len(unscreened),
-            "best_passed_screening": len(screened) > 0,
+            "score_threshold": score_threshold,
+            "candidates_evaluated": 1,
+            "candidates_confirmed": 1 if passed else 0,
+            "candidates_rejected": 0 if passed else 1,
+            "best_passed_screening": passed,
+            "validation_summary": validation.summary,
         }
-    except Exception as e:
-        # Non-fatal: if screening fails, just note it
+    except Exception as exc:
         return {
             "screening_applied": False,
-            "screening_error": str(e),
+            "screening_error": str(exc),
         }
 
 
 def score_current_design(
-    design: ConceptDesign, objective_weights: Optional[Dict[str, float]] = None
+    design: EngineDesign,
+    objective_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, object]:
     return evaluate_objectives(design, objective_weights or DEFAULT_OBJECTIVE_WEIGHTS)
 
 
-def _is_design_feasible(design: ConceptDesign, constraints: Dict[str, object], min_thermal_margin: float = 30.0) -> bool:
-    """Simple feasibility checker used by the feasibility-first optimizer.
+def _is_design_feasible(
+    design: EngineDesign,
+    constraints: Dict[str, object],
+    min_thermal_margin: float = 30.0,
+) -> bool:
+    """Simple feasibility checker used by the feasibility-first optimizer."""
 
-    Checks conservative, concept-stage feasibility constraints using solver-derived
-    fields on the design. This intentionally remains lightweight and deterministic
-    so it can be used as a gate in the GA without adding solver coupling.
-    """
     try:
         if float(design.derived.thermal_margin_index) < float(min_thermal_margin):
             return False
     except Exception:
         return False
 
-    # Geometry envelope constraints (seed.constraints stores max allowed dims)
     tank_max = float(constraints.get("tank_diameter_mm_max", float("inf")))
     chamber_max = float(constraints.get("chamber_diameter_mm_max", float("inf")))
     nozzle_max = float(constraints.get("nozzle_diameter_mm_max", float("inf")))
@@ -280,7 +258,7 @@ def _is_design_feasible(design: ConceptDesign, constraints: Dict[str, object], m
     if float(design.inputs.nozzle_diameter_mm) > nozzle_max:
         return False
 
-    validation = validate_concept_design(design)
+    validation = validate_engine_design(design)
     return validation.passed
 
 
@@ -291,15 +269,8 @@ def run_feasibility_first_optimizer(
     random_seed: Optional[int] = None,
     min_thermal_margin: float = 30.0,
 ) -> GeneticAlgorithmResult:
-    """Genetic optimizer variant that prioritizes feasibility before score.
+    """Genetic optimizer variant that prioritizes feasibility before score."""
 
-    This optimizer performs the same GA operations as `run_genetic_optimizer` but
-    ranks candidates first by a lightweight feasibility check (using the
-    design's derived fields such as `thermal_margin_index` and envelope
-    constraints) and only then by the objective score. Feasible candidates will
-    always outrank infeasible ones; within each feasibility class they are
-    ordered by objective score.
-    """
     rng = random.Random(random_seed)
     population = [_random_genome(seed, rng) for _ in range(population_size - 1)]
     population.append(dict(seed.genome_template))
@@ -311,27 +282,38 @@ def run_feasibility_first_optimizer(
         evaluated = []
         for genome in population:
             candidate = _evaluate(seed, genome)
-            candidate["feasible"] = _is_design_feasible(candidate["design"], seed.constraints, min_thermal_margin)
+            candidate["feasible"] = _is_design_feasible(
+                candidate["design"],
+                seed.constraints,
+                min_thermal_margin,
+            )
             evaluated.append(candidate)
 
-        # Sort so feasible candidates (True) come first, then by score descending
-        evaluated.sort(key=lambda c: (1 if c.get("feasible") else 0, c.get("score", 0.0)), reverse=True)
+        evaluated.sort(
+            key=lambda row: (1 if row.get("feasible") else 0, row.get("score", 0.0)),
+            reverse=True,
+        )
         current_best = evaluated[0]
         if best_candidate is None:
             best_candidate = current_best
         else:
-            # Prefer feasible designs; if both same feasibility, prefer higher score
-            best_key = (1 if best_candidate.get("feasible") else 0, best_candidate.get("score", 0.0))
-            curr_key = (1 if current_best.get("feasible") else 0, current_best.get("score", 0.0))
-            if curr_key > best_key:
+            best_key = (
+                1 if best_candidate.get("feasible") else 0,
+                best_candidate.get("score", 0.0),
+            )
+            current_key = (
+                1 if current_best.get("feasible") else 0,
+                current_best.get("score", 0.0),
+            )
+            if current_key > best_key:
                 best_candidate = current_best
 
         history.append(
             {
                 "generation": float(generation_index),
                 "best_score": round(current_best["score"], 4),
-                "mean_score": round(sum(c["score"] for c in evaluated) / len(evaluated), 4),
-                "feasible_count": sum(1 for c in evaluated if c.get("feasible")),
+                "mean_score": round(sum(row["score"] for row in evaluated) / len(evaluated), 4),
+                "feasible_count": sum(1 for row in evaluated if row.get("feasible")),
             }
         )
 
@@ -363,81 +345,50 @@ def run_genetic_optimizer_with_fidelity(
     random_seed: Optional[int] = None,
     budget_ms: int = 100000,
     enable_coupled_cycle: bool = False,
-    retrain_interval_generations: int = 1,
 ) -> GeneticAlgorithmResult:
-    """Genetic optimizer with advanced fidelity coordination and adaptive sampling.
+    """Genetic optimizer with direct solver fidelity routing."""
 
-    Routes GA candidates through solver tiers (heuristic → concept → coupled-cycle)
-    based on surrogate confidence and Sobol sensitivity. Periodically retrains the
-    ML surrogate on accumulated GA results for continuous model improvement.
-
-    Args:
-        seed: OptimizerSeed with base state, objectives, constraints
-        generations: Number of GA generations to run
-        population_size: Candidates per generation
-        random_seed: RNG seed for reproducibility
-        budget_ms: Total computational budget in milliseconds (default 100 seconds)
-        enable_coupled_cycle: Whether to allow escalation to coupled-cycle solver
-        retrain_interval_generations: Retrain surrogate every N generations
-
-    Returns:
-        GeneticAlgorithmResult with best design, history, and fidelity metadata
-    """
     rng = random.Random(random_seed)
     population = [_random_genome(seed, rng) for _ in range(population_size - 1)]
     population.append(dict(seed.genome_template))
 
-    # Initialize fidelity coordination components
     router = FidelityRouter(enable_coupled_cycle=enable_coupled_cycle)
     pool = AdaptiveSamplingPool(budget_ms=budget_ms)
-    scheduler = SurrogateRetrainingScheduler(retrain_interval_generations=retrain_interval_generations)
 
     history = []
     best_candidate = None
     fidelity_decisions_per_gen = []
 
     for generation_index in range(generations):
-        # Evaluate candidates at appropriate fidelity levels
         scored = []
         routing_decisions = []
 
         for i, genome in enumerate(population):
             candidate_id = f"gen{generation_index}_cand{i}"
-
-            # Use moderate default confidence/sensitivity for routing
-            # In practice, these would come from ML surrogate + Sobol analysis
-            surrogate_confidence = 0.65 if i % 2 == 0 else 0.50
+            requested_accuracy = 0.55 + 0.25 * (i % 2)
             sobol_sensitivity = 0.35 if i % 3 == 0 else 0.25
-
-            # Get routing decision from fidelity coordinator
-            # Calculate current total allocated cost
             current_stats = pool.get_pool_stats()
-            current_total_cost = sum(s.total_estimated_cost_ms for s in current_stats.values())
-            
+            current_total_cost = sum(row.total_allocated_cost_ms for row in current_stats.values())
+
             decision = router.route(
                 candidate_id=candidate_id,
-                surrogate_confidence=surrogate_confidence,
+                requested_accuracy=requested_accuracy,
                 sobol_sensitivity_score=sobol_sensitivity,
                 cost_budget_available=budget_ms - current_total_cost,
             )
             routing_decisions.append(decision)
-
-            # Attempt to allocate candidate
             allocation = pool.allocate_candidate(decision)
 
-            # Always evaluate at concept level (fallback if budget exhausted)
-            result = _evaluate(seed, genome)
-            result = dict(result)
+            result = dict(_evaluate(seed, genome))
             result["candidate_id"] = candidate_id
             result["decision"] = decision.as_dict()
             result["allocated"] = allocation is not None
             if allocation:
-                result["tier"] = str(allocation.tier.value)
-                result["estimated_cost_ms"] = allocation.estimated_cost_ms
+                result["tier"] = allocation.tier.value
+                result["allocated_cost_ms"] = allocation.allocated_cost_ms
             else:
-                result["tier"] = "concept"  # Default fallback
-                result["estimated_cost_ms"] = 50
-
+                result["tier"] = "design"
+                result["allocated_cost_ms"] = 50
             scored.append(result)
 
         scored.sort(key=lambda candidate: candidate["score"], reverse=True)
@@ -445,39 +396,23 @@ def run_genetic_optimizer_with_fidelity(
         if best_candidate is None or current_best["score"] > best_candidate["score"]:
             best_candidate = current_best
 
-        # Record generation history
         history.append(
             {
                 "generation": float(generation_index),
                 "best_score": round(current_best["score"], 4),
-                "mean_score": round(sum(c["score"] for c in scored) / len(scored), 4),
+                "mean_score": round(sum(row["score"] for row in scored) / len(scored), 4),
                 "fidelity_tiers_used": _summarize_tier_usage(scored),
                 "total_allocated_cost_ms": current_total_cost,
             }
         )
-
         fidelity_decisions_per_gen.append(
             {
                 "generation": generation_index,
-                "routing_decisions": [d.as_dict() for d in routing_decisions],
-                "pool_stats": pool.get_summary().as_dict() if hasattr(pool.get_summary(), "as_dict") else str(pool.get_summary()),
+                "routing_decisions": [decision.as_dict() for decision in routing_decisions],
+                "pool_stats": pool.get_summary(),
             }
         )
 
-        # Periodically retrain surrogate on accumulated results
-        if generation_index % retrain_interval_generations == 0 and generation_index > 0:
-            ga_results = [
-                {
-                    "candidate_id": c["candidate_id"],
-                    "state": c["state"],
-                    "score": c["score"],
-                    "design": c["design"],
-                }
-                for c in scored
-            ]
-            scheduler.add_ga_results(ga_results)
-
-        # Prepare elite for next generation
         elite = scored[: max(2, population_size // 5)]
         next_population = [dict(candidate["genome"]) for candidate in elite[:2]]
 
@@ -490,17 +425,15 @@ def run_genetic_optimizer_with_fidelity(
 
         population = next_population
 
-    # Compile fidelity metadata for result
     fidelity_metadata = {
         "optimization_enabled": True,
         "budget_ms": budget_ms,
         "enable_coupled_cycle": enable_coupled_cycle,
-        "retrain_interval_generations": retrain_interval_generations,
         "total_generations": generations,
         "population_size": population_size,
         "final_pool_stats": pool.get_pool_stats(),
         "decisions_by_generation": fidelity_decisions_per_gen,
-        "routing_summary": router.get_routing_summary().as_dict() if hasattr(router.get_routing_summary(), "as_dict") else str(router.get_routing_summary()),
+        "routing_summary": router.get_routing_summary(),
     }
 
     return GeneticAlgorithmResult(
@@ -515,9 +448,10 @@ def run_genetic_optimizer_with_fidelity(
 
 def _summarize_tier_usage(scored_candidates: List[Dict[str, object]]) -> Dict[str, int]:
     """Count how many candidates were routed to each fidelity tier."""
-    tier_counts = {"heuristic": 0, "concept": 0, "coupled_cycle": 0}
+
+    tier_counts = {"fast": 0, "design": 0, "coupled_cycle": 0}
     for candidate in scored_candidates:
-        tier = candidate.get("tier", "concept")
+        tier = candidate.get("tier", "design")
         if tier in tier_counts:
             tier_counts[tier] += 1
     return tier_counts

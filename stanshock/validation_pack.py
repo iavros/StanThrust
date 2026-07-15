@@ -1,16 +1,16 @@
 """Validation pack for Stage 4.1: analytical checks and regression gates.
 
-This module provides lightweight analytical validators for concept-stage designs
+This module provides lightweight analytical validators for design-stage designs
 to ensure outputs remain within expected physical bounds and match design intent.
 Validators are deterministic, require no external solvers, and operate on a
-ConceptDesign object or raw solver outputs.
+EngineDesign object or raw solver outputs.
 """
 
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 from stanshock.benchmark_cases import get_internal_baseline_cases
-from stanshock.concept_model import ConceptDesign
+from stanshock.design_model import EngineDesign
 
 
 @dataclass(frozen=True)
@@ -45,12 +45,12 @@ class ValidationReport:
         }
 
 
-def _check_thrust_delivery(design: ConceptDesign) -> ValidationCheck:
+def _check_thrust_delivery(design: EngineDesign) -> ValidationCheck:
     """Check that calculated thrust is within reasonable bounds of target."""
     target = float(design.inputs.target_thrust_newtons)
     calculated = float(design.derived.engineering_values.get("calculated_thrust_newtons", target))
 
-    # Expect delivery within bounds: 0.7x to 1.3x target (concept-stage tolerance)
+    # Expect delivery within bounds: 0.7x to 1.3x target (design-stage tolerance)
     if calculated <= 0.0:
         return ValidationCheck(
             check_name="thrust_delivery",
@@ -76,7 +76,7 @@ def _check_thrust_delivery(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_mass_flow_balance(design: ConceptDesign) -> ValidationCheck:
+def _check_mass_flow_balance(design: EngineDesign) -> ValidationCheck:
     """Check fuel + oxidizer mass flow ≈ total mass flow."""
     eng_vals = design.derived.engineering_values
     fuel_flow = float(eng_vals.get("fuel_mass_flow_kg_s", 0.0))
@@ -100,7 +100,7 @@ def _check_mass_flow_balance(design: ConceptDesign) -> ValidationCheck:
             severity="error",
         )
 
-    # Allow small tolerance (concept-stage rounding)
+    # Allow small tolerance (design-stage rounding)
     ratio = sum_flows / total_flow
     if abs(ratio - 1.0) > 0.02:
         return ValidationCheck(
@@ -118,7 +118,7 @@ def _check_mass_flow_balance(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_impulse_calc(design: ConceptDesign) -> ValidationCheck:
+def _check_impulse_calc(design: EngineDesign) -> ValidationCheck:
     """Check that calculated impulse ≈ thrust × burn_time."""
     eng_vals = design.derived.engineering_values
     thrust = float(eng_vals.get("calculated_thrust_newtons", 1.0))
@@ -152,7 +152,7 @@ def _check_impulse_calc(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_pressure_hierarchy(design: ConceptDesign) -> ValidationCheck:
+def _check_pressure_hierarchy(design: EngineDesign) -> ValidationCheck:
     """Check architecture-appropriate feed pressure hierarchy."""
     eng_vals = design.derived.engineering_values
     fuel_tank_p = float(eng_vals.get("fuel_tank_pressure_kpa", 0.0))
@@ -249,8 +249,8 @@ def _check_pressure_hierarchy(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_index_bounds(design: ConceptDesign) -> ValidationCheck:
-    """Check that concept indices (thermal, packaging, mass) are within 0–100."""
+def _check_index_bounds(design: EngineDesign) -> ValidationCheck:
+    """Check that design indices (thermal, packaging, mass) are within 0-100."""
     thermal = float(design.derived.thermal_margin_index)
     packaging = float(design.derived.packaging_efficiency_index)
     mass = float(design.derived.dry_mass_index)
@@ -279,7 +279,7 @@ def _check_index_bounds(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_geometry_consistency(design: ConceptDesign) -> ValidationCheck:
+def _check_geometry_consistency(design: EngineDesign) -> ValidationCheck:
     """Check that geometry envelope is self-consistent."""
     inputs = design.inputs
     derived = design.derived
@@ -329,7 +329,7 @@ def _check_geometry_consistency(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_propellant_quantities(design: ConceptDesign) -> ValidationCheck:
+def _check_propellant_quantities(design: EngineDesign) -> ValidationCheck:
     """Check that fuel and oxidizer masses are positive and sum to total."""
     eng_vals = design.derived.engineering_values
     fuel_mass = float(eng_vals.get("fuel_mass_kg", 0.0))
@@ -362,7 +362,7 @@ def _check_propellant_quantities(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def _check_section_margins(design: ConceptDesign) -> ValidationCheck:
+def _check_section_margins(design: EngineDesign) -> ValidationCheck:
     """Check that section-based structural and thermal margins remain non-negative."""
     eng_vals = design.derived.engineering_values
     sections = (
@@ -410,7 +410,7 @@ def _check_section_margins(design: ConceptDesign) -> ValidationCheck:
     )
 
 
-def validate_concept_design(design: ConceptDesign) -> ValidationReport:
+def validate_engine_design(design: EngineDesign) -> ValidationReport:
     """Validate a design against analytical checks.
 
     Runs a suite of design-stage analytical validators to ensure design
@@ -448,7 +448,7 @@ def get_regression_baselines() -> Dict[str, Tuple[float, float]]:
     """Return expected ranges for key indicators from regression tests.
 
     Each baseline is (min, max) for reference designs to compare outputs.
-    These represent expected behavior from the concept-stage solvers.
+    These represent expected behavior from the design-stage solvers.
     """
     return {
         "thrust_multiplier": (0.75, 1.25),  # calculated vs target

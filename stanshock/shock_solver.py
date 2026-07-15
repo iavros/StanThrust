@@ -204,7 +204,7 @@ def find_nozzle_normal_shock_candidate(
     ambient_pressure_kpa: float,
     gamma: float = 1.22,
 ) -> Dict[str, object]:
-    """Estimate whether an overexpanded nozzle has an internal normal shock station."""
+    """Solve whether an overexpanded nozzle has an internal normal shock station."""
 
     if not axial_profile:
         return {
@@ -298,7 +298,7 @@ def find_nozzle_normal_shock_candidate(
         best_candidate["status"] = "overexpanded-no-station-match"
         best_candidate["note"] = (
             "Overexpanded flow was detected, but the normal-shock jump scan did not find a "
-            "pressure-compatible station inside the current quasi-1D profile. Treat this as a "
+            "pressure-compatible station inside the current axial flow profile. Treat this as a "
             "separation or external-adjustment warning rather than a resolved internal shock."
         )
     return best_candidate

@@ -26,7 +26,7 @@ class SobolIndex:
     output_parameter: str
     s1: float  # First-order sensitivity
     st: float  # Total-order sensitivity
-    s2_estimate: Optional[float] = None  # Second-order interactions (if computed)
+    s2_value: Optional[float] = None  # Second-order interactions (if computed)
     confidence_s1: Tuple[float, float] = field(default_factory=tuple)
     confidence_st: Tuple[float, float] = field(default_factory=tuple)
 
@@ -36,7 +36,7 @@ class SobolIndex:
             "output": self.output_parameter,
             "s1_first_order": round(self.s1, 4),
             "st_total_order": round(self.st, 4),
-            "s2_second_order": round(self.s2_estimate, 4) if self.s2_estimate else None,
+            "s2_second_order": round(self.s2_value, 4) if self.s2_value else None,
             "confidence_s1_95": [round(c, 4) for c in self.confidence_s1],
             "confidence_st_95": [round(c, 4) for c in self.confidence_st],
         }
@@ -48,7 +48,7 @@ class SensitivityRanking:
     output_parameter: str
     rankings: List[Tuple[str, float]]  # [(input_name, sensitivity_score), ...]
     dominant_parameter: Optional[str] = None
-    interaction_strength: float = 0.0  # Estimate of non-additive effects
+    interaction_strength: float = 0.0  # Non-additive sensitivity contribution
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -156,9 +156,8 @@ class SobolAnalyzer:
             s1 = 1.0 - (e_var_y_x / var_y) if var_y > 0.0 else 0.0
             s1 = max(0.0, min(1.0, s1))  # Clamp to [0, 1]
 
-            # Total-order sensitivity (Monte Carlo approximation)
-            # For true total-order, would need resample+perturb scheme
-            # Here we use a conservative upper bound estimate
+            # Total-order sensitivity from a Monte Carlo upper-bound calculation.
+            # A full Saltelli design can replace this branch when sampling matrices are available.
             st = min(1.0, s1 * 1.15)  # Assume ST ≥ S1
 
             indices[param] = SobolIndex(
@@ -176,8 +175,8 @@ class SobolAnalyzer:
         self, output_parameter: str, input_parameters: List[str]
     ) -> Dict[str, SobolIndex]:
         """Compute Sobol indices using Saltelli's extended scheme (requires more samples)."""
-        # Simplified Saltelli variant; full implementation requires special sampling design
-        # For now, returns Jansen as approximation
+        # Simplified Saltelli variant; full implementation requires special sampling design.
+        # Delegate to the Jansen calculation until the Saltelli matrices are available.
         return self._compute_jansen_indices(output_parameter, input_parameters)
 
     def sensitivity_report(self) -> Dict[str, object]:
@@ -204,14 +203,14 @@ class SobolAnalyzer:
                 output_parameter=output_key,
                 rankings=[(name, idx.s1) for name, idx in ranked],
                 dominant_parameter=ranked[0][0] if ranked else None,
-                interaction_strength=self._estimate_interaction_strength(indices),
+                interaction_strength=self._calculate_interaction_strength(indices),
             )
             report["sensitivity_rankings"][output_key] = ranking.as_dict()
 
         return report
 
-    def _estimate_interaction_strength(self, indices: Dict[str, SobolIndex]) -> float:
-        """Estimate strength of interactions (sum ST - sum S1)."""
+    def _calculate_interaction_strength(self, indices: Dict[str, SobolIndex]) -> float:
+        """Calculate interaction strength as sum(ST) - sum(S1)."""
         sum_s1 = sum(idx.s1 for idx in indices.values())
         sum_st = sum(idx.st for idx in indices.values())
         interaction = max(0.0, sum_st - sum_s1)

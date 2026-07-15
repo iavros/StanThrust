@@ -4,7 +4,7 @@ from stanshock.uncertainty_provenance import (
     UncertaintyBand,
     ProvenanceField,
     get_field_confidence_bands,
-    estimate_field_confidence,
+    calculate_field_confidence,
     build_uncertainty_summary,
 )
 
@@ -83,35 +83,35 @@ def test_field_confidence_bands_loaded():
     print(f"✓ test_field_confidence_bands_loaded passed: {len(bands)} fields")
 
 
-def test_estimate_field_confidence():
+def test_calculate_field_confidence():
     """Test confidence estimation for known fields."""
     # Test calculated status
-    field_calc = estimate_field_confidence(
+    field_calc = calculate_field_confidence(
         "chamber_pressure_kpa",
         1500.0,
-        "Combustion CFD Proxy Solver",
+        "Cantera Coupled Flow Solver",
         status="calculated"
     )
 
     assert field_calc is not None
     assert field_calc.value == 1500.0
-    assert field_calc.source_solver == "Combustion CFD Proxy Solver"
+    assert field_calc.source_solver == "Cantera Coupled Flow Solver"
     assert field_calc.status == "calculated"
     assert field_calc.confidence > 0.5
 
-    # Test placeholder status degrades confidence
-    field_placeholder = estimate_field_confidence(
+    # Test unavailable status degrades confidence
+    field_unavailable = calculate_field_confidence(
         "chamber_pressure_kpa",
         1500.0,
-        "concept-solver",
-        status="placeholder"
+        "design-solver",
+        status="unavailable"
     )
 
-    assert field_placeholder is not None
-    assert field_placeholder.confidence < field_calc.confidence
+    assert field_unavailable is not None
+    assert field_unavailable.confidence < field_calc.confidence
 
     # Test unknown field returns None
-    field_unknown = estimate_field_confidence(
+    field_unknown = calculate_field_confidence(
         "unknown_field_xyz",
         999.0,
         "Test Solver",
@@ -119,7 +119,7 @@ def test_estimate_field_confidence():
 
     assert field_unknown is None
 
-    print("✓ test_estimate_field_confidence passed")
+    print("✓ test_calculate_field_confidence passed")
 
 
 def test_build_uncertainty_summary():
@@ -131,7 +131,7 @@ def test_build_uncertainty_summary():
     fields = {
         "field_1": ProvenanceField(100.0, "unit", "calculated", "Solver A", 0.80, band1),
         "field_2": ProvenanceField(200.0, "unit", "calculated", "Solver B", 0.60, band2),
-        "field_3": ProvenanceField(300.0, "unit", "placeholder", "concept-solver", 0.40, band3),
+        "field_3": ProvenanceField(300.0, "unit", "unavailable", "design-solver", 0.40, band3),
     }
 
     summary = build_uncertainty_summary(fields)
@@ -160,20 +160,20 @@ def test_uncertainty_summary_empty():
 
 def test_confidence_degradation_by_status():
     """Test that confidence properly degrades based on field status."""
-    calculated_conf = estimate_field_confidence(
+    calculated_conf = calculate_field_confidence(
         "chamber_pressure_kpa", 1500.0, "Solver", status="calculated"
     ).confidence
 
-    placeholder_conf = estimate_field_confidence(
-        "chamber_pressure_kpa", 1500.0, "Solver", status="placeholder"
+    unavailable_conf = calculate_field_confidence(
+        "chamber_pressure_kpa", 1500.0, "Solver", status="unavailable"
     ).confidence
 
-    not_applicable_conf = estimate_field_confidence(
+    not_applicable_conf = calculate_field_confidence(
         "chamber_pressure_kpa", 1500.0, "Solver", status="not-applicable"
     ).confidence
 
-    assert calculated_conf > placeholder_conf
-    assert placeholder_conf > not_applicable_conf
+    assert calculated_conf > unavailable_conf
+    assert unavailable_conf > not_applicable_conf
 
     print("✓ test_confidence_degradation_by_status passed")
 
@@ -184,7 +184,7 @@ def run_all_tests():
         test_uncertainty_band_creation,
         test_provenance_field_creation,
         test_field_confidence_bands_loaded,
-        test_estimate_field_confidence,
+        test_calculate_field_confidence,
         test_build_uncertainty_summary,
         test_uncertainty_summary_empty,
         test_confidence_degradation_by_status,

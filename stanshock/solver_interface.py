@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-from stanshock.concept_model import DesignInputs
+from stanshock.design_model import DesignInputs, create_engine_design
 from stanshock.feed_pressure_drop_solver import solve as solve_feed_pressure_drop
 from stanshock.materials import MATERIAL_OPTIONS
 from stanshock.propellants import lookup_propellant
@@ -126,8 +126,8 @@ def _request_to_state(design_request: Dict[str, object]) -> Dict[str, object]:
     if injector_type not in {"impinging", "pintle"}:
         injector_type = "impinging"
     return {
-        "fuel_name": propellants.get("fuel", "Fuel"),
-        "oxidizer_name": propellants.get("oxidizer", "Oxidizer"),
+        "fuel_name": propellants.get("fuel", "Ethanol"),
+        "oxidizer_name": propellants.get("oxidizer", "Liquid Oxygen"),
         "mixture_ratio": propellants.get("mixture_ratio", 1.4),
         "target_thrust_newtons": targets.get("target_thrust_newtons", 250.0),
         "target_chamber_pressure_kpa": targets.get("target_chamber_pressure_kpa", 0.0),
@@ -195,8 +195,17 @@ def solve(design_request: Dict[str, object], upstream_context: Optional[Dict[str
     if upstream_context:
         trace.append("Upstream context keys: {0}".format(", ".join(sorted(upstream_context.keys()))))
 
+    feed_context = dict(upstream_context or {})
+    try:
+        design_for_feed = create_engine_design(_request_to_state(validation["normalized_request"]))
+        design_values = design_for_feed.derived.engineering_values
+        feed_context.setdefault("chamber_pressure_kpa", design_values.get("chamber_pressure_kpa"))
+        feed_context.setdefault("propellant_mass_flow_kg_s", design_values.get("propellant_mass_flow_kg_s"))
+    except Exception as exc:
+        trace.append("Design-layer feed context unavailable: {0}".format(exc))
+
     feed_solver_result = solve_feed_pressure_drop(
-        validation["normalized_request"], upstream_context=upstream_context
+        validation["normalized_request"], upstream_context=feed_context
     )
     trace.append("Stage 2 transient feed model executed.")
     return SolverResult(

@@ -8,9 +8,9 @@ import pytest
 
 def test_station_numeric_promotion():
     """Assert all station rows include machine-friendly numeric fields."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     for row in design.derived.station_rows:
         assert hasattr(row, "temperature_k"), f"{row.label}: missing temperature_k"
         assert hasattr(row, "pressure_kpa"), f"{row.label}: missing pressure_kpa"
@@ -24,9 +24,9 @@ def test_station_numeric_promotion():
 
 def test_numeric_value_ranges():
     """Validate that numeric station fields have physically reasonable values."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     for row in design.derived.station_rows:
         # Temperature should be in reasonable range (200 K - 4000 K for any engine)
         assert 200 <= row.temperature_k <= 4000, \
@@ -44,13 +44,13 @@ def test_numeric_value_ranges():
 
 def test_json_export_contains_analysis_fields():
     """Assert JSON export contains analysis_fields with provenance for each station."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.exporter import build_cad_export_payload
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
-    assert "concept_station_rows" in payload
-    rows = payload["concept_station_rows"]
+    assert "design_station_rows" in payload
+    rows = payload["design_station_rows"]
     assert isinstance(rows, list) and len(rows) > 0
     
     for r in rows:
@@ -66,19 +66,19 @@ def test_json_export_contains_analysis_fields():
             assert "status" in field, f"Missing status for {field_name}"
             assert "unit" in field, f"Missing unit for {field_name}"
             assert "source_solver" in field, f"Missing source_solver for {field_name}"
-            # Status should be "calculated" or "placeholder"
-            assert field["status"] in ("calculated", "placeholder"), \
+            # Status should be "calculated" or "unavailable"
+            assert field["status"] in ("calculated", "unavailable"), \
                 f"Invalid status {field['status']} for {field_name}"
 
 
 def test_json_export_numeric_fields():
     """Assert JSON export includes machine-friendly numeric station fields."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.exporter import build_cad_export_payload
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
-    rows = payload["concept_station_rows"]
+    rows = payload["design_station_rows"]
     
     for r in rows:
         assert "temperature_k" in r, f"Missing temperature_k in {r.get('label')}"
@@ -89,9 +89,9 @@ def test_json_export_numeric_fields():
 
 def test_backward_compatibility_notes():
     """Assert human-readable note fields are still present (backward compatibility)."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     for row in design.derived.station_rows:
         assert hasattr(row, "temperature_note"), f"{row.label}: missing temperature_note"
         assert hasattr(row, "pressure_note"), f"{row.label}: missing pressure_note"
@@ -103,7 +103,7 @@ def test_backward_compatibility_notes():
 
 def test_regen_cooling_scenario():
     """Test station promotion with regen cooling enabled."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
     state = {
         "regen_cooling": True,
@@ -118,7 +118,7 @@ def test_regen_cooling_scenario():
         "nozzle_diameter_mm": 95.0,
         "tank_diameter_mm": 110.0,
     }
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     
     # Verify all stations have numeric fields
     for row in design.derived.station_rows:
@@ -134,7 +134,7 @@ def test_regen_cooling_scenario():
 
 def test_no_regen_cooling_scenario():
     """Test station promotion with regen cooling disabled."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
     state = {
         "regen_cooling": False,
@@ -149,7 +149,7 @@ def test_no_regen_cooling_scenario():
         "nozzle_diameter_mm": 95.0,
         "tank_diameter_mm": 110.0,
     }
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     
     # Verify all stations have numeric fields
     for row in design.derived.station_rows:
@@ -164,10 +164,10 @@ def test_no_regen_cooling_scenario():
 
 def test_csv_export_numeric_columns():
     """Assert CSV station export includes numeric columns at the end."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.exporter import export_station_csv
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     with TemporaryDirectory() as tmpdir:
         csv_path = Path(tmpdir) / "stations.csv"
         export_station_csv(csv_path, design)
@@ -219,12 +219,12 @@ def test_csv_export_numeric_columns():
 
 def test_solver_provenance_tagging():
     """Assert that solver provenance is correctly tagged in analysis_fields."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.exporter import build_cad_export_payload
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
-    rows = payload["concept_station_rows"]
+    rows = payload["design_station_rows"]
     
     # Check that source_solver field exists and has reasonable values
     for r in rows:
@@ -234,9 +234,9 @@ def test_solver_provenance_tagging():
                 f"Missing source_solver for {field_name} in {r.get('label')}"
             # source_solver should identify the solver that produced the field.
             valid_solvers = [
-                "concept-solver",
+                "design-solver",
                 "Feed Pressure-Drop Solver",
-                "Combustion CFD Proxy Solver",
+                "Cantera Coupled Flow Solver",
             ]
             assert field_data["source_solver"] in valid_solvers, \
                 f"Unknown source_solver {field_data['source_solver']} for {field_name}"
@@ -244,14 +244,14 @@ def test_solver_provenance_tagging():
 
 def test_nozzle_contour_metadata_and_shape():
     """Assert the nozzle contour uses bell metadata and produces a usable monotonic profile."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     values = design.derived.engineering_values
     contour_points = list(design.derived.nozzle_contour_points)
 
-    assert values.get("nozzle_contour_method") == "moc_bell"
-    assert values.get("nozzle_contour_method_label") == "MOC-informed bell contour"
+    assert values.get("nozzle_contour_method") == "moc_characteristic_net"
+    assert values.get("nozzle_contour_method_label") == "MOC characteristic-net bell contour"
     assert float(values.get("nozzle_moc_exit_mach", 0.0)) > 1.0
     assert float(values.get("nozzle_moc_turn_angle_deg", 0.0)) > float(values.get("nozzle_bell_exit_angle_deg", 0.0))
     assert float(values.get("nozzle_bell_length_fraction", 0.0)) > 0.0
@@ -277,16 +277,16 @@ def test_nozzle_contour_metadata_and_shape():
 
 def test_nozzle_exit_diameter_is_auto_sized_by_default():
     """Assert the nozzle exit is solved unless a manual override is requested."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     values = design.derived.engineering_values
 
     assert values["nozzle_exit_mode"] == "auto"
     assert values["nozzle_exit_sizing_status"] in {"calculated", "capped_by_target_diameter"}
     assert values["nozzle_throat_sizing_method"] == "Choked thrust coefficient"
-    assert float(values["nozzle_throat_pressure_assumption_kpa"]) > 0.0
-    assert float(values["nozzle_throat_thrust_coefficient_assumption"]) > 1.0
+    assert float(values["nozzle_throat_pressure_closure_kpa"]) > 0.0
+    assert float(values["nozzle_throat_thrust_coefficient_closure"]) > 1.0
     assert float(values["nozzle_inner_diameter_mm"]) > float(values["nozzle_throat_diameter_mm"])
     assert float(values["nozzle_exit_pressure_target_kpa"]) > 0.0
     assert float(values["nozzle_exit_separation_ratio"]) > 0.0
@@ -295,11 +295,11 @@ def test_nozzle_exit_diameter_is_auto_sized_by_default():
 
 def test_chamber_length_uses_characteristic_length_target():
     """Assert chamber barrel length is tied to L-star and solved throat area."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    compact_chamber = create_concept_design({"chamber_diameter_mm": 35.0})
+    compact_chamber = create_engine_design({"chamber_diameter_mm": 35.0})
     compact_values = compact_chamber.derived.engineering_values
-    default_chamber = create_concept_design({})
+    default_chamber = create_engine_design({})
     default_values = default_chamber.derived.engineering_values
 
     assert compact_values["chamber_length_sizing_method"] == "characteristic_length"
@@ -317,10 +317,10 @@ def test_chamber_length_uses_characteristic_length_target():
 
 def test_manual_nozzle_exit_override_remains_available():
     """Assert explicit manual nozzle exit sizing remains available for constrained studies."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    manual = create_concept_design({"nozzle_exit_mode": "manual", "nozzle_diameter_mm": 88.0})
-    legacy = create_concept_design({"nozzle_diameter_mm": 88.0})
+    manual = create_engine_design({"nozzle_exit_mode": "manual", "nozzle_diameter_mm": 88.0})
+    legacy = create_engine_design({"nozzle_diameter_mm": 88.0})
 
     assert manual.derived.engineering_values["nozzle_exit_sizing_status"] == "manual_override"
     assert float(manual.derived.engineering_values["nozzle_inner_diameter_mm"]) == 88.0
@@ -330,11 +330,11 @@ def test_manual_nozzle_exit_override_remains_available():
 
 def test_nozzle_expansion_bias_changes_auto_exit_target():
     """Assert over and under expansion settings alter automatic nozzle sizing."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    under = create_concept_design({"nozzle_expansion_bias": "underexpanded"})
-    matched = create_concept_design({"nozzle_expansion_bias": "pressure_matched"})
-    over = create_concept_design({"nozzle_expansion_bias": "overexpanded"})
+    under = create_engine_design({"nozzle_expansion_bias": "underexpanded"})
+    matched = create_engine_design({"nozzle_expansion_bias": "pressure_matched"})
+    over = create_engine_design({"nozzle_expansion_bias": "overexpanded"})
 
     under_values = under.derived.engineering_values
     matched_values = matched.derived.engineering_values
@@ -357,9 +357,9 @@ def test_nozzle_expansion_bias_changes_auto_exit_target():
 
 def test_impinging_injector_reports_full_orifice_pattern():
     """Assert impinging injector geometry exposes every calculated orifice."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({"injector_type": "impinging"})
+    design = create_engine_design({"injector_type": "impinging"})
     values = design.derived.engineering_values
 
     element_count = int(values["impinging_element_count"])
@@ -376,9 +376,9 @@ def test_impinging_injector_reports_full_orifice_pattern():
 
 def test_render_geometry_fields_are_calculated():
     """Assert live 3D render dimensions come from solver-owned geometry fields."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    design = create_concept_design({"use_pumps": True, "injector_type": "impinging"})
+    design = create_engine_design({"use_pumps": True, "injector_type": "impinging"})
     values = design.derived.engineering_values
 
     required_positive_fields = [
@@ -410,15 +410,15 @@ def test_render_geometry_fields_are_calculated():
 
 def test_cooling_geometry_fields_describe_visible_features():
     """Assert film and regen cooling expose geometry used by measurements and renders."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
 
-    film_design = create_concept_design({"film_cooling": True})
+    film_design = create_engine_design({"film_cooling": True})
     film_values = film_design.derived.engineering_values
     assert "Injector perimeter slots" in str(film_values["film_geometry_effect_note"])
     assert float(film_values["film_slot_count"]) >= 8.0
     assert float(film_values["injector_face_diameter_mm"]) > float(film_design.inputs.chamber_diameter_mm)
 
-    regen_design = create_concept_design({"regen_cooling": True})
+    regen_design = create_engine_design({"regen_cooling": True})
     regen_values = regen_design.derived.engineering_values
     assert float(regen_values["regen_channel_count"]) > 0.0
     assert float(regen_values["regen_rib_height_mm"]) > 0.0
@@ -427,15 +427,15 @@ def test_cooling_geometry_fields_describe_visible_features():
 
 def test_export_includes_nozzle_geometry_metadata():
     """Assert export payload carries the nozzle contour metadata for downstream CAD/report use."""
-    from stanshock.concept_model import create_concept_design
+    from stanshock.design_model import create_engine_design
     from stanshock.exporter import build_cad_export_payload
 
-    design = create_concept_design({})
+    design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
     geometry_meta = payload["solver"]["stage_0_geometry"]
 
     assert geometry_meta["status"] == "calculated"
-    assert geometry_meta["nozzle_contour_method"] == "moc_bell"
+    assert geometry_meta["nozzle_contour_method"] == "moc_characteristic_net"
     assert float(geometry_meta["moc_exit_mach"]) > 1.0
     assert float(geometry_meta["bell_entrance_angle_deg"]) > float(geometry_meta["bell_exit_angle_deg"])
     assert float(geometry_meta["throat_entry_blend_radius_mm"]) > 0.0

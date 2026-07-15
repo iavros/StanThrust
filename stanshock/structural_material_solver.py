@@ -1,10 +1,10 @@
 from typing import Any, Dict, List, Optional
 
-from stanshock.concept_model import (
+from stanshock.design_model import (
     MATERIAL_ALLOWABLE_STRESS_MPA,
     MATERIAL_TEMPERATURE_LIMIT_K,
     clamp,
-    create_concept_design,
+    create_engine_design,
 )
 from stanshock.heat_transfer_solver import MATERIAL_THERMAL_CONDUCTIVITY_W_M_K
 from stanshock.materials import MATERIAL_OPTIONS
@@ -258,13 +258,13 @@ def _resolve_state(design_request: Dict[str, object]) -> Dict[str, object]:
 
 def build_structural_materials_output(
     design_request: Dict[str, object],
-    concept_envelope_result: Dict[str, object],
+    design_envelope_result: Dict[str, object],
     material_assignment_result: Dict[str, object],
     combustion_result: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     """Build section-based structural and thermal outputs from the active design state."""
     state = _resolve_state(design_request)
-    design = create_concept_design(state)
+    design = create_engine_design(state)
     values = dict(design.derived.engineering_values)
     section_materials = list(_as_dict(material_assignment_result.get("payload", {})).get("section_materials", []))
     heat_sections = _heat_sections(combustion_result)
@@ -316,7 +316,7 @@ def build_structural_materials_output(
         )
         wall_thickness_mm = _safe_float(values.get(wall_thickness_key), 1.0)
         fallback_wall_temperature_k = _safe_float(
-            values.get(f"{section_name}_estimated_wall_temperature_k"),
+            values.get(f"{section_name}_wall_temperature_k"),
             _safe_float(heat_section.get("hot_wall_temperature_k") if heat_section else None, 293.0),
         )
         factor_of_safety = _safe_float(values.get("factor_of_safety"), _safe_float(state.get("factor_of_safety"), 2.0))
@@ -469,7 +469,7 @@ def build_structural_materials_output(
             },
             "redesign_recommendations": redesign_recommendations,
             "design_request": design_request,
-            "geometry_reference": _as_dict(_as_dict(concept_envelope_result.get("payload")).get("geometry_bundle", {})),
+            "geometry_reference": _as_dict(_as_dict(design_envelope_result.get("payload")).get("geometry_bundle", {})),
         },
         "warnings": warnings,
         "trace": [

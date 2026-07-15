@@ -21,7 +21,7 @@ SECTION_KEYS = [
 
 
 def assign_materials(
-    design_request: Dict[str, object], concept_envelope_result: Dict[str, object]
+    design_request: Dict[str, object], design_envelope_result: Dict[str, object]
 ) -> Dict[str, object]:
     materials = _as_dict(design_request.get("materials"))
     section_materials: List[Dict[str, object]] = []
@@ -53,7 +53,7 @@ def assign_materials(
         "metadata": {
             "solver_name": SOLVER_NAME,
             "solver_version": SOLVER_VERSION,
-            "solver_mode": "concept-only",
+            "solver_mode": "design-only",
             "input_schema_version": "1.0",
             "output_schema_version": "1.0",
         },
@@ -63,7 +63,7 @@ def assign_materials(
             "material_notes": material_notes,
             "validation_messages": validation_messages,
             "compatibility_flags": compatibility_flags,
-            "geometry_reference": _as_dict(concept_envelope_result.get("payload")).get("geometry_bundle", {}),
+            "geometry_reference": _as_dict(design_envelope_result.get("payload")).get("geometry_bundle", {}),
         },
         "warnings": validation_messages,
         "trace": ["Section materials assigned against catalog references."],
@@ -79,7 +79,7 @@ def describe_section_materials(material_assignment_result: Dict[str, object]) ->
                 "section": item.get("section", ""),
                 "material": item.get("material", ""),
                 "catalog_status": item.get("catalog_status", "unknown"),
-                "note": "Concept-only assignment",
+                "note": "design-only assignment",
             }
         )
     return rows

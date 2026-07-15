@@ -8,12 +8,12 @@ from stanshock.benchmark_cases import (
     get_internal_baseline_cases,
     get_public_benchmark_cases,
 )
-from stanshock.concept_model import ConceptDesign
+from stanshock.design_model import EngineDesign
 from stanshock.uncertainty_provenance import (
     UncertaintyBand,
     ProvenanceField,
     build_uncertainty_summary,
-    estimate_field_confidence,
+    calculate_field_confidence,
 )
 
 
@@ -44,9 +44,9 @@ def _build_analysis_field(
     """Build an analysis field with provenance and confidence data.
     
     Merges value/status from station_field_updates (if available), adds confidence
-    and uncertainty estimates using the uncertainty_provenance module.
+    and uncertainty bands using the uncertainty_provenance module.
     """
-    # Get value and status from station updates or fallback
+    # Get value and status from station updates or row-level data.
     row_updates = _as_dict(station_field_updates.get(row_label, {}))
     field_updates = _as_dict(row_updates.get(field_name, {}))
     final_value = field_updates.get("value") if field_updates.get("value") is not None else value
@@ -64,7 +64,7 @@ def _build_analysis_field(
     
     # Attempt to add confidence and uncertainty
     if final_value is not None and isinstance(final_value, (int, float)):
-        confidence_field = estimate_field_confidence(
+        confidence_field = calculate_field_confidence(
             confidence_key,
             final_value,
             final_source,
@@ -185,7 +185,7 @@ def _build_stage_1_thermochemistry_metadata(
         "provider": thermochemistry.get("provider", "unknown"),
         "source": thermochemistry.get("source", "unknown"),
         "status": thermochemistry.get("status", "unknown"),
-        "fallback_used": bool(thermochemistry.get("fallback_used", False)),
+        "cantera_solved": bool(thermochemistry.get("cantera_solved", False)),
         "note": thermochemistry.get("note", ""),
     }
 
@@ -264,14 +264,16 @@ def _build_stage_2_nozzle_metadata(
         "ambient_correction": nozzle.get("ambient_correction", coefficients.get("ambient_correction")),
         "exit_pressure_kpa": nozzle.get("exit_pressure_kpa", _as_dict(physics.get("results", {})).get("exit_pressure_kpa")),
         "note": (
-            "Refined quasi-1D mode adds contour-aware throat sizing, ambient-pressure correction, and bell-nozzle loss terms; it is still a reduced-order estimate, not validated CFD."
+            "Navier-Stokes mode uses Cantera thermochemistry, a characteristic-net nozzle contour, shock feedback, and viscous station corrections; external CFD validation is still recommended."
+            if metadata.get("flow_model") == "navier_stokes"
+            else "Refined mode uses the characteristic-net nozzle contour with pressure-root solving and shock feedback."
             if metadata.get("flow_model") == "refined"
-            else "Geometry-aware Stage 2.2 nozzle loss model; still a reduced-order estimate, not validated CFD."
+            else "Fast preview mode uses geometry-aware nozzle losses and is intended for quick iteration."
         ),
     }
 
 
-def _build_stage_0_geometry_metadata(design: ConceptDesign) -> Dict[str, object]:
+def _build_stage_0_geometry_metadata(design: EngineDesign) -> Dict[str, object]:
     values = dict(design.derived.engineering_values)
     contour_method = str(values.get("nozzle_contour_method", "")).strip()
     if not contour_method:
@@ -336,7 +338,7 @@ def _build_benchmark_reference_metadata() -> Dict[str, object]:
 
 
 def build_cad_export_payload(
-    design: ConceptDesign,
+    design: EngineDesign,
     objective_report: Dict[str, object],
     ga_result: Optional[Dict[str, object]] = None,
     combustion_result: Optional[Dict[str, object]] = None,
@@ -347,10 +349,10 @@ def build_cad_export_payload(
     station_field_updates = _extract_station_field_updates(
         combustion_result, solver_interface_result, structural_result
     )
-    concept_station_rows = []
+    design_station_rows = []
 
     for row in design.derived.station_rows:
-        concept_station_rows.append(
+        design_station_rows.append(
             {
                 "label": row.label,
                 "axial_position_mm": row.axial_position_mm,
@@ -376,8 +378,8 @@ def build_cad_export_payload(
                         "temperature_k",
                         row.temperature_k,
                         "K",
-                        "calculated" if row.temperature_k is not None else "placeholder",
-                        "concept-solver",
+                        "calculated" if row.temperature_k is not None else "unavailable",
+                        "design-solver",
                         station_field_updates,
                         row.label,
                     ),
@@ -385,8 +387,8 @@ def build_cad_export_payload(
                         "pressure_kpa",
                         row.pressure_kpa,
                         "kPa",
-                        "calculated" if row.pressure_kpa is not None else "placeholder",
-                        "concept-solver",
+                        "calculated" if row.pressure_kpa is not None else "unavailable",
+                        "design-solver",
                         station_field_updates,
                         row.label,
                     ),
@@ -394,8 +396,8 @@ def build_cad_export_payload(
                         "mass_flow_kg_s",
                         row.mass_flow_kg_s,
                         "kg/s",
-                        "calculated" if row.mass_flow_kg_s is not None else "placeholder",
-                        "concept-solver",
+                        "calculated" if row.mass_flow_kg_s is not None else "unavailable",
+                        "design-solver",
                         station_field_updates,
                         row.label,
                     ),
@@ -403,8 +405,8 @@ def build_cad_export_payload(
                         "mach_number",
                         row.mach_number,
                         "",
-                        "calculated" if row.mach_number is not None else "placeholder",
-                        "concept-solver",
+                        "calculated" if row.mach_number is not None else "unavailable",
+                        "design-solver",
                         station_field_updates,
                         row.label,
                     ),
@@ -412,22 +414,22 @@ def build_cad_export_payload(
                         "thermal_margin_index",
                         row.thermal_margin_index if row.thermal_margin_index is not None else None,
                         "unitless",
-                        "calculated" if row.thermal_margin_index is not None else "placeholder",
-                        "concept-solver",
+                        "calculated" if row.thermal_margin_index is not None else "unavailable",
+                        "design-solver",
                         station_field_updates,
                         row.label,
                     ),
                 },
             }
         )
-    uncertainty_summary = _build_uncertainty_summary_from_rows(concept_station_rows)
+    uncertainty_summary = _build_uncertainty_summary_from_rows(design_station_rows)
 
     return {
         "metadata": {
             "app": "StanThrust",
             "mode": "design-stage",
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "safety_boundary": "This project intentionally stays at the level of preliminary visualization and software architecture. The measurements and scores shown are non-operational placeholders for CAD blockout and software planning only. They are not manufacturing dimensions, propulsion calculations, test parameters, or build instructions.",
+            "safety_boundary": "This project intentionally stays at the level of preliminary visualization and software architecture. The measurements and scores shown are solver outputs for analysis review only. They are not manufacturing dimensions, propulsion calculations for hardware release, test parameters, or build instructions.",
         },
         "solver": {
             "name": design.derived.solver_meta.solver_name,
@@ -461,14 +463,14 @@ def build_cad_export_payload(
             }
             for point in design.derived.nozzle_contour_points
         ],
-        "concept_station_rows": concept_station_rows,
+        "design_station_rows": design_station_rows,
         "section_property_rows": _as_dict(structural_result.get("payload", {})).get("section_property_rows", [])
         if isinstance(structural_result, dict)
         else [],
         "uncertainty_summary": uncertainty_summary,
-        "subsystem_placeholders": [
+        "subsystem_design_notes": [
             {"label": item.label, "status": item.status, "note": item.note}
-            for item in design.derived.subsystem_placeholders
+            for item in design.derived.subsystem_design_notes
         ],
         "summary": [{"label": item.label, "value": item.value} for item in design.derived.summary],
         "calculation_stages": list(design.derived.calculation_stages),
@@ -482,7 +484,7 @@ def build_cad_export_payload(
 
 def export_cad_json(
     path: Path,
-    design: ConceptDesign,
+    design: EngineDesign,
     objective_report: Dict[str, object],
     ga_result: Optional[Dict[str, object]] = None,
     combustion_result: Optional[Dict[str, object]] = None,
@@ -502,7 +504,7 @@ def export_cad_json(
 
 def export_measurements_csv(
     path: Path,
-    design: ConceptDesign,
+    design: EngineDesign,
     combustion_result: Optional[Dict[str, object]] = None,
     solver_interface_result: Optional[Dict[str, object]] = None,
     structural_result: Optional[Dict[str, object]] = None,
@@ -520,7 +522,7 @@ def export_measurements_csv(
         writer.writerow(["stage_1_thermochemistry.provider", thermochemistry.get("provider", ""), "", ""])
         writer.writerow(["stage_1_thermochemistry.source", thermochemistry.get("source", ""), "", ""])
         writer.writerow(["stage_1_thermochemistry.status", thermochemistry.get("status", ""), "", ""])
-        writer.writerow(["stage_1_thermochemistry.fallback_used", thermochemistry.get("fallback_used", ""), "", ""])
+        writer.writerow(["stage_1_thermochemistry.cantera_solved", thermochemistry.get("cantera_solved", ""), "", ""])
         writer.writerow(["stage_1_thermochemistry.note", thermochemistry.get("note", ""), "", ""])
         writer.writerow(["stage_2_nozzle_loss.solver_stage", nozzle_stage.get("solver_stage", ""), "", ""])
         writer.writerow(["stage_2_nozzle_loss.solver_mode", nozzle_stage.get("solver_mode", ""), "", ""])
@@ -571,7 +573,7 @@ def export_measurements_csv(
 
 def export_station_csv(
     path: Path,
-    design: ConceptDesign,
+    design: EngineDesign,
     combustion_result: Optional[Dict[str, object]] = None,
     solver_interface_result: Optional[Dict[str, object]] = None,
     structural_result: Optional[Dict[str, object]] = None,
@@ -639,7 +641,7 @@ def export_station_csv(
                     row.pressure_note,
                     row.mass_flow_note,
                     row.mach_note,
-                    "Design-stage placeholder export",
+                    "Design-stage export",
                     thermochemistry.get("provider", ""),
                     thermochemistry.get("status", ""),
                     thermochemistry.get("source", ""),
@@ -675,7 +677,7 @@ def _dedupe_profile_points(points: Sequence[Tuple[float, float]]) -> List[Tuple[
     return cleaned
 
 
-def build_revolved_profile_points(design: ConceptDesign) -> List[Tuple[float, float]]:
+def build_revolved_profile_points(design: EngineDesign) -> List[Tuple[float, float]]:
     values = dict(design.derived.engineering_values)
     feed_length_mm = float(design.derived.feed_system_bay_length_mm)
     chamber_length_mm = float(design.derived.chamber_length_mm)
@@ -705,7 +707,7 @@ def build_revolved_profile_points(design: ConceptDesign) -> List[Tuple[float, fl
     return _dedupe_profile_points(top_profile)
 
 
-def export_profile_dxf(path: Path, design: ConceptDesign) -> None:
+def export_profile_dxf(path: Path, design: EngineDesign) -> None:
     top_profile = build_revolved_profile_points(design)
     if len(top_profile) < 2:
         raise ValueError("Not enough profile points to export a DXF sketch.")

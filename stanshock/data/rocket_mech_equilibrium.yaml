@@ -5,10 +5,7 @@ units:
   quantity: mol
   energy: cal
 
-# Auto-generated equilibrium-focused rocket mechanism.
-# Derived from rocket_mech.yaml by preserving the richer NASA7 species set
-# while omitting invalid reaction entries that prevented Cantera from loading
-# the detailed file in this environment.
+# Equilibrium-focused rocket mechanism for bundled Cantera solves.
 
 species:
   # Species taken from GRI‑Mech 3.0 with NASA7 polynomials

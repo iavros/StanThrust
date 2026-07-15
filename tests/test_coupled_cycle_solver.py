@@ -98,6 +98,41 @@ def test_convergence_structure():
     print("✓ test_convergence_structure passed")
 
 
+def test_final_pass_uncertainty_payload():
+    """Test that the final pass reports dense Navier-Stokes bounds."""
+    design_request = {
+        "target_thrust_newtons": 500.0,
+        "target_chamber_pressure_kpa": 1500.0,
+        "tank_diameter_mm": 100.0,
+        "chamber_diameter_mm": 80.0,
+        "use_pumps": False,
+        "mixture_ratio": 2.0,
+        "burn_time_seconds": 12.0,
+        "solver_flow_model": "fast",
+        "solver_station_count": 40,
+    }
+
+    result = solve(design_request, max_iterations=4)
+    payload = result["payload"]
+    request = payload["request"]
+    bounds = payload["final_uncertainty_bounds"]
+
+    assert request["requested_solver_flow_model"] == "fast"
+    assert request["solver_flow_model"] == "navier_stokes"
+    assert int(request["solver_station_count"]) >= 180
+    assert bounds["flow_model"] == "navier_stokes"
+    assert int(bounds["station_count"]) >= 180
+    assert isinstance(bounds["bounds"], list)
+    assert len(bounds["bounds"]) >= 4
+
+    for row in bounds["bounds"]:
+        assert row["lower"] <= row["value"] <= row["upper"]
+        assert row["lower_percent"] >= 0.0
+        assert row["upper_percent"] >= 0.0
+
+    print("[ok] test_final_pass_uncertainty_payload passed")
+
+
 def test_convergence_results_structure():
     """Test results structure contains expected pressure values."""
     design_request = {
@@ -405,6 +440,7 @@ def run_all_tests():
     tests = [
         test_coupled_solver_basic_convergence,
         test_convergence_structure,
+        test_final_pass_uncertainty_payload,
         test_convergence_results_structure,
         test_iteration_trace_structure,
         test_station_field_updates_merged,

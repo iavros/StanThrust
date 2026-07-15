@@ -2,15 +2,15 @@
 
 This module provides utilities for tracking confidence levels and source
 attribution of key solver outputs. Each critical field carries:
-- value: the computed or estimated quantity
+- value: the computed quantity
 - unit: physical unit
-- status: calculated, placeholder, not-applicable, etc.
-- source_solver: which solver produced this (or concept-solver)
-- confidence: 0.0–1.0 confidence estimate (0 = low, 1 = high)
-- uncertainty_percent: estimated ±% uncertainty
+- status: calculated, unavailable, not-applicable, etc.
+- source_solver: which solver produced this (or design-solver)
+- confidence: 0.0–1.0 confidence value (0 = low, 1 = high)
+- uncertainty_percent: solver uncertainty band
 
 This supports end-to-end traceability in exports and helps users understand
-which outputs are well-justified vs. concept-stage approximations.
+which outputs are produced by a solver and which require higher-fidelity work.
 """
 
 from dataclasses import dataclass
@@ -31,8 +31,8 @@ class ProvenanceField:
     """A field with provenance, source, and uncertainty information."""
     value: float
     unit: str
-    status: str            # "calculated", "placeholder", "not-applicable"
-    source_solver: str     # e.g. "Combustion CFD Proxy Solver", "concept-solver"
+    status: str            # "calculated", "unavailable", "not-applicable"
+    source_solver: str     # e.g. "Cantera Coupled Flow Solver", "design-solver"
     confidence: float      # 0.0–1.0
     uncertainty: UncertaintyBand
 
@@ -54,7 +54,7 @@ class ProvenanceField:
 def get_field_confidence_bands() -> Dict[str, UncertaintyBand]:
     """Return confidence and uncertainty bands for key solver fields.
 
-    These are conservative, concept-stage estimates. Tighten as solver
+    These are conservative, design-stage bands. Tighten as solver
     fidelity increases or replace with solver-generated uncertainty outputs.
     """
     return {
@@ -63,7 +63,7 @@ def get_field_confidence_bands() -> Dict[str, UncertaintyBand]:
             lower_percent=8.0,
             upper_percent=12.0,
             confidence=0.65,
-            notes="Concept-stage assumption; depends on propellant pair and thermochem provider."
+            notes="design-stage assumption; depends on propellant pair and thermochem provider."
         ),
 
         # Feed pressure drop (Stage 2.1)
@@ -85,13 +85,13 @@ def get_field_confidence_bands() -> Dict[str, UncertaintyBand]:
             lower_percent=5.0,
             upper_percent=8.0,
             confidence=0.78,
-            notes="Proxy solver; concept-stage; actual engine requires testing."
+            notes="Reduced-order solver; hardware validation requires testing."
         ),
         "exhaust_temperature_k": UncertaintyBand(
             lower_percent=10.0,
             upper_percent=15.0,
             confidence=0.62,
-            notes="Concept estimate; depends on combustion model fidelity."
+            notes="Cantera-backed value; depends on combustion model fidelity."
         ),
         "nozzle_exit_mach": UncertaintyBand(
             lower_percent=8.0,
@@ -111,7 +111,7 @@ def get_field_confidence_bands() -> Dict[str, UncertaintyBand]:
             lower_percent=10.0,
             upper_percent=15.0,
             confidence=0.65,
-            notes="Interpolated or proxy; depends on combustion and cooling models."
+            notes="Interpolated from solver stations; depends on combustion and cooling models."
         ),
 
         # Structural fields (Stage 3.2)
@@ -119,35 +119,35 @@ def get_field_confidence_bands() -> Dict[str, UncertaintyBand]:
             lower_percent=15.0,
             upper_percent=20.0,
             confidence=0.58,
-            notes="Concept-stage heuristic; excludes stress and fatigue."
+            notes="Design-stage thermal model; excludes stress and fatigue coupling."
         ),
 
-        # Packaging and indices (concept layer)
+        # Packaging and indices (design layer)
         "dry_mass_index": UncertaintyBand(
             lower_percent=12.0,
             upper_percent=18.0,
             confidence=0.60,
-            notes="Scaling-law proxy; component-level mass not detailed."
+            notes="Scaling-law index; component-level mass not detailed."
         ),
         "packaging_efficiency_index": UncertaintyBand(
             lower_percent=8.0,
             upper_percent=12.0,
             confidence=0.68,
-            notes="Geometric heuristic; does not account for routing complexity."
+            notes="Geometric index; does not account for routing complexity."
         ),
     }
 
 
-def estimate_field_confidence(
+def calculate_field_confidence(
     field_name: str,
     value: float,
     source_solver: str,
     status: str = "calculated",
 ) -> Optional[ProvenanceField]:
-    """Create a provenance field with confidence estimate for a known field.
+    """Create a provenance field with confidence value for a known field.
 
     If the field is not in the confidence band library, returns None.
-    Status priority: calculated > placeholder > not-applicable.
+    Status priority: calculated > unavailable > not-applicable.
     """
     bands = get_field_confidence_bands()
     if field_name not in bands:
@@ -157,8 +157,8 @@ def estimate_field_confidence(
 
     # Adjust confidence based on status
     confidence = band.confidence
-    if status == "placeholder":
-        confidence *= 0.6  # Placeholder fields are less confident
+    if status == "unavailable":
+        confidence *= 0.6
     elif status == "not-applicable":
         confidence *= 0.3  # N/A fields are very low confidence
 

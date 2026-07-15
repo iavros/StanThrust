@@ -1,13 +1,13 @@
-from stanshock.concept_model import create_concept_design
+from stanshock.design_model import create_engine_design
 from stanshock.heat_transfer_solver import (
-    estimate_coolant_side_heat_transfer,
-    estimate_gas_side_heat_transfer,
+    solve_coolant_side_heat_transfer,
+    solve_gas_side_heat_transfer,
     solve_engine_heat_transfer,
 )
 
 
 def test_gas_side_heat_transfer_returns_positive_station_coefficients():
-    result = estimate_gas_side_heat_transfer(
+    result = solve_gas_side_heat_transfer(
         chamber_pressure_kpa=1400.0,
         chamber_temperature_k=3350.0,
         mach=1.0,
@@ -22,7 +22,7 @@ def test_gas_side_heat_transfer_returns_positive_station_coefficients():
 
 
 def test_coolant_side_heat_transfer_tracks_regen_channel_flow():
-    result = estimate_coolant_side_heat_transfer(
+    result = solve_coolant_side_heat_transfer(
         coolant_mass_flow_kg_s=0.06,
         channel_count=32,
         channel_width_mm=2.4,
@@ -41,7 +41,7 @@ def test_coolant_side_heat_transfer_tracks_regen_channel_flow():
 
 
 def test_engine_heat_transfer_solves_regenerative_network_from_design_geometry():
-    design = create_concept_design(
+    design = create_engine_design(
         {
             "fuel_name": "Ethanol",
             "oxidizer_name": "Liquid Oxygen",
@@ -75,7 +75,7 @@ def test_engine_heat_transfer_solves_regenerative_network_from_design_geometry()
 
 
 def test_engine_heat_transfer_still_calculates_passive_wall_case():
-    design = create_concept_design({"regen_cooling": False, "film_cooling": False})
+    design = create_engine_design({"regen_cooling": False, "film_cooling": False})
     result = solve_engine_heat_transfer(
         design,
         {
