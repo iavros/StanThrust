@@ -1,11 +1,11 @@
 import math
 from typing import Callable, Dict, List, Optional, Tuple
 
-from stanshock.design_model import EngineDesign, clamp, rounded
-from stanshock.heat_transfer_solver import solve_engine_heat_transfer
-from stanshock.inputs import SolverAssumptions, lookup_propellant
-from stanshock.shock_solver import find_nozzle_normal_shock_candidate
-from stanshock.thermochemistry_provider import (
+from stanthrust.design_model import EngineDesign, clamp, rounded
+from stanthrust.heat_transfer_solver import solve_engine_heat_transfer
+from stanthrust.inputs import SolverAssumptions, lookup_propellant
+from stanthrust.shock_solver import find_nozzle_normal_shock_candidate
+from stanthrust.thermochemistry_provider import (
     CanteraThermochemistryProvider,
     ThermochemistryProvider,
     resolve_thermochemistry_provider,

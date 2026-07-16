@@ -8,7 +8,7 @@ import pytest
 
 def test_station_numeric_promotion():
     """Assert all station rows include machine-friendly numeric fields."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({})
     for row in design.derived.station_rows:
@@ -24,7 +24,7 @@ def test_station_numeric_promotion():
 
 def test_numeric_value_ranges():
     """Validate that numeric station fields have physically reasonable values."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({})
     for row in design.derived.station_rows:
@@ -44,8 +44,8 @@ def test_numeric_value_ranges():
 
 def test_json_export_contains_analysis_fields():
     """Assert JSON export contains analysis_fields with provenance for each station."""
-    from stanshock.design_model import create_engine_design
-    from stanshock.exporter import build_cad_export_payload
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.exporter import build_cad_export_payload
 
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -73,8 +73,8 @@ def test_json_export_contains_analysis_fields():
 
 def test_json_export_numeric_fields():
     """Assert JSON export includes machine-friendly numeric station fields."""
-    from stanshock.design_model import create_engine_design
-    from stanshock.exporter import build_cad_export_payload
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.exporter import build_cad_export_payload
 
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -89,7 +89,7 @@ def test_json_export_numeric_fields():
 
 def test_backward_compatibility_notes():
     """Assert human-readable note fields are still present (backward compatibility)."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({})
     for row in design.derived.station_rows:
@@ -103,7 +103,7 @@ def test_backward_compatibility_notes():
 
 def test_regen_cooling_scenario():
     """Test station promotion with regen cooling enabled."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     state = {
         "regen_cooling": True,
@@ -134,7 +134,7 @@ def test_regen_cooling_scenario():
 
 def test_no_regen_cooling_scenario():
     """Test station promotion with regen cooling disabled."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     state = {
         "regen_cooling": False,
@@ -164,8 +164,8 @@ def test_no_regen_cooling_scenario():
 
 def test_csv_export_numeric_columns():
     """Assert CSV station export includes numeric columns at the end."""
-    from stanshock.design_model import create_engine_design
-    from stanshock.exporter import export_station_csv
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.exporter import export_station_csv
 
     design = create_engine_design({})
     with TemporaryDirectory() as tmpdir:
@@ -219,8 +219,8 @@ def test_csv_export_numeric_columns():
 
 def test_solver_provenance_tagging():
     """Assert that solver provenance is correctly tagged in analysis_fields."""
-    from stanshock.design_model import create_engine_design
-    from stanshock.exporter import build_cad_export_payload
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.exporter import build_cad_export_payload
 
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
@@ -244,7 +244,7 @@ def test_solver_provenance_tagging():
 
 def test_nozzle_contour_metadata_and_shape():
     """Assert the nozzle contour uses bell metadata and produces a usable monotonic profile."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({})
     values = design.derived.engineering_values
@@ -277,7 +277,7 @@ def test_nozzle_contour_metadata_and_shape():
 
 def test_nozzle_exit_diameter_is_auto_sized_by_default():
     """Assert the nozzle exit is solved unless a manual override is requested."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({})
     values = design.derived.engineering_values
@@ -295,7 +295,7 @@ def test_nozzle_exit_diameter_is_auto_sized_by_default():
 
 def test_chamber_length_uses_characteristic_length_target():
     """Assert chamber barrel length is tied to L-star and solved throat area."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     compact_chamber = create_engine_design({"chamber_diameter_mm": 35.0})
     compact_values = compact_chamber.derived.engineering_values
@@ -317,7 +317,7 @@ def test_chamber_length_uses_characteristic_length_target():
 
 def test_manual_nozzle_exit_override_remains_available():
     """Assert explicit manual nozzle exit sizing remains available for constrained studies."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     manual = create_engine_design({"nozzle_exit_mode": "manual", "nozzle_diameter_mm": 88.0})
     legacy = create_engine_design({"nozzle_diameter_mm": 88.0})
@@ -330,7 +330,7 @@ def test_manual_nozzle_exit_override_remains_available():
 
 def test_nozzle_expansion_bias_changes_auto_exit_target():
     """Assert over and under expansion settings alter automatic nozzle sizing."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     under = create_engine_design({"nozzle_expansion_bias": "underexpanded"})
     matched = create_engine_design({"nozzle_expansion_bias": "pressure_matched"})
@@ -357,7 +357,7 @@ def test_nozzle_expansion_bias_changes_auto_exit_target():
 
 def test_impinging_injector_reports_full_orifice_pattern():
     """Assert impinging injector geometry exposes every calculated orifice."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({"injector_type": "impinging"})
     values = design.derived.engineering_values
@@ -376,7 +376,7 @@ def test_impinging_injector_reports_full_orifice_pattern():
 
 def test_render_geometry_fields_are_calculated():
     """Assert live 3D render dimensions come from solver-owned geometry fields."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     design = create_engine_design({"use_pumps": True, "injector_type": "impinging"})
     values = design.derived.engineering_values
@@ -410,7 +410,7 @@ def test_render_geometry_fields_are_calculated():
 
 def test_cooling_geometry_fields_describe_visible_features():
     """Assert film and regen cooling expose geometry used by measurements and renders."""
-    from stanshock.design_model import create_engine_design
+    from stanthrust.design_model import create_engine_design
 
     film_design = create_engine_design({"film_cooling": True})
     film_values = film_design.derived.engineering_values
@@ -427,8 +427,8 @@ def test_cooling_geometry_fields_describe_visible_features():
 
 def test_export_includes_nozzle_geometry_metadata():
     """Assert export payload carries the nozzle contour metadata for downstream CAD/report use."""
-    from stanshock.design_model import create_engine_design
-    from stanshock.exporter import build_cad_export_payload
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.exporter import build_cad_export_payload
 
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})

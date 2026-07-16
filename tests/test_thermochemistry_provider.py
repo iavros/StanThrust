@@ -6,9 +6,9 @@ import pytest
 def test_generated_equilibrium_mechanism_loads_and_solves():
     import cantera as ct
 
-    from stanshock.design_model import create_engine_design
-    from stanshock.inputs import get_default_solver_assumptions, lookup_propellant
-    from stanshock.thermochemistry_provider import (
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.inputs import get_default_solver_assumptions, lookup_propellant
+    from stanthrust.thermochemistry_provider import (
         CanteraThermochemistryProvider,
         EQUILIBRIUM_MECHANISM_PATH,
     )
@@ -35,10 +35,10 @@ def test_generated_equilibrium_mechanism_loads_and_solves():
 def test_public_benchmark_propellant_pairs_are_supported():
     import cantera  # noqa: F401
 
-    from stanshock.benchmark_cases import get_public_benchmark_cases
-    from stanshock.design_model import create_engine_design
-    from stanshock.inputs import get_default_solver_assumptions, lookup_propellant
-    from stanshock.thermochemistry_provider import CanteraThermochemistryProvider
+    from stanthrust.benchmark_cases import get_public_benchmark_cases
+    from stanthrust.design_model import create_engine_design
+    from stanthrust.inputs import get_default_solver_assumptions, lookup_propellant
+    from stanthrust.thermochemistry_provider import CanteraThermochemistryProvider
 
     provider = CanteraThermochemistryProvider()
     assumptions = get_default_solver_assumptions()
@@ -56,7 +56,7 @@ def test_public_benchmark_propellant_pairs_are_supported():
 
 
 def test_thermochemistry_provider_requires_cantera_mode():
-    from stanshock.thermochemistry_provider import (
+    from stanthrust.thermochemistry_provider import (
         CanteraThermochemistryProvider,
         resolve_thermochemistry_provider,
     )

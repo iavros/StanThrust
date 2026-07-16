@@ -1,9 +1,9 @@
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.design_model import create_engine_design
-from stanshock.inputs import DEFAULT_STATE, SolverAssumptions
+from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.design_model import create_engine_design
+from stanthrust.inputs import DEFAULT_STATE, SolverAssumptions
 
 
 @dataclass(frozen=True)

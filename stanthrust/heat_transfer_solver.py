@@ -1,7 +1,7 @@
 import math
 from typing import Dict, List, Mapping, Optional
 
-from stanshock.design_model import (
+from stanthrust.design_model import (
     AMBIENT_TEMPERATURE_K,
     EngineDesign,
     MATERIAL_TEMPERATURE_LIMIT_K,

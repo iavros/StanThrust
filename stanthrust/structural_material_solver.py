@@ -1,13 +1,13 @@
 from typing import Any, Dict, List, Optional
 
-from stanshock.design_model import (
+from stanthrust.design_model import (
     MATERIAL_ALLOWABLE_STRESS_MPA,
     MATERIAL_TEMPERATURE_LIMIT_K,
     clamp,
     create_engine_design,
 )
-from stanshock.heat_transfer_solver import MATERIAL_THERMAL_CONDUCTIVITY_W_M_K
-from stanshock.inputs import MATERIAL_OPTIONS
+from stanthrust.heat_transfer_solver import MATERIAL_THERMAL_CONDUCTIVITY_W_M_K
+from stanthrust.inputs import MATERIAL_OPTIONS
 
 
 SOLVER_NAME = "Structural Material Solver"

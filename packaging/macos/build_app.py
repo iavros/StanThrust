@@ -7,7 +7,6 @@ Windows `StanThrust.exe` cannot be reused as a macOS application.
 
 import os
 import shutil
-import site
 import subprocess
 import sys
 from pathlib import Path
@@ -90,13 +89,6 @@ def run_pyinstaller() -> int:
         str(SPEC_FILE),
     ]
     env = dict(os.environ)
-    try:
-        user_site = site.getusersitepackages()
-    except Exception:
-        user_site = ""
-    if user_site:
-        existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = user_site if not existing else user_site + os.pathsep + existing
     cache_dir = BUILD_DIR / "pyinstaller_config"
     mpl_cache_dir = BUILD_DIR / "matplotlib_config"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +102,6 @@ def run_pyinstaller() -> int:
     print(f"ICNS asset: {icon_path if icon_path else 'not available; app will use default icon'}")
     print(f"Output app: {DIST_DIR / f'{APP_NAME}.app'}")
     print(f"PyInstaller cache: {cache_dir}")
-    print(f"User site: {user_site or 'not detected'}")
     print("Command:")
     print(" ".join(f'"{part}"' if " " in part else part for part in command))
     return subprocess.run(command, cwd=str(PROJECT_ROOT), env=env).returncode
@@ -127,12 +118,36 @@ def report_success() -> None:
         print(f"Expected app bundle not found at {app_path}")
 
 
+def validate_application() -> None:
+    """Verify that the bundled Qt and Matplotlib runtime can render offscreen."""
+    executable = DIST_DIR / f"{APP_NAME}.app" / "Contents" / "MacOS" / APP_NAME
+    trace_path = BUILD_DIR / "desktop-self-test.log"
+    if trace_path.exists():
+        trace_path.unlink()
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["STANTHRUST_SELF_TEST_LOG"] = str(trace_path)
+    _print_header("Validating bundled desktop runtime")
+    try:
+        completed = subprocess.run([str(executable), "--self-test-desktop"], env=env, timeout=180)
+    except subprocess.TimeoutExpired as exc:
+        trace = trace_path.read_text(encoding="utf-8").strip() if trace_path.exists() else "no trace written"
+        raise SystemExit(f"ERROR: bundled desktop self-test timed out. Last stages: {trace}") from exc
+    if completed.returncode != 0:
+        trace = trace_path.read_text(encoding="utf-8").strip() if trace_path.exists() else "no trace written"
+        raise SystemExit(
+            f"ERROR: bundled desktop self-test failed with exit code {completed.returncode}. Last stages: {trace}"
+        )
+    print("Bundled Qt and Matplotlib render test passed.")
+
+
 def main() -> int:
     validate_project()
     clean_build_artifacts()
     result = run_pyinstaller()
     if result == 0:
         report_success()
+        validate_application()
     else:
         _print_header("Build failed")
     return result

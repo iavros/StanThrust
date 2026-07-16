@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from stanshock.benchmark_cases import (
+from stanthrust.benchmark_cases import (
     get_internal_baseline_cases,
     get_public_benchmark_cases,
 )
-from stanshock.design_model import EngineDesign
-from stanshock.uncertainty import (
+from stanthrust.design_model import EngineDesign
+from stanthrust.uncertainty import (
     UncertaintyBand,
     ProvenanceField,
     build_uncertainty_summary,

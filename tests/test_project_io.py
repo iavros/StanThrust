@@ -1,4 +1,4 @@
-from stanshock.exporter import load_project, save_project
+from stanthrust.exporter import load_project, save_project
 
 
 def test_project_round_trip(tmp_path):

@@ -1,6 +1,6 @@
 import math
 
-from stanshock.shock_solver import (
+from stanthrust.shock_solver import (
     find_nozzle_normal_shock_candidate,
     normal_shock_relations,
     oblique_shock_relations,
@@ -54,4 +54,3 @@ def test_nozzle_shock_candidate_uses_overexpanded_station_pressure_match():
     assert result["shock_x_mm"] == 20.0
     assert result["downstream_pressure_kpa"] > result["upstream_pressure_kpa"]
     assert result["downstream_mach"] < 1.0
-

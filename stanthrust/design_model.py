@@ -2,8 +2,8 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from stanshock.moc_nozzle_solver import solve_moc_nozzle
-from stanshock.inputs import PropellantOption, lookup_propellant
+from stanthrust.moc_nozzle_solver import solve_moc_nozzle
+from stanthrust.inputs import PropellantOption, lookup_propellant
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:

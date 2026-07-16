@@ -3,14 +3,14 @@ import sys
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.design_model import create_engine_design
-from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.inputs import get_default_solver_assumptions
-from stanshock.structural_material_solver import (
+from stanthrust.design_model import create_engine_design
+from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.inputs import get_default_solver_assumptions
+from stanthrust.structural_material_solver import (
     assign_materials,
     build_structural_materials_output,
 )
-from stanshock.exporter import build_cad_export_payload
+from stanthrust.exporter import build_cad_export_payload
 
 
 def test_structural_materials_output_contains_sections():

@@ -15,10 +15,10 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from stanshock import __version__ as APP_VERSION
-from stanshock.design_model import INJECTOR_TYPES, create_engine_design
-from stanshock.coupled_cycle_solver import solve as solve_coupled_cycle
-from stanshock.inputs import (
+from stanthrust import __version__ as APP_VERSION
+from stanthrust.design_model import INJECTOR_TYPES, create_engine_design
+from stanthrust.coupled_cycle_solver import solve as solve_coupled_cycle
+from stanthrust.inputs import (
     DEFAULT_OBJECTIVE_WEIGHTS,
     DEFAULT_STATE,
     FUEL_NAMES,
@@ -26,7 +26,7 @@ from stanshock.inputs import (
     OXIDIZER_NAMES,
     get_default_solver_assumptions,
 )
-from stanshock.exporter import (
+from stanthrust.exporter import (
     build_revolved_profile_points,
     export_measurements_csv,
     export_profile_dxf,
@@ -34,18 +34,22 @@ from stanshock.exporter import (
     load_project,
     save_project,
 )
-from stanshock.objectives import evaluate_objectives, normalize_objective_weights
-from stanshock.optimizer_hooks import (
+from stanthrust.objectives import evaluate_objectives, normalize_objective_weights
+from stanthrust.optimizer_hooks import (
     build_optimizer_seed,
     run_feasibility_first_optimizer,
     run_genetic_optimizer,
     apply_multifidelity_confirmation,
 )
-from stanshock.structural_material_solver import (
+from stanthrust.structural_material_solver import (
     assign_materials,
     build_structural_materials_output,
 )
-from stanshock.validation_pack import validate_engine_design
+from stanthrust.validation_pack import validate_engine_design
+from stanthrust.plotting import (
+    EngineeringPlotCanvas as MatplotlibEngineeringPlotCanvas,
+    FlowFieldPlotCanvas as MatplotlibFlowFieldPlotCanvas,
+)
 
 try:
     from PyQt5.QtCore import Qt, QLineF, QPointF, QRectF, QTimer
@@ -307,378 +311,7 @@ class NoWheelDoubleSpinBox(QDoubleSpinBox):
         event.ignore()
 
 
-class EngineeringPlotCanvas(QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setMinimumHeight(270)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._x_label = "X"
-        self._primary_label = ""
-        self._secondary_label = ""
-        self._primary_series: List[Dict[str, object]] = []
-        self._secondary_series: List[Dict[str, object]] = []
-        self._empty_message = "Run Solve to populate this plot."
-
-    def set_plot_data(
-        self,
-        *,
-        x_label: str,
-        primary_label: str,
-        primary_series: List[Dict[str, object]],
-        secondary_label: str = "",
-        secondary_series: Optional[List[Dict[str, object]]] = None,
-        empty_message: str = "Run Solve to populate this plot.",
-    ) -> None:
-        self._x_label = x_label
-        self._primary_label = primary_label
-        self._secondary_label = secondary_label
-        self._primary_series = self._normalize_series(primary_series)
-        self._secondary_series = self._normalize_series(secondary_series or [])
-        self._empty_message = empty_message
-        self.update()
-
-    @staticmethod
-    def _normalize_series(raw_series: List[Dict[str, object]]) -> List[Dict[str, object]]:
-        normalized: List[Dict[str, object]] = []
-        for series in raw_series:
-            points = []
-            for point in list(series.get("points", [])):
-                if not isinstance(point, (list, tuple)) or len(point) != 2:
-                    continue
-                x_value = _safe_float(point[0])
-                y_value = _safe_float(point[1])
-                if x_value is None or y_value is None:
-                    continue
-                points.append((x_value, y_value))
-            if points:
-                normalized.append(
-                    {
-                        "label": str(series.get("label", "Series")),
-                        "color": str(series.get("color", QT_PALETTE["text"])),
-                        "points": points,
-                    }
-                )
-        return normalized
-
-    @staticmethod
-    def _value_range(series_list: List[Dict[str, object]]) -> Optional[List[float]]:
-        values = [point[1] for series in series_list for point in list(series.get("points", []))]
-        if not values:
-            return None
-        minimum = min(values)
-        maximum = max(values)
-        if abs(maximum - minimum) < 1e-9:
-            padding = abs(maximum) * 0.12 if abs(maximum) > 1e-6 else 1.0
-            return [minimum - padding, maximum + padding]
-        padding = (maximum - minimum) * 0.10
-        return [minimum - padding, maximum + padding]
-
-    @staticmethod
-    def _nice_number(value: float, round_result: bool) -> float:
-        if value <= 0.0 or not math.isfinite(value):
-            return 1.0
-        exponent = math.floor(math.log10(value))
-        fraction = value / (10.0**exponent)
-        if round_result:
-            if fraction < 1.5:
-                nice_fraction = 1.0
-            elif fraction < 3.0:
-                nice_fraction = 2.0
-            elif fraction < 7.0:
-                nice_fraction = 5.0
-            else:
-                nice_fraction = 10.0
-        else:
-            if fraction <= 1.0:
-                nice_fraction = 1.0
-            elif fraction <= 2.0:
-                nice_fraction = 2.0
-            elif fraction <= 5.0:
-                nice_fraction = 5.0
-            else:
-                nice_fraction = 10.0
-        return nice_fraction * (10.0**exponent)
-
-    @classmethod
-    def _axis_ticks(cls, minimum: float, maximum: float, target_count: int = 5) -> Tuple[float, float, List[float]]:
-        if abs(maximum - minimum) < 1e-9:
-            padding = abs(maximum) * 0.12 if abs(maximum) > 1e-6 else 1.0
-            minimum -= padding
-            maximum += padding
-        target_count = max(3, target_count)
-        span = cls._nice_number(maximum - minimum, False)
-        step = cls._nice_number(span / max(1, target_count - 1), True)
-        axis_min = math.floor(minimum / step) * step
-        axis_max = math.ceil(maximum / step) * step
-        if abs(axis_max - axis_min) < 1e-9:
-            axis_max = axis_min + step
-        ticks: List[float] = []
-        tick_count = int(round((axis_max - axis_min) / step)) + 1
-        for index in range(max(2, tick_count)):
-            tick = axis_min + index * step
-            if tick > axis_max + step * 0.5:
-                break
-            ticks.append(tick)
-        return axis_min, axis_max, ticks
-
-    @staticmethod
-    def _linear_ticks(minimum: float, maximum: float, target_count: int = 5) -> List[float]:
-        if abs(maximum - minimum) < 1e-9:
-            return [minimum]
-        return [minimum + (maximum - minimum) * index / max(1, target_count - 1) for index in range(target_count)]
-
-    @staticmethod
-    def _format_axis_value(value: float, span: Optional[float] = None) -> str:
-        value = 0.0 if abs(value) < 1e-12 else value
-        magnitude = max(abs(value), abs(span or 0.0))
-        if 0.0 < abs(value) < 0.001 or magnitude >= 100000.0:
-            return "{0:.2e}".format(value)
-        if span is None:
-            decimals = 0 if magnitude >= 1000.0 else 1 if magnitude >= 100.0 else 2 if magnitude >= 10.0 else 3
-        elif span >= 100.0:
-            decimals = 0
-        elif span >= 10.0:
-            decimals = 1
-        elif span >= 1.0:
-            decimals = 2
-        elif span >= 0.01:
-            decimals = 3
-        else:
-            decimals = 4
-        text = "{0:.{1}f}".format(value, decimals)
-        return text.rstrip("0").rstrip(".") if "." in text else text
-
-    @staticmethod
-    def _legend_row_count(series_list: List[Dict[str, object]], metrics: QFontMetrics, available_width: float) -> int:
-        if not series_list or available_width <= 0:
-            return 1
-        rows = 1
-        row_width = 0
-        for series in series_list:
-            entry_width = max(92, metrics.horizontalAdvance(str(series.get("label", "Series"))) + 38)
-            if row_width and row_width + entry_width > available_width:
-                rows += 1
-                row_width = 0
-            row_width += entry_width
-        return rows
-
-    @staticmethod
-    def _adjust_label_stack(items: List[Dict[str, object]], plot_rect: QRectF, min_spacing: float = 17.0) -> None:
-        if not items:
-            return
-        items.sort(key=lambda item: float(item["y"]))
-        top_limit = plot_rect.top() + 6.0
-        bottom_limit = plot_rect.bottom() - 18.0
-        previous_y = top_limit - min_spacing
-        for item in items:
-            item["label_y"] = max(float(item["y"]) - 9.0, previous_y + min_spacing, top_limit)
-            previous_y = float(item["label_y"])
-        overflow = previous_y - bottom_limit
-        if overflow > 0:
-            for item in items:
-                item["label_y"] = max(top_limit, float(item["label_y"]) - overflow)
-            previous_y = top_limit - min_spacing
-            for item in items:
-                item["label_y"] = max(float(item["label_y"]), previous_y + min_spacing)
-                previous_y = float(item["label_y"])
-            next_y = bottom_limit + min_spacing
-            for item in reversed(items):
-                item["label_y"] = min(float(item["label_y"]), next_y - min_spacing, bottom_limit)
-                next_y = float(item["label_y"])
-
-    def paintEvent(self, _event) -> None:  # pragma: no cover - GUI paint path
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
-
-        outer = self.rect().adjusted(0, 0, -1, -1)
-        painter.fillRect(outer, QColor("#11151A"))
-
-        all_series = list(self._primary_series) + list(self._secondary_series)
-        if not all_series:
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(outer, Qt.AlignCenter, self._empty_message)
-            return
-
-        x_values = [point[0] for series in all_series for point in list(series.get("points", []))]
-        x_min = min(x_values)
-        x_max = max(x_values)
-        if abs(x_max - x_min) < 1e-9:
-            x_max = x_min + 1.0
-
-        primary_range = self._value_range(self._primary_series)
-        secondary_range = self._value_range(self._secondary_series) if self._secondary_series else None
-        if primary_range is None:
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(outer, Qt.AlignCenter, self._empty_message)
-            return
-
-        primary_min, primary_max, primary_ticks = self._axis_ticks(primary_range[0], primary_range[1], 5)
-        secondary_min, secondary_max, secondary_ticks = (
-            self._axis_ticks(secondary_range[0], secondary_range[1], 5) if secondary_range else (0.0, 1.0, [])
-        )
-        x_ticks = self._linear_ticks(x_min, x_max, 5)
-
-        axis_font = QFont("Segoe UI", 8)
-        axis_title_font = QFont("Segoe UI", 8, QFont.Bold)
-        legend_font = QFont("Segoe UI", 8)
-        value_font = QFont("Segoe UI", 7, QFont.Bold)
-        axis_metrics = QFontMetrics(axis_font)
-        legend_metrics = QFontMetrics(legend_font)
-        primary_span = primary_max - primary_min
-        secondary_span = secondary_max - secondary_min
-        x_span = x_max - x_min
-
-        primary_tick_width = max(axis_metrics.horizontalAdvance(self._format_axis_value(value, primary_span)) for value in primary_ticks)
-        secondary_tick_width = (
-            max(axis_metrics.horizontalAdvance(self._format_axis_value(value, secondary_span)) for value in secondary_ticks)
-            if secondary_ticks
-            else 0
-        )
-        left_margin = max(62, primary_tick_width + 20)
-        right_margin = max(74, secondary_tick_width + 26) if self._secondary_series else 42
-        available_width = max(80.0, float(outer.width() - left_margin - right_margin))
-        legend_rows = self._legend_row_count(all_series, legend_metrics, available_width)
-        top_margin = 66 + (legend_rows - 1) * 18
-        bottom_margin = 48
-        plot_rect = QRectF(
-            left_margin,
-            top_margin,
-            max(80.0, outer.width() - left_margin - right_margin),
-            max(84.0, outer.height() - top_margin - bottom_margin),
-        )
-
-        painter.setPen(QPen(QColor(QT_PALETTE["border_soft"]), 1))
-        painter.setBrush(QColor("#0F1318"))
-        painter.drawRoundedRect(plot_rect.adjusted(-8, -10, 8, 30), 12, 12)
-        painter.setBrush(QColor("#11161C"))
-        painter.setPen(QPen(QColor("#27313A"), 1))
-        painter.drawRect(plot_rect)
-
-        grid_pen = QPen(QColor(QT_PALETTE["border_soft"]), 1)
-        grid_pen.setCosmetic(True)
-        grid_pen.setColor(QColor("#2A3138"))
-        axis_pen = QPen(QColor("#3B4650"), 1)
-        axis_pen.setCosmetic(True)
-
-        def map_x(value: float) -> float:
-            return plot_rect.left() + (value - x_min) / max(1e-9, x_max - x_min) * plot_rect.width()
-
-        def map_primary(value: float) -> float:
-            return plot_rect.bottom() - (value - primary_min) / max(1e-9, primary_max - primary_min) * plot_rect.height()
-
-        def map_secondary(value: float) -> float:
-            return plot_rect.bottom() - (value - secondary_min) / max(1e-9, secondary_max - secondary_min) * plot_rect.height()
-
-        painter.setFont(axis_font)
-        for value in primary_ticks:
-            y_pos = map_primary(value)
-            painter.setPen(grid_pen)
-            painter.drawLine(QLineF(plot_rect.left(), y_pos, plot_rect.right(), y_pos))
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.drawText(4, int(y_pos - 7), left_margin - 12, 14, Qt.AlignRight, self._format_axis_value(value, primary_span))
-        if self._secondary_series:
-            for value in secondary_ticks:
-                y_pos = map_secondary(value)
-                painter.setPen(QColor(QT_PALETTE["muted"]))
-                painter.drawText(
-                    int(plot_rect.right()) + 8,
-                    int(y_pos - 7),
-                    right_margin - 10,
-                    14,
-                    Qt.AlignLeft,
-                    self._format_axis_value(value, secondary_span),
-                )
-
-        for tick_value in x_ticks:
-            x_pos = map_x(tick_value)
-            painter.setPen(grid_pen)
-            painter.drawLine(QLineF(x_pos, plot_rect.top(), x_pos, plot_rect.bottom()))
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.drawText(
-                int(x_pos - 34),
-                int(plot_rect.bottom()) + 8,
-                68,
-                14,
-                Qt.AlignHCenter,
-                self._format_axis_value(tick_value, x_span),
-            )
-
-        painter.setPen(axis_pen)
-        painter.drawLine(QLineF(plot_rect.left(), plot_rect.bottom(), plot_rect.right(), plot_rect.bottom()))
-        painter.drawLine(QLineF(plot_rect.left(), plot_rect.top(), plot_rect.left(), plot_rect.bottom()))
-        if self._secondary_series:
-            painter.drawLine(QLineF(plot_rect.right(), plot_rect.top(), plot_rect.right(), plot_rect.bottom()))
-
-        painter.setPen(QColor(QT_PALETTE["text"]))
-        painter.setFont(axis_title_font)
-        painter.drawText(QRectF(plot_rect.left(), 9, plot_rect.width() * 0.52, 16), Qt.AlignLeft | Qt.AlignVCenter, self._primary_label)
-        if self._secondary_series:
-            painter.drawText(
-                QRectF(plot_rect.center().x(), 9, plot_rect.width() * 0.50, 16),
-                Qt.AlignRight | Qt.AlignVCenter,
-                self._secondary_label,
-            )
-        painter.setPen(QColor(QT_PALETTE["muted"]))
-        painter.setFont(axis_font)
-        painter.drawText(QRectF(plot_rect.left(), outer.bottom() - 20, plot_rect.width(), 16), Qt.AlignHCenter, self._x_label)
-
-        legend_x = int(plot_rect.left())
-        legend_y = 34
-        row_start_x = legend_x
-        max_legend_x = int(plot_rect.right())
-        painter.setFont(legend_font)
-        for series in all_series:
-            label_text = str(series["label"])
-            entry_width = max(92, legend_metrics.horizontalAdvance(label_text) + 38)
-            if legend_x > row_start_x and legend_x + entry_width > max_legend_x:
-                legend_x = row_start_x
-                legend_y += 18
-            pen_style = Qt.DashLine if series in self._secondary_series else Qt.SolidLine
-            legend_pen = QPen(QColor(str(series["color"])), 2.4, pen_style, Qt.RoundCap, Qt.RoundJoin)
-            legend_pen.setCosmetic(True)
-            painter.setPen(legend_pen)
-            painter.drawLine(legend_x, legend_y, legend_x + 16, legend_y)
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.drawText(legend_x + 22, legend_y - 8, entry_width - 22, 16, Qt.AlignLeft | Qt.AlignVCenter, label_text)
-            legend_x += entry_width
-
-        painter.setClipRect(plot_rect.adjusted(-2, -2, 2, 2))
-        for series in self._primary_series:
-            color = QColor(str(series["color"]))
-            pen = QPen(color, 2.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            points = list(series["points"])
-            if len(points) == 1:
-                point_x = map_x(points[0][0])
-                point_y = map_primary(points[0][1])
-                painter.setBrush(color)
-                painter.drawEllipse(QPointF(point_x, point_y), 3.2, 3.2)
-            else:
-                path = QPainterPath(QPointF(map_x(points[0][0]), map_primary(points[0][1])))
-                for x_value, y_value in points[1:]:
-                    path.lineTo(map_x(x_value), map_primary(y_value))
-                painter.drawPath(path)
-        for series in self._secondary_series:
-            color = QColor(str(series["color"]))
-            pen = QPen(color, 2.2, Qt.DashLine, Qt.RoundCap, Qt.RoundJoin)
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            points = list(series["points"])
-            if len(points) == 1:
-                point_x = map_x(points[0][0])
-                point_y = map_secondary(points[0][1])
-                painter.setBrush(color)
-                painter.drawEllipse(QPointF(point_x, point_y), 3.2, 3.2)
-            else:
-                path = QPainterPath(QPointF(map_x(points[0][0]), map_secondary(points[0][1])))
-                for x_value, y_value in points[1:]:
-                    path.lineTo(map_x(x_value), map_secondary(y_value))
-                painter.drawPath(path)
-        painter.setClipping(False)
+EngineeringPlotCanvas = MatplotlibEngineeringPlotCanvas
 
 
 class EngineeringPlotCard(QFrame):
@@ -726,200 +359,7 @@ class EngineeringPlotCard(QFrame):
         )
 
 
-class FlowFieldPlotCanvas(QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setMinimumHeight(330)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._axial_profile: List[Dict[str, object]] = []
-        self._variable = "mach"
-        self._variable_label = "Mach"
-        self._empty_message = "Run Solve to populate the 2D flow field."
-
-    def set_flow_data(
-        self,
-        axial_profile: List[Dict[str, object]],
-        *,
-        variable: str = "mach",
-        variable_label: str = "Mach",
-        empty_message: str = "Run Solve to populate the 2D flow field.",
-    ) -> None:
-        self._axial_profile = [
-            row for row in axial_profile
-            if _safe_float(row.get("x_mm")) is not None
-            and _safe_float(row.get("radius_mm")) is not None
-            and _safe_float(row.get(variable)) is not None
-        ]
-        self._variable = variable
-        self._variable_label = variable_label
-        self._empty_message = empty_message
-        self.update()
-
-    @staticmethod
-    def _mix_color(left: QColor, right: QColor, blend: float) -> QColor:
-        blend = max(0.0, min(1.0, blend))
-        return QColor(
-            round(left.red() + (right.red() - left.red()) * blend),
-            round(left.green() + (right.green() - left.green()) * blend),
-            round(left.blue() + (right.blue() - left.blue()) * blend),
-        )
-
-    @classmethod
-    def _field_color(cls, normalized_value: float) -> QColor:
-        stops = [
-            (0.00, QColor("#234A7A")),
-            (0.32, QColor("#2B8C7E")),
-            (0.58, QColor("#6FCF97")),
-            (0.78, QColor("#E0A94B")),
-            (1.00, QColor("#E76F51")),
-        ]
-        value = max(0.0, min(1.0, normalized_value))
-        for (left_pos, left_color), (right_pos, right_color) in zip(stops, stops[1:]):
-            if left_pos <= value <= right_pos:
-                return cls._mix_color(left_color, right_color, (value - left_pos) / max(1e-9, right_pos - left_pos))
-        return stops[-1][1]
-
-    def paintEvent(self, _event) -> None:  # pragma: no cover - GUI paint path
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
-        outer = self.rect().adjusted(0, 0, -1, -1)
-        painter.fillRect(outer, QColor("#11151A"))
-
-        profile = sorted(self._axial_profile, key=lambda row: float(row.get("x_mm", 0.0)))
-        if len(profile) < 2:
-            painter.setPen(QColor(QT_PALETTE["muted"]))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(outer, Qt.AlignCenter, self._empty_message)
-            return
-
-        x_values = [float(row.get("x_mm", 0.0)) for row in profile]
-        radius_values = [max(0.1, float(row.get("radius_mm", 0.0))) for row in profile]
-        field_values = [float(row.get(self._variable, 0.0)) for row in profile]
-        x_min = min(x_values)
-        x_max = max(x_values)
-        max_radius = max(radius_values)
-        actual_field_min = min(field_values)
-        actual_field_max = max(field_values)
-        if self._variable.lower() == "mach":
-            field_min = 0.0
-            field_max = max(2.5, actual_field_max)
-        else:
-            field_min = actual_field_min
-            field_max = actual_field_max
-            if abs(field_max - field_min) < 0.15:
-                center = 0.5 * (field_min + field_max)
-                field_min = center - 0.075
-                field_max = center + 0.075
-        if abs(field_max - field_min) < 1e-9:
-            field_max = field_min + 1.0
-
-        left_margin = 62
-        right_margin = 48
-        top_margin = 54
-        bottom_margin = 42
-        plot_rect = QRectF(
-            left_margin,
-            top_margin,
-            max(120.0, outer.width() - left_margin - right_margin),
-            max(110.0, outer.height() - top_margin - bottom_margin),
-        )
-        x_span = max(1e-9, x_max - x_min)
-        y_span = max(1e-9, 2.0 * max_radius)
-        radial_scale = plot_rect.height() / y_span
-        axial_scale = min(plot_rect.width() / x_span, radial_scale * 2.15)
-        field_width = x_span * axial_scale
-        field_height = y_span * radial_scale
-        field_rect = QRectF(
-            plot_rect.left() + max(0.0, (plot_rect.width() - field_width) * 0.5),
-            plot_rect.top() + max(0.0, (plot_rect.height() - field_height) * 0.5),
-            min(plot_rect.width(), field_width),
-            min(plot_rect.height(), field_height),
-        )
-        center_y = field_rect.center().y()
-
-        def map_x(value: float) -> float:
-            return field_rect.left() + (value - x_min) * axial_scale
-
-        def map_radius(value: float) -> float:
-            return value * radial_scale
-
-        def normalize_field(value: float) -> float:
-            return max(0.0, min(1.0, (value - field_min) / max(1e-9, field_max - field_min)))
-
-        painter.setPen(QPen(QColor("#27313A"), 1))
-        painter.setBrush(QColor("#0F1318"))
-        painter.drawRoundedRect(plot_rect.adjusted(-8, -10, 8, 10), 12, 12)
-        painter.setClipRect(plot_rect)
-
-        for first, second in zip(profile, profile[1:]):
-            x0 = map_x(float(first.get("x_mm", 0.0)))
-            x1 = map_x(float(second.get("x_mm", 0.0)))
-            r0 = map_radius(max(0.1, float(first.get("radius_mm", 0.0))))
-            r1 = map_radius(max(0.1, float(second.get("radius_mm", 0.0))))
-            left_color = self._field_color(normalize_field(float(first.get(self._variable, 0.0))))
-            right_color = self._field_color(normalize_field(float(second.get(self._variable, 0.0))))
-            left_color.setAlpha(216)
-            right_color.setAlpha(216)
-            segment_gradient = QLinearGradient(x0, 0.0, x1, 0.0)
-            segment_gradient.setColorAt(0.0, left_color)
-            segment_gradient.setColorAt(1.0, right_color)
-            path = QPainterPath(QPointF(x0, center_y - r0))
-            path.lineTo(x1, center_y - r1)
-            path.lineTo(x1, center_y + r1)
-            path.lineTo(x0, center_y + r0)
-            path.closeSubpath()
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(segment_gradient))
-            painter.drawPath(path)
-
-        painter.setClipping(False)
-        contour_top = QPainterPath(QPointF(map_x(x_values[0]), center_y - map_radius(radius_values[0])))
-        contour_bottom = QPainterPath(QPointF(map_x(x_values[0]), center_y + map_radius(radius_values[0])))
-        for x_value, radius in zip(x_values[1:], radius_values[1:]):
-            contour_top.lineTo(map_x(x_value), center_y - map_radius(radius))
-            contour_bottom.lineTo(map_x(x_value), center_y + map_radius(radius))
-        painter.setPen(QPen(QColor(QT_PALETTE["text"]), 1.4))
-        painter.drawPath(contour_top)
-        painter.drawPath(contour_bottom)
-
-        center_pen = QPen(QColor(QT_PALETTE["muted_soft"]), 1, Qt.DashLine)
-        center_pen.setCosmetic(True)
-        painter.setPen(center_pen)
-        painter.drawLine(QLineF(field_rect.left(), center_y, field_rect.right(), center_y))
-
-        throat_index = min(range(len(radius_values)), key=lambda index: radius_values[index])
-        throat_x = map_x(x_values[throat_index])
-        painter.setPen(QPen(QColor(QT_PALETTE["accent_hover"]), 1.4, Qt.DashLine))
-        painter.drawLine(QLineF(throat_x, field_rect.top(), throat_x, field_rect.bottom()))
-
-        label_font = QFont("Segoe UI", 8)
-        bold_font = QFont("Segoe UI", 8, QFont.Bold)
-        painter.setFont(bold_font)
-        painter.setPen(QColor(QT_PALETTE["text"]))
-        painter.drawText(QRectF(plot_rect.left(), 10, plot_rect.width(), 18), Qt.AlignLeft | Qt.AlignVCenter, self._variable_label)
-        painter.setFont(label_font)
-        painter.setPen(QColor(QT_PALETTE["muted"]))
-        painter.drawText(QRectF(field_rect.left(), outer.bottom() - 26, field_rect.width(), 18), Qt.AlignHCenter, "Axial position (mm)")
-        painter.drawText(QRectF(6, plot_rect.top(), left_margin - 14, plot_rect.height()), Qt.AlignRight | Qt.AlignVCenter, "Radius")
-        painter.drawText(QRectF(throat_x + 6, field_rect.top() + 6, 96, 18), Qt.AlignLeft | Qt.AlignVCenter, "Throat")
-
-        legend_width = min(180.0, max(120.0, field_rect.width() * 0.28))
-        legend_height = 10.0
-        legend_x = field_rect.right() - legend_width
-        legend_y = max(26.0, plot_rect.top() - 34.0)
-        legend_gradient = QLinearGradient(legend_x, legend_y, legend_x + legend_width, legend_y)
-        for stop in (0.0, 0.25, 0.50, 0.75, 1.0):
-            legend_gradient.setColorAt(stop, self._field_color(stop))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(legend_gradient))
-        painter.drawRect(QRectF(legend_x, legend_y, legend_width, legend_height))
-        painter.setPen(QColor(QT_PALETTE["muted"]))
-        painter.drawRect(QRectF(legend_x, legend_y, legend_width, legend_height))
-        painter.setFont(label_font)
-        painter.drawText(QRectF(legend_x - 74, legend_y - 3, 66, 16), Qt.AlignRight | Qt.AlignVCenter, self._variable_label)
-        painter.drawText(QRectF(legend_x, legend_y + 12, 68, 16), Qt.AlignLeft | Qt.AlignVCenter, _format_number(field_min, 2))
-        painter.drawText(QRectF(legend_x + legend_width - 68, legend_y + 12, 68, 16), Qt.AlignRight | Qt.AlignVCenter, _format_number(field_max, 2))
+FlowFieldPlotCanvas = MatplotlibFlowFieldPlotCanvas
 
 
 class FlowFieldPlotCard(QFrame):
@@ -3382,7 +2822,7 @@ class StanThrustQtWindow(QMainWindow):
         title = QLabel("Engineering Plots")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        body = QLabel("Transient, axial, and convergence views generated from the current reduced-order solve.")
+        body = QLabel("Transient, axial, thermal, and convergence views generated from the current coupled solve.")
         body.setObjectName("sectionBody")
         body.setWordWrap(True)
         layout.addWidget(body)
@@ -3410,7 +2850,7 @@ class StanThrustQtWindow(QMainWindow):
 
         self.flow_field_card = FlowFieldPlotCard(
             "2D Nozzle Flow Field",
-            "Mach-colored axisymmetric flow preview from the solved nozzle contour.",
+            "Mach-colored axisymmetric station field inside the calculated nozzle contour.",
         )
         grid.addWidget(self.flow_field_card, (len(definitions) + 1) // 2, 0, 1, 2)
 
@@ -4107,9 +3547,9 @@ class StanThrustQtWindow(QMainWindow):
             )
         if self.flow_field_card is not None:
             self.flow_field_card.set_flow_data(
-                subtitle="Run Solve to generate a Mach-colored nozzle flow preview.",
+                subtitle="Run Solve to generate the Mach-colored nozzle station field.",
                 axial_profile=[],
-                note="The 2D field uses the same solved axial stations as the line plots.",
+                note="The 2D field uses the same calculated axial stations as the line plots.",
             )
 
     def _pressure_plot_series(self, time_history: list) -> list:
@@ -4420,11 +3860,11 @@ class StanThrustQtWindow(QMainWindow):
         )
         if self.flow_field_card is not None:
             self.flow_field_card.set_flow_data(
-                subtitle="Mach-colored 2D flow preview from the calculated nozzle wall radius and axial station solve.",
+                subtitle="Mach-colored axisymmetric station field from the calculated wall radius and flow solution.",
                 axial_profile=axial_profile,
                 variable="mach",
                 variable_label="Mach field",
-                note="The field is an axisymmetric station visualization generated from the active flow model.",
+                note="Colors use the exact calculated station values with linear interpolation between stations. The throat and the station nearest M = 1 are marked explicitly.",
             )
 
     def _render_measurements(self) -> None:

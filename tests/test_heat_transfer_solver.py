@@ -1,5 +1,5 @@
-from stanshock.design_model import create_engine_design
-from stanshock.heat_transfer_solver import (
+from stanthrust.design_model import create_engine_design
+from stanthrust.heat_transfer_solver import (
     solve_coolant_side_heat_transfer,
     solve_gas_side_heat_transfer,
     solve_engine_heat_transfer,
@@ -94,4 +94,3 @@ def test_engine_heat_transfer_still_calculates_passive_wall_case():
     assert result["summary"]["regen_cooling_active"] is False
     assert result["summary"]["total_heat_load_kw"] > 0.0
     assert result["sections"][0]["heat_sink"] == "ambient"
-

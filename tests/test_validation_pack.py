@@ -9,10 +9,10 @@ import sys
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.design_model import create_engine_design
-from stanshock.inputs import get_default_solver_assumptions
-from stanshock.validation_pack import (
+from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.design_model import create_engine_design
+from stanthrust.inputs import get_default_solver_assumptions
+from stanthrust.validation_pack import (
     get_regression_baseline_cases,
     get_regression_baselines,
     validate_engine_design,

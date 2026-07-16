@@ -1,6 +1,6 @@
 """Tests for direct solver fidelity coordination."""
 
-from stanshock.fidelity_coordinator import (
+from stanthrust.fidelity_coordinator import (
     AdaptiveSamplingPool,
     CandidateAllocation,
     FidelityRouter,

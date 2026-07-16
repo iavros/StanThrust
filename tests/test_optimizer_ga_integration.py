@@ -3,15 +3,15 @@
 import pytest
 from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
-from stanshock.optimizer_hooks import (
+from stanthrust.optimizer_hooks import (
     build_optimizer_seed,
     run_genetic_optimizer,
     run_genetic_optimizer_with_fidelity,
     GeneticAlgorithmResult,
     _summarize_tier_usage,
 )
-from stanshock.design_model import create_engine_design
-import stanshock.qt_desktop as desktop_module
+from stanthrust.design_model import create_engine_design
+import stanthrust.qt_desktop as desktop_module
 
 
 class TestGAIntegrationBasics:

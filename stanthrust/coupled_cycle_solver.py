@@ -12,11 +12,11 @@ isolated subsystem values.
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.design_model import create_engine_design
-from stanshock.feed_pressure_drop_solver import solve as solve_feed_system
-from stanshock.inputs import get_default_solver_assumptions, lookup_propellant
-from stanshock.structural_material_solver import assign_materials, build_structural_materials_output
+from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.design_model import create_engine_design
+from stanthrust.feed_pressure_drop_solver import solve as solve_feed_system
+from stanthrust.inputs import get_default_solver_assumptions, lookup_propellant
+from stanthrust.structural_material_solver import assign_materials, build_structural_materials_output
 
 
 SOLVER_NAME = "Coupled Cycle Loop Solver"

@@ -5,9 +5,9 @@ from dataclasses import replace
 
 sys.path.insert(0, r"E:/StanThrust")
 
-from stanshock.combustion_cfd_solver import run_combustion_cfd_solver
-from stanshock.design_model import create_engine_design
-from stanshock.inputs import get_default_solver_assumptions
+from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.design_model import create_engine_design
+from stanthrust.inputs import get_default_solver_assumptions
 
 
 def test_flow_modes_emit_distinct_metadata_and_outputs():

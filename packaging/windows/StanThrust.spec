@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 project_root = Path.cwd()
 sys.path.insert(0, str(project_root))
-from stanshock import __version__ as APP_VERSION
+from stanthrust import __version__ as APP_VERSION
 
 asset_dir = project_root / "assets"
 icon_path = asset_dir / "app_icon.ico"
@@ -16,7 +16,7 @@ cantera_binaries = collect_dynamic_libs("cantera")
 analysis_datas = cantera_datas + [
     (str(asset_dir / "Logo.png"), "assets"),
     (str(asset_dir / "Logo.svg"), "assets"),
-    (str(project_root / "stanshock" / "data" / "rocket_mech_equilibrium.yaml"), "stanshock/data"),
+    (str(project_root / "stanthrust" / "data" / "rocket_mech_equilibrium.yaml"), "stanthrust/data"),
 ]
 if icon_path.exists():
     analysis_datas.append((str(icon_path), "."))
@@ -24,6 +24,8 @@ if icon_path.exists():
 analysis_hiddenimports = [
     *collect_submodules("cantera"),
     "cantera",
+    "matplotlib.backends.backend_agg",
+    "matplotlib.backends.backend_qt5agg",
 ]
 
 block_cipher = None
@@ -40,7 +42,6 @@ a = Analysis(
     excludes=[
         "pytest",
         "tests",
-        "matplotlib",
         "pandas",
         "IPython",
         "jupyter",

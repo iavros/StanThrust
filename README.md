@@ -29,11 +29,11 @@ Python 3.11 is the supported development runtime. Cantera is required; the solve
 
 Each solve follows one shared engineering pipeline:
 
-1. Normalize the mission, packaging, propellant, material, and solver inputs from `stanshock/inputs.py`.
-2. Close the engine geometry and chamber-pressure state in `stanshock/design_model.py`.
+1. Normalize the mission, packaging, propellant, material, and solver inputs from `stanthrust/inputs.py`.
+2. Close the engine geometry and chamber-pressure state in `stanthrust/design_model.py`.
 3. Solve the pump-fed or pressure-fed transient and verify pressure margin.
 4. Obtain equilibrium thermochemistry from Cantera and construct the MOC nozzle contour.
-5. Run the chamber/nozzle station solve, shock feedback, and final Navier-Stokes viscous correction in `stanshock/combustion_cfd_solver.py`.
+5. Run the chamber/nozzle station solve, shock feedback, and final Navier-Stokes viscous correction in `stanthrust/combustion_cfd_solver.py`.
 6. Evaluate wall heat transfer, material stress, redesign requirements, and final uncertainty bounds.
 7. Send the same solved geometry and station fields to the desktop plots, 3D views, saved projects, and exports.
 
@@ -52,7 +52,7 @@ The desktop final pass always uses the most detailed flow path with at least 180
 - Material stress, thermal-margin, and redesign recommendations.
 - Pressure-fed and pump-fed transient feed histories.
 - Live calculated-geometry 3D views for chamber/nozzle, injector, pumps, tanks, regen ribs, and film slots.
-- Engineering plots, 2D flow-field visualization, measurements, diagnostics, and CSV/DXF exports.
+- Matplotlib engineering plots, a sonic-centered axisymmetric Mach field, measurements, diagnostics, and CSV/DXF exports.
 - Direct real-engine benchmark reconstructions, with no optimizer fitting, to compare solver output against published operating points.
 - GitHub Actions release builds for Windows and macOS installer artifacts.
 
@@ -75,13 +75,13 @@ The report source is Overleaf-ready and uses generated CSV tables from the same 
 ## Repository Layout
 
 - `app.py`: desktop entry point
-- `stanshock/inputs.py`: defaults, selectable inputs, catalogs, and solver assumptions
-- `stanshock/design_model.py`: coupled engine sizing and solved geometry
-- `stanshock/combustion_cfd_solver.py`: all chamber and nozzle CFD functions
-- `stanshock/*_solver.py`: focused feed, thermal, structural, MOC, and shock solvers
-- `stanshock/uncertainty.py`: uncertainty bounds and output provenance
-- `stanshock/qt_desktop.py`: desktop interface and calculated-geometry rendering
-- `stanshock/data/`: bundled thermochemistry mechanism files
+- `stanthrust/inputs.py`: defaults, selectable inputs, catalogs, and solver assumptions
+- `stanthrust/design_model.py`: coupled engine sizing and solved geometry
+- `stanthrust/combustion_cfd_solver.py`: all chamber and nozzle CFD functions
+- `stanthrust/*_solver.py`: focused feed, thermal, structural, MOC, and shock solvers
+- `stanthrust/uncertainty.py`: uncertainty bounds and output provenance
+- `stanthrust/qt_desktop.py`: desktop interface and calculated-geometry rendering
+- `stanthrust/data/`: bundled thermochemistry mechanism files
 - `assets/`: icons and application artwork
 - `docs/`: solver report source, PDF, and generated datasets
 - `packaging/`: CI-facing Windows and macOS packaging scripts

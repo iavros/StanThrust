@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from stanshock import __version__ as APP_VERSION
+from stanthrust import __version__ as APP_VERSION
 
 APP_NAME = "StanThrust"
 INSTALLER_EXE_NAME = f"{APP_NAME}-Installer.exe"

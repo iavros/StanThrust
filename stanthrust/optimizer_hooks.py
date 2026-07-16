@@ -2,11 +2,11 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from stanshock.inputs import DEFAULT_OBJECTIVE_WEIGHTS
-from stanshock.design_model import EngineDesign, create_engine_design
-from stanshock.fidelity_coordinator import AdaptiveSamplingPool, FidelityRouter
-from stanshock.objectives import evaluate_objectives, normalize_objective_weights
-from stanshock.validation_pack import validate_engine_design
+from stanthrust.inputs import DEFAULT_OBJECTIVE_WEIGHTS
+from stanthrust.design_model import EngineDesign, create_engine_design
+from stanthrust.fidelity_coordinator import AdaptiveSamplingPool, FidelityRouter
+from stanthrust.objectives import evaluate_objectives, normalize_objective_weights
+from stanthrust.validation_pack import validate_engine_design
 
 
 PACKAGING_BIAS_OPTIONS = ["balanced", "compact", "serviceable"]

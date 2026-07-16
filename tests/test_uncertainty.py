@@ -1,6 +1,6 @@
 """Tests for uncertainty and provenance outputs."""
 
-from stanshock.uncertainty import (
+from stanthrust.uncertainty import (
     ProvenanceField,
     UncertaintyBand,
     build_uncertainty_summary,

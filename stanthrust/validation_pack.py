@@ -9,8 +9,8 @@ EngineDesign object or raw solver outputs.
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
-from stanshock.benchmark_cases import get_internal_baseline_cases
-from stanshock.design_model import EngineDesign
+from stanthrust.benchmark_cases import get_internal_baseline_cases
+from stanthrust.design_model import EngineDesign
 
 
 @dataclass(frozen=True)
