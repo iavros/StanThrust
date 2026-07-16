@@ -78,8 +78,11 @@ def _self_test_desktop() -> int:
     trace("field-rendered")
     print("Desktop plotting: ok (Matplotlib QtAgg)")
     sys.stdout.flush()
-    if getattr(sys, "frozen", False):
-        os._exit(0)
+    line_plot.close()
+    flow_field.close()
+    application.processEvents()
+    application.quit()
+    trace("shutdown-complete")
     return 0
 
 
