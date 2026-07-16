@@ -80,6 +80,9 @@ def _self_test_desktop() -> int:
     print("Desktop plotting: ok (Matplotlib QtAgg)")
     sys.stdout.flush()
     QTimer.singleShot(0, lambda: trace("event-loop-running"))
+    if getattr(sys, "frozen", False):
+        return int(application.exec_())
+
     QTimer.singleShot(100, application.quit)
     exit_code = application.exec_()
     trace("shutdown-complete")

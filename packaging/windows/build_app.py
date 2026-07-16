@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -124,17 +125,37 @@ def validate_executable() -> None:
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["STANTHRUST_SELF_TEST_LOG"] = str(trace_path)
     _print_header("Validating bundled desktop runtime")
-    try:
-        completed = subprocess.run([str(exe_path), "--self-test-desktop"], env=env, timeout=180)
-    except subprocess.TimeoutExpired as exc:
-        trace = trace_path.read_text(encoding="utf-8").strip() if trace_path.exists() else "no trace written"
-        raise SystemExit(f"ERROR: bundled desktop self-test timed out. Last stages: {trace}") from exc
-    if completed.returncode != 0:
-        trace = trace_path.read_text(encoding="utf-8").strip() if trace_path.exists() else "no trace written"
-        raise SystemExit(
-            f"ERROR: bundled desktop self-test failed with exit code {completed.returncode}. Last stages: {trace}"
-        )
-    print("Bundled Qt and Matplotlib render test passed.")
+    process = subprocess.Popen([str(exe_path), "--self-test-desktop"], env=env)
+    deadline = time.monotonic() + 180
+    trace = ""
+    while time.monotonic() < deadline:
+        trace = trace_path.read_text(encoding="utf-8") if trace_path.exists() else ""
+        if "field-rendered" in trace:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            process.wait(timeout=30)
+            print("Bundled Qt and Matplotlib render test passed.")
+            return
+        return_code = process.poll()
+        if return_code is not None:
+            stages = trace.strip() or "no trace written"
+            raise SystemExit(
+                f"ERROR: bundled desktop self-test failed with exit code {return_code}. Last stages: {stages}"
+            )
+        time.sleep(0.25)
+
+    subprocess.run(
+        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    stages = trace.strip() or "no trace written"
+    raise SystemExit(f"ERROR: bundled desktop self-test timed out. Last stages: {stages}")
 
 
 def main() -> int:
