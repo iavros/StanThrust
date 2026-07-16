@@ -46,6 +46,7 @@ def _self_test_desktop() -> int:
     trace(f"matplotlib-core-imported-{matplotlib.__version__}")
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
     trace(f"qt5agg-imported-{FigureCanvasQTAgg.__name__}")
+    from PyQt5.QtCore import QTimer
     from PyQt5.QtWidgets import QApplication
     trace("pyqt-imported")
     from stanthrust.plotting import EngineeringPlotCanvas, FlowFieldPlotCanvas
@@ -78,12 +79,11 @@ def _self_test_desktop() -> int:
     trace("field-rendered")
     print("Desktop plotting: ok (Matplotlib QtAgg)")
     sys.stdout.flush()
-    line_plot.close()
-    flow_field.close()
-    application.processEvents()
-    application.quit()
+    QTimer.singleShot(0, lambda: trace("event-loop-running"))
+    QTimer.singleShot(100, application.quit)
+    exit_code = application.exec_()
     trace("shutdown-complete")
-    return 0
+    return int(exit_code)
 
 
 def main() -> int:
