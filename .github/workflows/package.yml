@@ -15,10 +15,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -39,7 +39,7 @@ jobs:
         run: python packaging\windows\build_installer.py
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: StanThrust-windows
           path: dist/installer/*
@@ -49,10 +49,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -69,7 +69,7 @@ jobs:
         run: python packaging/macos/build_installer.py
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: StanThrust-macos
           path: dist/installer/*
@@ -83,13 +83,32 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-assets
           merge-multiple: true
+
+      - name: Build release notes from the changelog
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          version="${TAG_NAME#v}"
+          {
+            echo "Installers for Windows and macOS are attached below. The"
+            echo "application can also update itself from Help > Check for Updates."
+            echo
+            echo "Supported runtimes for running from source: Python 3.11 to 3.13."
+            echo
+            awk -v v="$version" '
+              $0 ~ "^## " v "( |$)" { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md
+          } > release-notes.md
+          test -s release-notes.md || echo "StanThrust $TAG_NAME" > release-notes.md
 
       - name: Publish release assets
         env:
@@ -97,5 +116,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release view "$TAG_NAME" >/dev/null 2>&1 || gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "StanThrust $TAG_NAME" --prerelease
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "StanThrust ${TAG_NAME#v}" --notes-file release-notes.md --latest
+          else
+            gh release create "$TAG_NAME" --title "StanThrust ${TAG_NAME#v}" --notes-file release-notes.md --latest
+          fi
           gh release upload "$TAG_NAME" release-assets/* --clobber
