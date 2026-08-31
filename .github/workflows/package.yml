@@ -13,8 +13,6 @@ jobs:
   windows:
     name: Windows Installer
     runs-on: windows-latest
-    env:
-      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,6 +21,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install Python dependencies
         run: |
@@ -34,7 +33,7 @@ jobs:
         run: choco install innosetup --yes --no-progress
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest
 
       - name: Build Windows installer
         run: python packaging\windows\build_installer.py
@@ -48,8 +47,6 @@ jobs:
   macos:
     name: macOS DMG
     runs-on: macos-latest
-    env:
-      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +55,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install Python dependencies
         run: |
@@ -65,7 +63,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest
 
       - name: Build macOS DMG
         run: python packaging/macos/build_installer.py

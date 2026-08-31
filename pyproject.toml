@@ -1,0 +1,53 @@
+# Tool configuration only. Runtime dependencies live in requirements.txt, which
+# is what CI, the packaging scripts, and the in-app error messages point at.
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    # Line length is a review concern here, not a build gate.
+    "E501",
+    # Qt constructors are routinely used as argument defaults.
+    "B008",
+    # The solver closures are called inside the same loop iteration that
+    # defines them, so late binding cannot change the result.
+    "B023",
+    # zip() strictness would have to be decided per call site.
+    "B905",
+    # The codebase formats with str.format and annotates with typing.Dict and
+    # typing.List throughout; keep new code consistent with it.
+    "UP006",
+    "UP030",
+    "UP032",
+    "UP035",
+    "UP045",
+    # str-and-Enum mixins keep the fidelity tiers JSON serialisable.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These scripts must extend sys.path before importing the package.
+"docs/generate_assets.py" = ["E402"]
+"packaging/*/build_installer.py" = ["E402"]
+# Matplotlib needs QT_API set before its Qt backend is imported.
+"stanthrust/plotting.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stanthrust"]

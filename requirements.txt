@@ -1,8 +1,11 @@
-pytest
-PyQt5
-pyinstaller
-pillow
-cantera
+# Runtime
+PyQt5>=5.15,<6
 matplotlib>=3.10,<3.11
 numpy>=2.0,<2.4
+cantera>=3.0
+CoolProp>=7.1,<8.1
 
+# Test and packaging
+pytest>=7.0
+pyinstaller>=6.0
+pillow>=10.0

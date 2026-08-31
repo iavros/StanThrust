@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_NAME = "StanThrust"
 ENTRY_POINT = PROJECT_ROOT / "app.py"

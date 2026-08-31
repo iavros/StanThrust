@@ -1,0 +1,7 @@
+# Treat generated report assets and image files as binary.
+*.pdf   binary
+*.png   binary
+*.ico   binary
+*.icns  binary
+*.dmg   binary
+*.zip   binary
