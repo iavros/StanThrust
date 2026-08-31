@@ -1,13 +1,10 @@
 """Regression tests for the transient feed-system model."""
 
-import sys
 from dataclasses import asdict
 
-sys.path.insert(0, r"E:/StanThrust")
-
-from stanthrust.inputs import DEFAULT_STATE
 from stanthrust.design_model import create_engine_design
 from stanthrust.exporter import build_cad_export_payload
+from stanthrust.inputs import DEFAULT_STATE
 from stanthrust.solver_interface import solve as solve_solver_interface
 
 
@@ -20,8 +17,8 @@ def test_pressure_fed_transient_history_has_blowdown_and_tailoff():
     summary = feed_result["payload"]["summary"]
     rows = feed_result["payload"]["time_history_rows"]
 
-    assert feed_result["metadata"]["solver_mode"] == "stage-2-transient-feed-v1"
-    assert summary["quality_flag"] == "stage-2-transient-feed-v2-iterative-darcy"
+    assert feed_result["metadata"]["solver_mode"] == "hydraulic-chamber-v1"
+    assert summary["quality_flag"] == "hydraulic-chamber-closure-v1"
     assert len(rows) == int(summary["history_step_count"])
     assert len(rows) >= 11
     assert abs(float(rows[0]["time_s"])) <= 1e-9
@@ -73,31 +70,4 @@ def test_export_payload_carries_feed_transient_history():
     history = payload["solver"]["stage_2_feed_transient_history"]
     assert isinstance(history, list)
     assert len(history) == len(solver_result["payload"]["feed_pressure_drop"]["payload"]["time_history_rows"])
-    assert payload["solver"]["stage_2_feed_pressure_drop"]["solver_mode"] == "stage-2-transient-feed-v1"
-
-
-def run_all_tests():
-    tests = [
-        test_pressure_fed_transient_history_has_blowdown_and_tailoff,
-        test_pump_fed_transient_history_tracks_pump_state,
-        test_export_payload_carries_feed_transient_history,
-    ]
-    passed = 0
-    failed = 0
-    for test_func in tests:
-        try:
-            test_func()
-            passed += 1
-            print(f"[ok] {test_func.__name__} passed")
-        except AssertionError as exc:
-            failed += 1
-            print(f"[fail] {test_func.__name__} failed: {exc}")
-        except Exception as exc:
-            failed += 1
-            print(f"[error] {test_func.__name__} error: {exc}")
-    print(f"\nTransient Feed Tests: {passed} passed, {failed} failed out of {len(tests)} total.")
-    return failed == 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(0 if run_all_tests() else 1)
+    assert payload["solver"]["stage_2_feed_pressure_drop"]["solver_mode"] == "hydraulic-chamber-v1"

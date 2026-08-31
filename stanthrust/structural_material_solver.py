@@ -1,14 +1,18 @@
+"""Temperature-dependent material allowables, stress margins, and redesign advice."""
+
 from typing import Any, Dict, List, Optional
 
 from stanthrust.design_model import (
-    MATERIAL_ALLOWABLE_STRESS_MPA,
-    MATERIAL_TEMPERATURE_LIMIT_K,
     clamp,
     create_engine_design,
 )
-from stanthrust.heat_transfer_solver import MATERIAL_THERMAL_CONDUCTIVITY_W_M_K
 from stanthrust.inputs import MATERIAL_OPTIONS
-
+from stanthrust.material_properties import (
+    MATERIAL_ALLOWABLE_STRESS_MPA,
+    MATERIAL_TEMPERATURE_LIMIT_K,
+    material_property_state,
+    material_thermal_conductivity,
+)
 
 SOLVER_NAME = "Structural Material Solver"
 SOLVER_VERSION = "0.3"
@@ -95,19 +99,6 @@ def _safe_float(value: Any, fallback: float = 0.0) -> float:
     return numeric if numeric == numeric else fallback
 
 
-def _temperature_derating(wall_temperature_k: float, temperature_limit_k: float) -> float:
-    if wall_temperature_k <= 0.55 * temperature_limit_k:
-        return 1.0
-    if wall_temperature_k <= temperature_limit_k:
-        progress = (wall_temperature_k - 0.55 * temperature_limit_k) / max(
-            1e-6,
-            0.45 * temperature_limit_k,
-        )
-        return clamp(1.0 - 0.55 * progress, 0.45, 1.0)
-    over_limit_ratio = wall_temperature_k / max(1e-6, temperature_limit_k)
-    return clamp(0.45 / max(1.0, over_limit_ratio), 0.12, 0.45)
-
-
 def _hoop_stress_mpa(pressure_kpa: float, diameter_mm: float, wall_thickness_mm: float) -> float:
     radius_m = max(1e-6, diameter_mm / 2000.0)
     thickness_m = max(1e-6, wall_thickness_mm / 1000.0)
@@ -132,7 +123,7 @@ def _heat_sections(combustion_result: Optional[Dict[str, object]]) -> Dict[str, 
     if not isinstance(combustion_result, dict):
         return {}
     heat_transfer = _as_dict(combustion_result.get("heat_transfer"))
-    sections = heat_transfer.get("sections", [])
+    sections = heat_transfer.get("section_envelopes", heat_transfer.get("sections", []))
     if not isinstance(sections, list):
         return {}
     return {str(section.get("name", "")).strip().lower(): section for section in sections if isinstance(section, dict)}
@@ -144,7 +135,7 @@ def _wall_state_from_heat_section(
     wall_thickness_mm: float,
     fallback_wall_temperature_k: float,
 ) -> Dict[str, float]:
-    conductivity = MATERIAL_THERMAL_CONDUCTIVITY_W_M_K.get(material_name, 16.0)
+    conductivity = material_thermal_conductivity(material_name, fallback_wall_temperature_k)
     if not heat_section:
         return {
             "hot_wall_temperature_k": fallback_wall_temperature_k,
@@ -164,11 +155,23 @@ def _wall_state_from_heat_section(
         heat_section.get("coolant_inlet_temperature_k"),
         _safe_float(heat_section.get("cold_wall_temperature_k"), 293.0),
     )
-    wall_resistance = max(1e-6, wall_thickness_mm / 1000.0) / max(1e-6, conductivity)
-    total_resistance = 1.0 / gas_h + wall_resistance + 1.0 / coolant_h
-    heat_flux_w_m2 = max(0.0, (recovery_temperature_k - sink_temperature_k) / max(1e-9, total_resistance))
-    hot_wall_temperature_k = recovery_temperature_k - heat_flux_w_m2 / gas_h
-    cold_wall_temperature_k = sink_temperature_k + heat_flux_w_m2 / coolant_h
+    hot_wall_temperature_k = fallback_wall_temperature_k
+    cold_wall_temperature_k = sink_temperature_k
+    heat_flux_w_m2 = 0.0
+    for _ in range(6):
+        wall_resistance = max(1e-6, wall_thickness_mm / 1000.0) / max(1e-6, conductivity)
+        total_resistance = 1.0 / gas_h + wall_resistance + 1.0 / coolant_h
+        heat_flux_w_m2 = max(0.0, (recovery_temperature_k - sink_temperature_k) / max(1e-9, total_resistance))
+        hot_wall_temperature_k = recovery_temperature_k - heat_flux_w_m2 / gas_h
+        cold_wall_temperature_k = sink_temperature_k + heat_flux_w_m2 / coolant_h
+        updated = material_thermal_conductivity(
+            material_name,
+            0.5 * (hot_wall_temperature_k + cold_wall_temperature_k),
+        )
+        if abs(updated - conductivity) <= 1e-5 * max(1.0, conductivity):
+            conductivity = updated
+            break
+        conductivity = 0.5 * (conductivity + updated)
     diameter_mm = max(0.1, _safe_float(heat_section.get("diameter_mm"), 0.0))
     length_mm = max(0.1, _safe_float(heat_section.get("length_mm"), 0.0))
     area_m2 = 3.141592653589793 * diameter_mm / 1000.0 * length_mm / 1000.0
@@ -191,7 +194,6 @@ def _material_eval(
     fallback_wall_temperature_k: float,
     heat_section: Optional[Dict[str, object]],
 ) -> Dict[str, object]:
-    allowable_stress_mpa = MATERIAL_ALLOWABLE_STRESS_MPA.get(material_name, 105.0)
     temperature_limit_k = MATERIAL_TEMPERATURE_LIMIT_K.get(material_name, 700.0)
     wall_state = _wall_state_from_heat_section(
         heat_section,
@@ -200,10 +202,13 @@ def _material_eval(
         fallback_wall_temperature_k,
     )
     hot_wall_temperature_k = wall_state["hot_wall_temperature_k"]
-    derating = _temperature_derating(hot_wall_temperature_k, temperature_limit_k)
-    derated_allowable_stress_mpa = allowable_stress_mpa * derating
+    property_state = material_property_state(material_name, hot_wall_temperature_k)
+    allowable_stress_mpa = MATERIAL_ALLOWABLE_STRESS_MPA[material_name]
+    derated_allowable_stress_mpa = float(property_state["allowable_stress_mpa"])
+    conservative_allowable_stress_mpa = float(property_state["allowable_stress_lower_mpa"])
+    derating = derated_allowable_stress_mpa / max(1e-9, allowable_stress_mpa)
     hoop_stress_mpa = _hoop_stress_mpa(pressure_kpa, diameter_mm, wall_thickness_mm)
-    stress_margin_ratio = derated_allowable_stress_mpa / max(
+    stress_margin_ratio = conservative_allowable_stress_mpa / max(
         1e-6,
         hoop_stress_mpa * max(1.0, factor_of_safety),
     )
@@ -213,7 +218,7 @@ def _material_eval(
     required_wall_thickness_mm = _required_wall_thickness_mm(
         pressure_kpa,
         diameter_mm,
-        derated_allowable_stress_mpa,
+        conservative_allowable_stress_mpa,
         factor_of_safety,
     )
     status = "pass" if combined_margin_ratio >= 1.0 else "redesign-required"
@@ -230,6 +235,10 @@ def _material_eval(
         "allowable_stress_mpa": round(allowable_stress_mpa, 4),
         "temperature_derating_factor": round(derating, 6),
         "temperature_derated_allowable_stress_mpa": round(derated_allowable_stress_mpa, 4),
+        "temperature_derated_allowable_lower_mpa": round(conservative_allowable_stress_mpa, 4),
+        "temperature_derated_allowable_upper_mpa": round(
+            float(property_state["allowable_stress_upper_mpa"]), 4
+        ),
         "thermal_conductivity_w_m_k": round(wall_state["conductivity_w_m_k"], 4),
         "temperature_limit_k": round(temperature_limit_k, 4),
         "hot_wall_temperature_k": round(hot_wall_temperature_k, 4),
@@ -243,6 +252,11 @@ def _material_eval(
         "combined_margin_ratio": round(combined_margin_ratio, 6),
         "required_wall_thickness_mm": round(required_wall_thickness_mm, 4),
         "recommended_wall_thickness_mm": round(max(wall_thickness_mm, required_wall_thickness_mm), 4),
+        "property_data_in_range": bool(property_state["in_property_range"]),
+        "property_source": property_state["source"],
+        "property_source_url": property_state["source_url"],
+        "property_provenance": property_state["provenance"],
+        "property_uncertainty_fraction": property_state["uncertainty_fraction"],
         "status": status,
     }
 

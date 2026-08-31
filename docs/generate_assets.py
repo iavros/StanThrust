@@ -1,9 +1,10 @@
-from dataclasses import asdict, replace
-from pathlib import Path
+"""Regenerate the solver report datasets and LaTeX macros from the solvers."""
+
 import csv
 import site
 import sys
-
+from dataclasses import asdict, replace
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORT_ROOT = Path(__file__).resolve().parent
@@ -26,15 +27,19 @@ _add_user_site()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
 from stanthrust.benchmark_cases import (
     build_internal_baseline_rows,
     build_public_benchmark_reference_rows,
     build_reconstructed_benchmark_rows,
 )
+from stanthrust.chamber_nozzle_solver import solve_chamber_nozzle_flow
 from stanthrust.design_model import _solve_pressure_state, create_engine_design
 from stanthrust.inputs import DEFAULT_STATE, get_default_solver_assumptions
 from stanthrust.solver_interface import solve as solve_solver_interface
+from stanthrust.thermal_validation import (
+    evaluate_nasa_tp2726_bell_nozzle,
+    evaluate_nasa_tp3380_calorimeter,
+)
 from stanthrust.thermochemistry_provider import CanteraThermochemistryProvider
 
 
@@ -77,24 +82,11 @@ def write_macros(path: Path, macros) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build_default_case():
-    state = asdict(DEFAULT_STATE)
-    design = create_engine_design(state)
-    assumptions = get_default_solver_assumptions()
-    combustion = run_combustion_cfd_solver(
-        design,
-        assumptions,
-        station_count=25,
-        thermochemistry_mode="auto",
-    )
-    return state, design, assumptions, combustion
-
-
 def build_case_for_flow_model(flow_model: str):
     state = asdict(DEFAULT_STATE)
     design = create_engine_design(state)
     assumptions = replace(get_default_solver_assumptions(), flow_model=flow_model)
-    combustion = run_combustion_cfd_solver(
+    combustion = solve_chamber_nozzle_flow(
         design,
         assumptions,
         station_count=25,
@@ -133,13 +125,13 @@ def build_feed_transient_case_rows(use_pumps: bool):
     return rows, summary
 
 
-def build_flow_mode_comparison_rows(design, fast_combustion, refined_combustion, navier_stokes_combustion):
+def build_flow_mode_comparison_rows(design, fast_combustion, refined_combustion, viscous_combustion):
     values = design.derived.engineering_values
     rows = []
     for mode_name, result in (
         ("fast", fast_combustion),
         ("refined", refined_combustion),
-        ("navier_stokes", navier_stokes_combustion),
+        ("viscous", viscous_combustion),
     ):
         summary = result["summary"]
         nozzle = result["physics"]["nozzle"]
@@ -367,7 +359,7 @@ def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     state, design, _, fast_combustion = build_case_for_flow_model("fast")
     _, _, _, refined_combustion = build_case_for_flow_model("refined")
-    _, _, assumptions, combustion = build_case_for_flow_model("navier_stokes")
+    _, _, assumptions, combustion = build_case_for_flow_model("viscous")
     pressure_fed_transient_rows, pressure_fed_transient_summary = build_feed_transient_case_rows(False)
     pump_fed_transient_rows, pump_fed_transient_summary = build_feed_transient_case_rows(True)
     values = design.derived.engineering_values
@@ -657,9 +649,95 @@ def main() -> None:
         build_individual_benchmark_run_rows(reconstructed_rows),
     )
 
+    thermal_validation = evaluate_nasa_tp3380_calorimeter()
+    thermal_validation_rows = []
+    for index, row in enumerate(thermal_validation["predictions"], start=1):
+        thermal_validation_rows.append(
+            {
+                "case_index": index,
+                "case_id": row["case_id"],
+                "mixture_ratio": round(float(row["mixture_ratio"]), 3),
+                "chamber_pressure_bar": round(float(row["chamber_pressure_bar"]), 4),
+                "hot_wall_temperature_k": round(float(row["hot_wall_temperature_k"]), 3),
+                "measured_heat_flux_mw_m2": round(float(row["measured_throat_heat_flux_mw_m2"]), 4),
+                "predicted_heat_flux_mw_m2": round(float(row["predicted_throat_heat_flux_mw_m2"]), 4),
+                "predicted_lower_mw_m2": round(float(row["predicted_lower_mw_m2"]), 4),
+                "predicted_upper_mw_m2": round(float(row["predicted_upper_mw_m2"]), 4),
+                "absolute_percent_error": round(float(row["absolute_percent_error"]), 3),
+                "inside_interval": "yes" if row["inside_correlation_interval"] else "no",
+            }
+        )
+    write_csv(
+        DATA_DIR / "thermal_calorimeter_validation.csv",
+        [
+            "case_index",
+            "case_id",
+            "mixture_ratio",
+            "chamber_pressure_bar",
+            "hot_wall_temperature_k",
+            "measured_heat_flux_mw_m2",
+            "predicted_heat_flux_mw_m2",
+            "predicted_lower_mw_m2",
+            "predicted_upper_mw_m2",
+            "absolute_percent_error",
+            "inside_interval",
+        ],
+        thermal_validation_rows,
+    )
+
+    bell_validation = evaluate_nasa_tp2726_bell_nozzle()
+    bell_validation_rows = []
+    for row in bell_validation["predictions"]:
+        bell_validation_rows.append(
+            {
+                "area_ratio": round(float(row["area_ratio"]), 3),
+                "x_m": round(float(row["x_m"]), 5),
+                "mach": round(float(row["mach"]), 5),
+                "wall_temperature_k": round(float(row["inner_wall_temperature_k"]), 3),
+                "measured_heat_flux_kw_m2": round(float(row["measured_heat_flux_kw_m2"]), 4),
+                "predicted_heat_flux_kw_m2": round(float(row["predicted_heat_flux_kw_m2"]), 4),
+                "predicted_lower_kw_m2": round(float(row["predicted_lower_kw_m2"]), 4),
+                "predicted_upper_kw_m2": round(float(row["predicted_upper_kw_m2"]), 4),
+                "absolute_percent_error": round(float(row["absolute_percent_error"]), 3),
+                "acceleration_parameter_million": round(
+                    float(row["acceleration_parameter"]) * 1e6, 5
+                ),
+                "relaminarization_risk": "yes" if row["relaminarization_risk"] else "no",
+                "boundary_layer_regime": row["boundary_layer_regime"],
+                "momentum_thickness_reynolds": round(
+                    float(row["momentum_thickness_reynolds"]), 3
+                ),
+                "wall_normal_node_count": int(row["wall_normal_node_count"]),
+                "thermal_grid_error_percent": round(
+                    float(row["thermal_grid_refinement_error_percent"]), 3
+                ),
+            }
+        )
+    write_csv(
+        DATA_DIR / "thermal_bell_nozzle_validation.csv",
+        [
+            "area_ratio",
+            "x_m",
+            "mach",
+            "wall_temperature_k",
+            "measured_heat_flux_kw_m2",
+            "predicted_heat_flux_kw_m2",
+            "predicted_lower_kw_m2",
+            "predicted_upper_kw_m2",
+            "absolute_percent_error",
+            "acceleration_parameter_million",
+            "relaminarization_risk",
+            "boundary_layer_regime",
+            "momentum_thickness_reynolds",
+            "wall_normal_node_count",
+            "thermal_grid_error_percent",
+        ],
+        bell_validation_rows,
+    )
+
     macros = {
         "SampleFuel": state["fuel_name"],
-        "SampleFlowMode": str(summary.get("flow_model_label", "Cantera plus Navier-Stokes design solve")),
+        "SampleFlowMode": str(summary.get("flow_model_label", "Cantera plus viscous quasi-1D correction")),
         "SampleOxidizer": state["oxidizer_name"],
         "SampleMixtureRatio": "{0:.2f}".format(state["mixture_ratio"]),
         "SampleTargetThrust": "{0:.1f}".format(state["target_thrust_newtons"]),
@@ -698,6 +776,54 @@ def main() -> None:
         ),
         "SamplePumpFedFeedDrift": "{0:.2f}".format(
             float(pump_fed_transient_summary.get("chamber_pressure_drift_percent", 0.0))
+        ),
+        "ThermalValidationCaseCount": str(thermal_validation["case_count"]),
+        "ThermalValidationMeanError": "{0:.2f}".format(thermal_validation["mean_absolute_percent_error"]),
+        "ThermalValidationMedianError": "{0:.2f}".format(thermal_validation["median_absolute_percent_error"]),
+        "ThermalValidationNinetyFifthError": "{0:.2f}".format(thermal_validation["p95_absolute_percent_error"]),
+        "ThermalValidationMaxError": "{0:.2f}".format(thermal_validation["maximum_absolute_percent_error"]),
+        "ThermalValidationCoverage": "{0:.0f}".format(
+            100.0 * thermal_validation["correlation_interval_coverage_fraction"]
+        ),
+        "BellThermalValidationCaseCount": str(bell_validation["case_count"]),
+        "BellThermalValidationExcludedCount": str(
+            bell_validation["excluded_measurement_count"]
+        ),
+        "BellThermalValidationMeanError": "{0:.2f}".format(
+            bell_validation["mean_absolute_percent_error"]
+        ),
+        "BellThermalValidationMedianError": "{0:.2f}".format(
+            bell_validation["median_absolute_percent_error"]
+        ),
+        "BellThermalValidationNinetyFifthError": "{0:.2f}".format(
+            bell_validation["p95_absolute_percent_error"]
+        ),
+        "BellThermalValidationMaxError": "{0:.2f}".format(
+            bell_validation["maximum_absolute_percent_error"]
+        ),
+        "BellThermalValidationSignedBias": "{0:.2f}".format(
+            bell_validation["mean_signed_percent_error"]
+        ),
+        "BellThermalValidationCoverage": "{0:.0f}".format(
+            100.0 * bell_validation["model_envelope_coverage_fraction"]
+        ),
+        "BellThermalValidationRelaminarizedCount": str(
+            bell_validation["boundary_layer_regime_counts"].get("relaminarized", 0)
+        ),
+        "BellThermalValidationTarget": "{0:.0f}".format(
+            bell_validation["preliminary_mape_target_percent"]
+        ),
+        "BellThermalValidationMaxK": "{0:.3f}".format(
+            bell_validation["maximum_acceleration_parameter"] * 1e6
+        ),
+        "BellThermalValidationWallNodes": str(
+            bell_validation["predictions"][0]["wall_normal_node_count"]
+        ),
+        "BellThermalValidationMaxGridError": "{0:.2f}".format(
+            max(
+                row["thermal_grid_refinement_error_percent"]
+                for row in bell_validation["predictions"]
+            )
         ),
     }
     write_macros(DATA_DIR / "report_macros.tex", macros)

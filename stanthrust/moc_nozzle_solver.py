@@ -1,3 +1,5 @@
+"""Isentropic area-Mach relations and the characteristic-net bell contour."""
+
 import math
 from dataclasses import asdict, dataclass
 from typing import Dict, List
@@ -7,7 +9,7 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
     return min(maximum, max(minimum, value))
 
 
-def _area_mach_relation(mach: float, gamma: float) -> float:
+def area_ratio_from_mach(mach: float, gamma: float = 1.22) -> float:
     mach_value = max(1e-8, float(mach))
     return (1.0 / mach_value) * (
         ((2.0 / (gamma + 1.0)) * (1.0 + 0.5 * (gamma - 1.0) * mach_value * mach_value))
@@ -23,11 +25,43 @@ def solve_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22
     high = 20.0
     for _ in range(90):
         mid = 0.5 * (low + high)
-        if _area_mach_relation(mid, gamma) < target:
+        if area_ratio_from_mach(mid, gamma) < target:
             low = mid
         else:
             high = mid
     return 0.5 * (low + high)
+
+
+def solve_subsonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22) -> float:
+    target = max(1.0, float(area_ratio))
+    if target <= 1.0 + 1e-8:
+        return 1.0
+    low = 1e-6
+    high = 0.999999
+    for _ in range(90):
+        mid = 0.5 * (low + high)
+        if area_ratio_from_mach(mid, gamma) > target:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
+def static_temperature_from_mach(
+    total_temperature_k: float, mach: float, gamma: float = 1.22
+) -> float:
+    return float(total_temperature_k) / max(
+        1e-12, 1.0 + 0.5 * (float(gamma) - 1.0) * float(mach) ** 2
+    )
+
+
+def static_pressure_from_mach(
+    total_pressure: float, mach: float, gamma: float = 1.22
+) -> float:
+    ratio = (1.0 + 0.5 * (float(gamma) - 1.0) * float(mach) ** 2) ** (
+        -float(gamma) / (float(gamma) - 1.0)
+    )
+    return float(total_pressure) * ratio
 
 
 def prandtl_meyer_angle_deg(mach: float, gamma: float = 1.22) -> float:
@@ -106,13 +140,11 @@ def solve_moc_nozzle(
     contour_samples: int = 36,
     characteristic_count: int = 16,
 ) -> MOCNozzleSolution:
-    """Build a design-grade characteristic net and wall contour for a bell nozzle.
+    """Build a characteristic-guided expansion net and bell wall contour.
 
-    This is a compact, deterministic method-of-characteristics implementation for
-    the app's geometry and flow coupling. It solves the Prandtl-Meyer turning
-    field, constructs a centered expansion fan, and fits the wall through the
-    characteristic-compatible inlet and exit wall angles. It is still a design
-    solver, not a substitute for a validated mesh-based CFD run.
+    The solver constructs a centered Prandtl-Meyer fan and fits a smooth wall to
+    the resulting entrance and exit angles. The returned net is a nozzle-design
+    model, not a multidimensional CFD solution.
     """
 
     throat_radius = max(0.1, float(throat_radius_mm))

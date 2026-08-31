@@ -1,3 +1,5 @@
+"""Common request, result, and provenance envelope shared by the solvers."""
+
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
@@ -5,17 +7,7 @@ from stanthrust.design_model import DesignInputs, create_engine_design
 from stanthrust.feed_pressure_drop_solver import solve as solve_feed_pressure_drop
 from stanthrust.inputs import MATERIAL_OPTIONS, lookup_propellant
 
-
 SOLVER_INTERFACE_VERSION = "1.0"
-
-
-@dataclass
-class SolverMetadata:
-    solver_name: str
-    solver_version: str
-    solver_mode: str
-    input_schema_version: str
-    output_schema_version: str
 
 
 @dataclass
@@ -85,12 +77,16 @@ def _build_design_request(raw_state: Dict[str, object]) -> Dict[str, object]:
         },
         "analysis": {
             "factor_of_safety": inputs.factor_of_safety,
+            "combustion_efficiency": inputs.combustion_efficiency,
+            "uncertainty_sample_count": inputs.uncertainty_sample_count,
         },
         "architecture": {
             "injector_type": inputs.injector_type,
             "use_pumps": inputs.use_pumps,
             "regen_cooling": inputs.regen_cooling,
             "film_cooling": inputs.film_cooling,
+            "regen_coolant_inlet_temperature_k": inputs.regen_coolant_inlet_temperature_k,
+            "regen_coolant_inlet_pressure_kpa": inputs.regen_coolant_inlet_pressure_kpa,
             "packaging_bias": inputs.packaging_bias,
         },
     }
@@ -102,8 +98,28 @@ def _build_design_request(raw_state: Dict[str, object]) -> Dict[str, object]:
         "initial_fill_fraction": 0.72 if inputs.use_pumps else 0.58,
         "pressurant_polytropic_index": 1.08,
         "pump_inlet_pressure_decay_fraction": 0.09,
+        "pressure_solve_mode": inputs.pressure_solve_mode,
+        "design_injector_dp_ratio": inputs.design_injector_dp_ratio,
+        "fuel_injector_discharge_coefficient": inputs.fuel_injector_discharge_coefficient,
+        "oxidizer_injector_discharge_coefficient": inputs.oxidizer_injector_discharge_coefficient,
+        "fuel_injector_area_mm2": inputs.fuel_injector_area_mm2,
+        "oxidizer_injector_area_mm2": inputs.oxidizer_injector_area_mm2,
+        "fuel_supply_pressure_kpa": inputs.fuel_supply_pressure_kpa,
+        "oxidizer_supply_pressure_kpa": inputs.oxidizer_supply_pressure_kpa,
+        "fuel_tank_inlet_pressure_kpa": inputs.fuel_tank_inlet_pressure_kpa,
+        "oxidizer_tank_inlet_pressure_kpa": inputs.oxidizer_tank_inlet_pressure_kpa,
+        "design_supply_margin_ratio": inputs.design_supply_margin_ratio,
+        "analysis_throat_diameter_mm": inputs.analysis_throat_diameter_mm,
+        "line_diameter_fuel_m": inputs.line_diameter_fuel_m,
+        "line_diameter_oxidizer_m": inputs.line_diameter_oxidizer_m,
+        "line_length_fuel_m": inputs.line_length_fuel_m,
+        "line_length_oxidizer_m": inputs.line_length_oxidizer_m,
+        "minor_loss_fuel_k": inputs.minor_loss_fuel_k,
+        "minor_loss_oxidizer_k": inputs.minor_loss_oxidizer_k,
+        "line_roughness_fuel_m": inputs.line_roughness_fuel_m,
+        "line_roughness_oxidizer_m": inputs.line_roughness_oxidizer_m,
         "notes": [
-            "Stage 2 transient feed-system model request.",
+            "Transient feed-system model request.",
             "This reduced-order path tracks burn-time pressure drift and feed margin rather than a single static closure.",
         ],
     }
@@ -149,6 +165,74 @@ def _request_to_state(design_request: Dict[str, object]) -> Dict[str, object]:
         "use_pumps": bool(architecture.get("use_pumps", False)),
         "regen_cooling": bool(architecture.get("regen_cooling", False)),
         "film_cooling": bool(architecture.get("film_cooling", False)),
+        "regen_coolant_inlet_temperature_k": architecture.get(
+            "regen_coolant_inlet_temperature_k", 0.0
+        ),
+        "regen_coolant_inlet_pressure_kpa": architecture.get(
+            "regen_coolant_inlet_pressure_kpa", 0.0
+        ),
+        "pressure_solve_mode": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "pressure_solve_mode", "design"
+        ),
+        "combustion_efficiency": analysis.get("combustion_efficiency", 0.95),
+        "design_injector_dp_ratio": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "design_injector_dp_ratio", 0.20
+        ),
+        "fuel_injector_discharge_coefficient": _as_dict(
+            design_request.get("feed_pressure_drop_request")
+        ).get("fuel_injector_discharge_coefficient", 0.72),
+        "oxidizer_injector_discharge_coefficient": _as_dict(
+            design_request.get("feed_pressure_drop_request")
+        ).get("oxidizer_injector_discharge_coefficient", 0.72),
+        "fuel_injector_area_mm2": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "fuel_injector_area_mm2", 0.0
+        ),
+        "oxidizer_injector_area_mm2": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "oxidizer_injector_area_mm2", 0.0
+        ),
+        "fuel_supply_pressure_kpa": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "fuel_supply_pressure_kpa", 0.0
+        ),
+        "oxidizer_supply_pressure_kpa": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "oxidizer_supply_pressure_kpa", 0.0
+        ),
+        "fuel_tank_inlet_pressure_kpa": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "fuel_tank_inlet_pressure_kpa", 300.0
+        ),
+        "oxidizer_tank_inlet_pressure_kpa": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "oxidizer_tank_inlet_pressure_kpa", 330.0
+        ),
+        "design_supply_margin_ratio": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "design_supply_margin_ratio", 0.08
+        ),
+        "analysis_throat_diameter_mm": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "analysis_throat_diameter_mm", 0.0
+        ),
+        "line_diameter_fuel_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_diameter_fuel_m", 0.012
+        ),
+        "line_diameter_oxidizer_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_diameter_oxidizer_m", 0.0114
+        ),
+        "line_length_fuel_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_length_fuel_m", 1.55
+        ),
+        "line_length_oxidizer_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_length_oxidizer_m", 1.75
+        ),
+        "minor_loss_fuel_k": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "minor_loss_fuel_k", 8.0
+        ),
+        "minor_loss_oxidizer_k": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "minor_loss_oxidizer_k", 9.2
+        ),
+        "line_roughness_fuel_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_roughness_fuel_m", 1.5e-6
+        ),
+        "line_roughness_oxidizer_m": _as_dict(design_request.get("feed_pressure_drop_request")).get(
+            "line_roughness_oxidizer_m", 1.5e-6
+        ),
+        "uncertainty_sample_count": analysis.get("uncertainty_sample_count", 128),
     }
 
 
@@ -200,13 +284,20 @@ def solve(design_request: Dict[str, object], upstream_context: Optional[Dict[str
         design_values = design_for_feed.derived.engineering_values
         feed_context.setdefault("chamber_pressure_kpa", design_values.get("chamber_pressure_kpa"))
         feed_context.setdefault("propellant_mass_flow_kg_s", design_values.get("propellant_mass_flow_kg_s"))
+        throat_diameter_mm = float(design_values.get("nozzle_throat_diameter_mm", 0.0) or 0.0)
+        throat_area_m2 = 3.141592653589793 * (throat_diameter_mm / 1000.0) ** 2 / 4.0
+        pressure_kpa = float(design_values.get("chamber_pressure_kpa", 0.0) or 0.0)
+        mass_flow_kg_s = float(design_values.get("propellant_mass_flow_kg_s", 0.0) or 0.0)
+        feed_context.setdefault("throat_area_m2", throat_area_m2)
+        if throat_area_m2 > 0.0 and pressure_kpa > 0.0 and mass_flow_kg_s > 0.0:
+            feed_context.setdefault("cstar_m_s", pressure_kpa * 1000.0 * throat_area_m2 / mass_flow_kg_s)
     except Exception as exc:
         trace.append("Design-layer feed context unavailable: {0}".format(exc))
 
     feed_solver_result = solve_feed_pressure_drop(
         validation["normalized_request"], upstream_context=feed_context
     )
-    trace.append("Stage 2 transient feed model executed.")
+    trace.append("Transient feed model executed.")
     return SolverResult(
         metadata={"solver_name": "Common Solver Interface", "solver_version": SOLVER_INTERFACE_VERSION},
         status=status,

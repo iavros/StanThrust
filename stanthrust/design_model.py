@@ -1,9 +1,20 @@
+"""Coupled engine sizing: envelope, geometry, and solved measurement fields."""
+
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from stanthrust.moc_nozzle_solver import solve_moc_nozzle
 from stanthrust.inputs import PropellantOption, lookup_propellant
+from stanthrust.material_properties import (
+    MATERIAL_ALLOWABLE_STRESS_MPA,
+    MATERIAL_TEMPERATURE_LIMIT_K,
+)
+from stanthrust.moc_nozzle_solver import (
+    area_ratio_from_mach,
+    prandtl_meyer_angle_deg,
+    solve_moc_nozzle,
+    solve_supersonic_mach_from_area_ratio,
+)
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -37,28 +48,6 @@ NOZZLE_EXPANSION_LABELS = {
     "overexpanded": "overexpanded",
 }
 
-
-MATERIAL_ALLOWABLE_STRESS_MPA = {
-    "Aluminum 6061-T6": 95.0,
-    "Aluminum 7075-T6": 145.0,
-    "Stainless Steel 304": 120.0,
-    "Stainless Steel 316": 125.0,
-    "Carbon Steel 1018": 110.0,
-    "Titanium Grade 5": 240.0,
-    "Copper C110": 70.0,
-    "Inconel 625": 230.0,
-}
-
-MATERIAL_TEMPERATURE_LIMIT_K = {
-    "Aluminum 6061-T6": 425.0,
-    "Aluminum 7075-T6": 410.0,
-    "Stainless Steel 304": 1080.0,
-    "Stainless Steel 316": 1110.0,
-    "Carbon Steel 1018": 880.0,
-    "Titanium Grade 5": 720.0,
-    "Copper C110": 640.0,
-    "Inconel 625": 1250.0,
-}
 
 AMBIENT_TEMPERATURE_K = 293.0
 DESIGN_CHAMBER_TEMPERATURE_K = 3350.0
@@ -96,20 +85,6 @@ def _temperature_limit_k(material: str) -> float:
     return MATERIAL_TEMPERATURE_LIMIT_K.get(material, 700.0)
 
 
-def _area_ratio_from_mach(mach_number: float, gamma: float) -> float:
-    mach_number = max(1e-6, mach_number)
-    gamma_factor = (gamma + 1.0) / (2.0 * (gamma - 1.0))
-    pressure_term = 1.0 + (gamma - 1.0) * 0.5 * mach_number * mach_number
-    normalized_term = (2.0 / (gamma + 1.0)) * pressure_term
-    return (1.0 / mach_number) * (normalized_term**gamma_factor)
-
-
-def _pressure_ratio_from_mach(mach_number: float, gamma: float) -> float:
-    mach_number = max(1e-6, mach_number)
-    pressure_term = 1.0 + (gamma - 1.0) * 0.5 * mach_number * mach_number
-    return pressure_term ** (-gamma / (gamma - 1.0))
-
-
 def _solve_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: float = 1.22) -> float:
     """Solve exit Mach from Pe/Pc on the supersonic branch."""
     bounded_ratio = clamp(pressure_ratio, 1e-5, 0.999)
@@ -119,50 +94,13 @@ def _solve_supersonic_mach_from_pressure_ratio(pressure_ratio: float, gamma: flo
     return float(clamp(math.sqrt(max(1.0001, mach_squared)), 1.0001, 10.0))
 
 
-def _solve_supersonic_mach_from_area_ratio(area_ratio: float, gamma: float = 1.22) -> float:
-    """Solve nozzle exit Mach from A/A* on the supersonic branch."""
-    if area_ratio <= 1.0:
-        return 1.0
-
-    mach_number = clamp(area_ratio**0.2, 1.2, 4.5)
-
-    for _ in range(30):
-        error = _area_ratio_from_mach(mach_number, gamma) - area_ratio
-
-        small_step = 1e-6
-        higher_mach = mach_number + small_step
-        higher_error = _area_ratio_from_mach(higher_mach, gamma) - area_ratio
-        slope = (higher_error - error) / small_step
-
-        if abs(slope) < 1e-12:
-            break
-
-        correction = error / slope
-        mach_number -= correction
-        mach_number = clamp(mach_number, 1.0 + 1e-6, 10.0)
-
-        if abs(correction) < 1e-6:
-            break
-
-    return float(clamp(mach_number, 1.0, 10.0))
-
-
-def _prandtl_meyer_angle_deg(mach_number: float, gamma: float = 1.22) -> float:
-    mach_number = max(1.0 + 1e-6, float(mach_number))
-    gm1 = gamma - 1.0
-    gp1 = gamma + 1.0
-    angle_rad = math.sqrt(gp1 / gm1) * math.atan(math.sqrt(gm1 / gp1 * (mach_number * mach_number - 1.0)))
-    angle_rad -= math.atan(math.sqrt(mach_number * mach_number - 1.0))
-    return math.degrees(max(0.0, angle_rad))
-
-
 def _moc_nozzle_angle_metadata(
     expansion_ratio: float,
     bell_length_fraction: float,
     gamma: float = 1.22,
 ) -> Dict[str, float]:
-    exit_mach = _solve_supersonic_mach_from_area_ratio(expansion_ratio, gamma=gamma)
-    prandtl_meyer_exit_deg = _prandtl_meyer_angle_deg(exit_mach, gamma=gamma)
+    exit_mach = solve_supersonic_mach_from_area_ratio(expansion_ratio, gamma=gamma)
+    prandtl_meyer_exit_deg = prandtl_meyer_angle_deg(exit_mach, gamma=gamma)
     ideal_turn_angle_deg = prandtl_meyer_exit_deg * 0.5
     entrance_angle_deg = clamp(ideal_turn_angle_deg, 18.0, 34.0)
     truncation_fraction = clamp(1.0 - bell_length_fraction, 0.0, 0.45)
@@ -224,30 +162,6 @@ def _append_contour_sample(
         samples[-1] = (x_value, radius_value, section)
         return
     samples.append((x_value, radius_value, section))
-
-
-def _solve_bell_control_point(
-    start_x_mm: float,
-    start_radius_mm: float,
-    exit_x_mm: float,
-    exit_radius_mm: float,
-    entrance_angle_rad: float,
-    exit_angle_rad: float,
-) -> Tuple[float, float]:
-    slope_start = math.tan(entrance_angle_rad)
-    slope_exit = math.tan(exit_angle_rad)
-    denominator = slope_start - slope_exit
-    if abs(denominator) < 1e-6:
-        return ((start_x_mm + exit_x_mm) * 0.5, (start_radius_mm + exit_radius_mm) * 0.5)
-    control_x_mm = (
-        exit_radius_mm
-        - slope_exit * exit_x_mm
-        - start_radius_mm
-        + slope_start * start_x_mm
-    ) / denominator
-    control_x_mm = clamp(control_x_mm, start_x_mm + 0.15, exit_x_mm - 0.15)
-    control_radius_mm = start_radius_mm + slope_start * (control_x_mm - start_x_mm)
-    return control_x_mm, control_radius_mm
 
 
 @dataclass(frozen=True)
@@ -390,7 +304,6 @@ def _build_nozzle_contour_points(
     converging_length_mm: float,
     diverging_length_mm: float,
     converging_angle_deg: Optional[float] = None,
-    diverging_angle_deg: Optional[float] = None,
     converging_samples: int = 10,
     diverging_samples: int = 22,
 ) -> List[Dict[str, object]]:
@@ -398,38 +311,12 @@ def _build_nozzle_contour_points(
     throat_radius = max(0.1, throat_diameter_mm / 2.0)
     exit_radius = max(0.1, exit_diameter_mm / 2.0)
     total_length = max(1.0, converging_length_mm + diverging_length_mm)
-    conical_reference_half_angle_rad = math.radians(15.0)
-    expansion_ratio = max(1.0, pow(exit_radius / max(0.1, throat_radius), 2))
-    equivalent_conical_length_mm = max(
-        diverging_length_mm,
-        (exit_radius - throat_radius) / max(1e-6, math.tan(conical_reference_half_angle_rad)),
-    )
-    actual_bell_length_fraction = clamp(
-        diverging_length_mm / max(1.0, equivalent_conical_length_mm),
-        0.55,
-        1.1,
-    )
     converging_angle_rad = math.radians(
         converging_angle_deg
         if converging_angle_deg is not None
         else math.degrees(math.atan2(chamber_radius - throat_radius, max(1.0, converging_length_mm)))
     )
-    reference_exit_angle_deg = 14.5 - 1.25 * math.log(max(expansion_ratio, 1.0))
-    moc_angles = _moc_nozzle_angle_metadata(expansion_ratio, actual_bell_length_fraction)
-    bell_exit_angle_deg = clamp(
-        diverging_angle_deg if diverging_angle_deg is not None else moc_angles["exit_angle_deg"],
-        3.0,
-        max(10.5, reference_exit_angle_deg),
-    )
-    bell_entrance_angle_deg = clamp(
-        moc_angles["entrance_angle_deg"],
-        max(18.0, bell_exit_angle_deg + 10.0),
-        34.0,
-    )
-    bell_entrance_angle_rad = math.radians(bell_entrance_angle_deg)
-    bell_exit_angle_rad = math.radians(bell_exit_angle_deg)
     upstream_blend_radius_mm = max(1.25 * throat_radius, throat_radius + 2.0)
-    downstream_blend_radius_mm = max(0.382 * throat_radius, 2.0)
 
     samples: List[Tuple[float, float, str]] = []
 
@@ -507,7 +394,7 @@ def _build_nozzle_contour_points(
                 "section": section,
                 "normalized_x": round(axial_mm / total_length, 4),
                 "moc_mach": round(
-                    _solve_supersonic_mach_from_area_ratio(
+                    solve_supersonic_mach_from_area_ratio(
                         max(1.0, pow(radius_mm / max(0.1, throat_radius), 2)),
                         gamma=1.22,
                     ),
@@ -546,6 +433,30 @@ class DesignInputs:
     use_pumps: bool
     regen_cooling: bool
     film_cooling: bool
+    regen_coolant_inlet_temperature_k: float
+    regen_coolant_inlet_pressure_kpa: float
+    pressure_solve_mode: str
+    combustion_efficiency: float
+    design_injector_dp_ratio: float
+    fuel_injector_discharge_coefficient: float
+    oxidizer_injector_discharge_coefficient: float
+    fuel_injector_area_mm2: float
+    oxidizer_injector_area_mm2: float
+    fuel_supply_pressure_kpa: float
+    oxidizer_supply_pressure_kpa: float
+    fuel_tank_inlet_pressure_kpa: float
+    oxidizer_tank_inlet_pressure_kpa: float
+    design_supply_margin_ratio: float
+    analysis_throat_diameter_mm: float
+    line_diameter_fuel_m: float
+    line_diameter_oxidizer_m: float
+    line_length_fuel_m: float
+    line_length_oxidizer_m: float
+    minor_loss_fuel_k: float
+    minor_loss_oxidizer_k: float
+    line_roughness_fuel_m: float
+    line_roughness_oxidizer_m: float
+    uncertainty_sample_count: int
 
     @classmethod
     def from_mapping(cls, raw_state: Dict[str, object]) -> "DesignInputs":
@@ -564,6 +475,9 @@ class DesignInputs:
         ).strip().lower()
         if nozzle_expansion_bias not in NOZZLE_EXPANSION_BIASES:
             nozzle_expansion_bias = "pressure_matched"
+        pressure_solve_mode = str(raw_state.get("pressure_solve_mode", "design") or "design").strip().lower()
+        if pressure_solve_mode not in {"design", "analysis"}:
+            pressure_solve_mode = "design"
         return cls(
             fuel_name=(str(raw_state.get("fuel_name", "Ethanol")).strip() or "Ethanol"),
             oxidizer_name=(
@@ -625,6 +539,66 @@ class DesignInputs:
             use_pumps=bool(raw_state.get("use_pumps", False)),
             regen_cooling=bool(raw_state.get("regen_cooling", False)),
             film_cooling=bool(raw_state.get("film_cooling", False)),
+            regen_coolant_inlet_temperature_k=max(
+                0.0,
+                float(raw_state.get("regen_coolant_inlet_temperature_k", 0.0) or 0.0),
+            ),
+            regen_coolant_inlet_pressure_kpa=max(
+                0.0,
+                float(raw_state.get("regen_coolant_inlet_pressure_kpa", 0.0) or 0.0),
+            ),
+            pressure_solve_mode=pressure_solve_mode,
+            combustion_efficiency=clamp(
+                float(raw_state.get("combustion_efficiency", 0.95) or 0.95), 0.50, 1.0
+            ),
+            design_injector_dp_ratio=clamp(
+                float(raw_state.get("design_injector_dp_ratio", 0.20) or 0.20), 0.05, 0.50
+            ),
+            fuel_injector_discharge_coefficient=clamp(
+                float(raw_state.get("fuel_injector_discharge_coefficient", 0.72) or 0.72), 0.20, 1.0
+            ),
+            oxidizer_injector_discharge_coefficient=clamp(
+                float(raw_state.get("oxidizer_injector_discharge_coefficient", 0.72) or 0.72), 0.20, 1.0
+            ),
+            fuel_injector_area_mm2=max(0.0, float(raw_state.get("fuel_injector_area_mm2", 0.0) or 0.0)),
+            oxidizer_injector_area_mm2=max(
+                0.0, float(raw_state.get("oxidizer_injector_area_mm2", 0.0) or 0.0)
+            ),
+            fuel_supply_pressure_kpa=max(0.0, float(raw_state.get("fuel_supply_pressure_kpa", 0.0) or 0.0)),
+            oxidizer_supply_pressure_kpa=max(
+                0.0, float(raw_state.get("oxidizer_supply_pressure_kpa", 0.0) or 0.0)
+            ),
+            fuel_tank_inlet_pressure_kpa=max(
+                101.325, float(raw_state.get("fuel_tank_inlet_pressure_kpa", 300.0) or 300.0)
+            ),
+            oxidizer_tank_inlet_pressure_kpa=max(
+                101.325, float(raw_state.get("oxidizer_tank_inlet_pressure_kpa", 330.0) or 330.0)
+            ),
+            design_supply_margin_ratio=clamp(
+                float(raw_state.get("design_supply_margin_ratio", 0.08) or 0.08), 0.0, 0.50
+            ),
+            analysis_throat_diameter_mm=max(
+                0.0, float(raw_state.get("analysis_throat_diameter_mm", 0.0) or 0.0)
+            ),
+            line_diameter_fuel_m=max(0.001, float(raw_state.get("line_diameter_fuel_m", 0.012) or 0.012)),
+            line_diameter_oxidizer_m=max(
+                0.001, float(raw_state.get("line_diameter_oxidizer_m", 0.0114) or 0.0114)
+            ),
+            line_length_fuel_m=max(0.01, float(raw_state.get("line_length_fuel_m", 1.55) or 1.55)),
+            line_length_oxidizer_m=max(
+                0.01, float(raw_state.get("line_length_oxidizer_m", 1.75) or 1.75)
+            ),
+            minor_loss_fuel_k=max(0.0, float(raw_state.get("minor_loss_fuel_k", 8.0) or 0.0)),
+            minor_loss_oxidizer_k=max(0.0, float(raw_state.get("minor_loss_oxidizer_k", 9.2) or 0.0)),
+            line_roughness_fuel_m=max(
+                0.0, float(raw_state.get("line_roughness_fuel_m", 1.5e-6) or 0.0)
+            ),
+            line_roughness_oxidizer_m=max(
+                0.0, float(raw_state.get("line_roughness_oxidizer_m", 1.5e-6) or 0.0)
+            ),
+            uncertainty_sample_count=int(
+                clamp(float(raw_state.get("uncertainty_sample_count", 128) or 128), 24, 1024)
+            ),
         )
 
     def as_state(self) -> Dict[str, object]:
@@ -658,7 +632,7 @@ class StationSample:
     mach_note: str
     thermal_margin_index: float = 0.0
     thermal_margin_note: str = ""
-    # Numeric, machine-friendly fields (Stage 2.4 promotion)
+    # Machine-readable numeric fields, promoted from the display strings.
     temperature_k: Optional[float] = None
     pressure_kpa: Optional[float] = None
     mass_flow_kg_s: Optional[float] = None
@@ -826,7 +800,7 @@ def _solve_auto_nozzle_exit(
     target_exit_pressure_kpa = ambient_pressure_kpa * pressure_factor
     pressure_ratio = clamp(target_exit_pressure_kpa / max(1.0, chamber_pressure_kpa), 1e-5, 0.95)
     exit_mach = _solve_supersonic_mach_from_pressure_ratio(pressure_ratio, gamma)
-    expansion_ratio = clamp(_area_ratio_from_mach(exit_mach, gamma), 1.08, 80.0)
+    expansion_ratio = clamp(area_ratio_from_mach(exit_mach, gamma), 1.08, 80.0)
     uncapped_exit_diameter_mm = throat_diameter_mm * math.sqrt(expansion_ratio)
     exit_limit_mm = clamp(inputs.target_diameter_mm * 0.94, max(24.0, throat_diameter_mm * 1.08), 250.0)
     exit_diameter_mm = clamp(uncapped_exit_diameter_mm, throat_diameter_mm * 1.08, exit_limit_mm)
@@ -991,11 +965,20 @@ def _calculate_geometry_sizing(
         1.18,
         1.58,
     )
-    throat_area_m2 = inputs.target_thrust_newtons / max(
-        1.0,
-        nozzle_throat_thrust_coefficient_closure * nozzle_throat_pressure_closure_kpa * 1000.0,
-    )
-    raw_nozzle_throat_diameter_mm = math.sqrt(max(1e-10, 4.0 * throat_area_m2 / math.pi)) * 1000.0
+    if inputs.pressure_solve_mode == "analysis":
+        if inputs.analysis_throat_diameter_mm <= 0.0:
+            raise ValueError("Analysis mode requires a measured throat diameter greater than zero.")
+        raw_nozzle_throat_diameter_mm = inputs.analysis_throat_diameter_mm
+        nozzle_throat_sizing_method = "Measured analysis geometry"
+    else:
+        throat_area_m2 = inputs.target_thrust_newtons / max(
+            1.0,
+            nozzle_throat_thrust_coefficient_closure * nozzle_throat_pressure_closure_kpa * 1000.0,
+        )
+        raw_nozzle_throat_diameter_mm = (
+            math.sqrt(max(1e-10, 4.0 * throat_area_m2 / math.pi)) * 1000.0
+        )
+        nozzle_throat_sizing_method = "Choked thrust coefficient"
     nozzle_throat_diameter_mm = clamp(
         raw_nozzle_throat_diameter_mm,
         4.0,
@@ -1004,7 +987,6 @@ def _calculate_geometry_sizing(
             max(nozzle_manual_override_mm, preliminary_exit_limit_mm) * 0.72,
         ),
     )
-    nozzle_throat_sizing_method = "Choked thrust coefficient"
     chamber_lstar = _calculate_chamber_characteristic_length(
         inputs,
         fuel,
@@ -1105,7 +1087,6 @@ def _calculate_geometry_sizing(
         nozzle_converging_length_mm,
         nozzle_diverging_length_mm,
         converging_angle_deg=nozzle_converging_angle_deg,
-        diverging_angle_deg=None,
     )
     nozzle_throat_entry_blend_radius_mm = max(
         1.25 * nozzle_throat_diameter_mm / 2.0,
@@ -1493,7 +1474,7 @@ def build_notes(inputs: DesignInputs, design: EngineDesign) -> List[str]:
             impulse=rounded(inputs.target_impulse_newton_seconds),
             diameter=rounded(inputs.target_diameter_mm),
         ),
-        "Solver mode is {mode} using catalog-driven preliminary coefficients rather than propulsion-grade performance calculations.".format(
+        "Geometry state is {mode} and uses documented catalog coefficients; run the coupled solver for thermofluid performance.".format(
             mode=derived.solver_meta.solver_mode
         ),
         "CAD measurements shown here are envelope outputs for design blockout, not manufacturing or test values.",
@@ -1593,7 +1574,7 @@ class DesignSolver:
             return f"{rounded(v)} K" if v and v > 0.0 else note
 
         exit_area_ratio = max(1.0, nozzle_expansion_ratio)
-        exit_mach_est = _solve_supersonic_mach_from_area_ratio(exit_area_ratio)
+        exit_mach_est = solve_supersonic_mach_from_area_ratio(exit_area_ratio)
 
         def margin(key: str) -> float:
             return rounded(float(regen_thermal_margins.get(key, 0.0)))
@@ -1853,11 +1834,10 @@ class DesignSolver:
                 18.0,
                 float(int(round((math.pi * inputs.nozzle_diameter_mm) / max(1.0, regen_channel_pitch_mm)))),
             )
-            regen_coolant_mass_flow_kg_s = clamp(
-                fuel_mass_flow_kg_s * (0.22 + 0.12 * oxidizer.thermal_severity),
-                0.01,
-                max(0.01, fuel_mass_flow_kg_s * 0.85),
-            )
+            # The baseline architecture routes the complete fuel stream through the
+            # cooling jacket before it reaches the injector. A future bypass option
+            # should be represented by an explicit user input, not an inferred split.
+            regen_coolant_mass_flow_kg_s = fuel_mass_flow_kg_s
             regen_coolant_density_kg_m3 = max(120.0, fuel_density_kg_m3 * 0.82)
             regen_flow_area_m2 = max(
                 1e-6,
@@ -2582,8 +2562,8 @@ class DesignSolver:
                 "regen_channel_pitch_mm": rounded(regen_channel_pitch_mm),
                 "regen_channel_count": regen_channel_count,
                 "regen_hydraulic_diameter_mm": rounded(regen_hydraulic_diameter_mm),
-                "regen_coolant_mass_flow_kg_s": rounded(regen_coolant_mass_flow_kg_s),
-                "regen_coolant_velocity_m_s": rounded(regen_coolant_velocity_m_s),
+                "regen_coolant_mass_flow_kg_s": round(regen_coolant_mass_flow_kg_s, 6),
+                "regen_coolant_velocity_m_s": round(regen_coolant_velocity_m_s, 6),
                 "regen_pressure_drop_kpa": rounded(regen_pressure_drop_kpa),
                 "regen_heat_load_kw": round(regen_heat_load_kw, 2),
                 "regen_coolant_heat_capacity_kj_kgk": round(regen_coolant_heat_capacity_kj_kgk, 3),

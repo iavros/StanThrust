@@ -1,10 +1,15 @@
+"""Feed-system pressure drop and burn-history transient solve."""
+
 import math
 from typing import Any, Dict, List, Optional
 
+from stanthrust.hydraulic_chamber_solver import (
+    AMBIENT_PRESSURE_KPA,
+    solve_hydraulic_chamber,
+)
 
 SOLVER_NAME = "Feed Pressure-Drop Solver"
-SOLVER_VERSION = "0.3"
-AMBIENT_PRESSURE_KPA = 101.3
+SOLVER_VERSION = "0.4"
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -29,12 +34,6 @@ def _safe_int(value: Any, fallback: int) -> int:
         return fallback
 
 
-def _round_or_none(value: Optional[float], digits: int = 3) -> Optional[float]:
-    if value is None:
-        return None
-    return round(float(value), digits)
-
-
 def _default_dynamic_viscosity_pa_s(propellant_name: str, density_kg_m3: float, role: str) -> float:
     name = str(propellant_name or "").strip().lower()
     if "liquid oxygen" in name or name == "lox":
@@ -52,96 +51,6 @@ def _default_dynamic_viscosity_pa_s(propellant_name: str, density_kg_m3: float, 
     if role == "oxidizer":
         return 0.00025 if density_kg_m3 < 950.0 else 0.0009
     return 0.0011 if density_kg_m3 > 650.0 else 0.0004
-
-
-def _colebrook_friction_factor(reynolds: float, relative_roughness: float) -> Dict[str, object]:
-    re = max(1.0, float(reynolds))
-    roughness = max(0.0, float(relative_roughness))
-    if re < 2300.0:
-        return {
-            "friction_factor": 64.0 / re,
-            "flow_regime": "laminar",
-            "iterations": 0,
-        }
-
-    turbulent_seed = 0.25 / (
-        math.log10(max(1e-12, roughness / 3.7 + 5.74 / (re**0.9))) ** 2
-    )
-    friction_factor = _clamp(turbulent_seed, 0.008, 0.12)
-    iterations = 0
-    for iteration in range(1, 26):
-        denominator = roughness / 3.7 + 2.51 / (re * math.sqrt(max(1e-8, friction_factor)))
-        inverse_sqrt = -2.0 * math.log10(max(1e-12, denominator))
-        next_factor = 1.0 / max(1e-8, inverse_sqrt * inverse_sqrt)
-        next_factor = _clamp(next_factor, 0.008, 0.12)
-        iterations = iteration
-        if abs(next_factor - friction_factor) < 1e-7:
-            friction_factor = next_factor
-            break
-        friction_factor = 0.55 * friction_factor + 0.45 * next_factor
-
-    if re < 4000.0:
-        blend = (re - 2300.0) / 1700.0
-        laminar_factor = 64.0 / re
-        friction_factor = (1.0 - blend) * laminar_factor + blend * friction_factor
-        regime = "transitional"
-    else:
-        regime = "turbulent"
-    return {
-        "friction_factor": friction_factor,
-        "flow_regime": regime,
-        "iterations": iterations,
-    }
-
-
-def _line_loss_kpa(
-    mass_flow_kg_s: float,
-    density_kg_m3: float,
-    diameter_m: float,
-    length_m: float,
-    minor_k: float,
-    dynamic_viscosity_pa_s: float,
-    roughness_m: float,
-) -> Dict[str, object]:
-    density = max(60.0, density_kg_m3)
-    diameter = max(0.003, diameter_m)
-    area = 3.141592653589793 * diameter * diameter * 0.25
-    velocity = mass_flow_kg_s / max(1e-8, density * area)
-
-    viscosity_pa_s = _clamp(dynamic_viscosity_pa_s, 0.00005, 0.02)
-    reynolds = max(1.0, density * velocity * diameter / max(1e-8, viscosity_pa_s))
-    relative_roughness = _clamp(roughness_m / diameter, 0.0, 0.05)
-    friction = _colebrook_friction_factor(reynolds, relative_roughness)
-    friction_factor = float(friction["friction_factor"])
-    major_k = friction_factor * (length_m / diameter)
-    minor_k = max(0.0, minor_k)
-    equivalent_k = major_k + minor_k
-    dynamic_pressure_pa = 0.5 * density * velocity * velocity
-    major_drop_pa = major_k * dynamic_pressure_pa
-    minor_drop_pa = minor_k * dynamic_pressure_pa
-    dp_pa = major_drop_pa + minor_drop_pa
-    return {
-        "pressure_drop_kpa": dp_pa / 1000.0,
-        "major_pressure_drop_kpa": major_drop_pa / 1000.0,
-        "minor_pressure_drop_kpa": minor_drop_pa / 1000.0,
-        "velocity_m_s": velocity,
-        "reynolds": reynolds,
-        "friction_factor": friction_factor,
-        "flow_regime": str(friction["flow_regime"]),
-        "friction_iterations": float(friction["iterations"]),
-        "relative_roughness": relative_roughness,
-        "dynamic_viscosity_pa_s": viscosity_pa_s,
-        "dynamic_pressure_kpa": dynamic_pressure_pa / 1000.0,
-        "major_k": major_k,
-        "minor_k": minor_k,
-        "equivalent_k": equivalent_k,
-    }
-
-
-def _calculate_chamber_pressure_kpa(thrust_n: float, use_pumps: bool) -> float:
-    thrust_term = (max(1.0, thrust_n) / 250.0) ** 0.58
-    architecture_scale = 1.08 if use_pumps else 0.95
-    return _clamp(1350.0 * thrust_term * architecture_scale, 500.0, 18000.0)
 
 
 def _build_time_grid(burn_time_s: float, history_steps: int) -> List[float]:
@@ -244,7 +153,51 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
             0.02,
             0.25,
         ),
+        "pressure_solve_mode": str(feed_request.get("pressure_solve_mode", "design") or "design").strip().lower(),
+        "design_injector_dp_ratio": _clamp(
+            _safe_float(feed_request.get("design_injector_dp_ratio"), 0.20), 0.05, 0.50
+        ),
+        "fuel_injector_discharge_coefficient": _clamp(
+            _safe_float(feed_request.get("fuel_injector_discharge_coefficient"), 0.72), 0.20, 1.0
+        ),
+        "oxidizer_injector_discharge_coefficient": _clamp(
+            _safe_float(feed_request.get("oxidizer_injector_discharge_coefficient"), 0.72), 0.20, 1.0
+        ),
+        "fuel_injector_area_mm2": max(0.0, _safe_float(feed_request.get("fuel_injector_area_mm2"), 0.0)),
+        "oxidizer_injector_area_mm2": max(
+            0.0, _safe_float(feed_request.get("oxidizer_injector_area_mm2"), 0.0)
+        ),
+        "fuel_supply_pressure_kpa": max(
+            0.0, _safe_float(feed_request.get("fuel_supply_pressure_kpa"), 0.0)
+        ),
+        "oxidizer_supply_pressure_kpa": max(
+            0.0, _safe_float(feed_request.get("oxidizer_supply_pressure_kpa"), 0.0)
+        ),
+        "fuel_tank_inlet_pressure_kpa": max(
+            AMBIENT_PRESSURE_KPA,
+            _safe_float(feed_request.get("fuel_tank_inlet_pressure_kpa"), 300.0),
+        ),
+        "oxidizer_tank_inlet_pressure_kpa": max(
+            AMBIENT_PRESSURE_KPA,
+            _safe_float(feed_request.get("oxidizer_tank_inlet_pressure_kpa"), 330.0),
+        ),
+        "design_supply_margin_ratio": _clamp(
+            _safe_float(feed_request.get("design_supply_margin_ratio"), 0.08), 0.0, 0.50
+        ),
+        "fuel_minimum_injector_inlet_pressure_kpa": max(
+            0.0,
+            _safe_float(feed_request.get("fuel_minimum_injector_inlet_pressure_kpa"), 0.0),
+        ),
+        "fuel_regen_pressure_drop_kpa": max(
+            0.0,
+            _safe_float(feed_request.get("fuel_regen_pressure_drop_kpa"), 0.0),
+        ),
+        "analysis_throat_diameter_mm": max(
+            0.0, _safe_float(feed_request.get("analysis_throat_diameter_mm"), 0.0)
+        ),
     }
+    if normalized["pressure_solve_mode"] not in {"design", "analysis"}:
+        normalized["pressure_solve_mode"] = "design"
     return {
         "is_valid": True,
         "messages": [],
@@ -252,187 +205,173 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-def _simulate_feed_history(
+def _hydraulic_inputs(
     req: Dict[str, object],
-    chamber_pressure_kpa: float,
-    injector_dp_ratio: float,
-    fuel_total_drop_kpa: float,
-    oxidizer_total_drop_kpa: float,
-    total_mass_flow_kg_s: float,
-    fuel_mass_flow_kg_s: float,
-    oxidizer_mass_flow_kg_s: float,
-    required_tank_pressure_kpa: float,
+    upstream_context: Optional[Dict[str, object]],
 ) -> Dict[str, object]:
-    burn_time_s = max(1.0, float(req.get("burn_time_seconds", 12.0)))
-    history_steps = int(req.get("history_steps", 31))
-    use_pumps = bool(req.get("use_pumps", False))
-    fill_fraction = float(req.get("initial_fill_fraction", 0.58))
-    polytropic_index = float(req.get("pressurant_polytropic_index", 1.08))
-    inlet_decay_fraction = float(req.get("pump_inlet_pressure_decay_fraction", 0.09))
-
-    nominal_required_feed_kpa = chamber_pressure_kpa * (1.0 + injector_dp_ratio) + max(
-        fuel_total_drop_kpa, oxidizer_total_drop_kpa
+    context = upstream_context if isinstance(upstream_context, dict) else {}
+    throat_area_m2 = _safe_float(context.get("throat_area_m2"), 0.0)
+    throat_diameter_mm = _safe_float(req.get("analysis_throat_diameter_mm"), 0.0)
+    if throat_diameter_mm > 0.0:
+        throat_area_m2 = math.pi * (throat_diameter_mm / 1000.0) ** 2 / 4.0
+    cstar_m_s = _safe_float(context.get("cstar_m_s"), 0.0)
+    target_pressure_kpa = _safe_float(
+        context.get("target_chamber_pressure_kpa", context.get("chamber_pressure_kpa")),
+        _safe_float(req.get("target_chamber_pressure_kpa"), 0.0),
     )
-    time_history_rows: List[Dict[str, object]] = []
+    mode = str(req.get("pressure_solve_mode", "design"))
 
-    if use_pumps:
-        fuel_tank_initial_kpa = max(AMBIENT_PRESSURE_KPA + 140.0, chamber_pressure_kpa * 0.18)
-        oxidizer_tank_initial_kpa = max(AMBIENT_PRESSURE_KPA + 165.0, chamber_pressure_kpa * 0.21)
-        nominal_pump_discharge_kpa = nominal_required_feed_kpa * 1.05
-        pump_discharge_cap_kpa = nominal_required_feed_kpa * 1.14
-    else:
-        fuel_tank_initial_kpa = required_tank_pressure_kpa * 1.01
-        oxidizer_tank_initial_kpa = required_tank_pressure_kpa * 1.03
-        nominal_pump_discharge_kpa = 0.0
-        pump_discharge_cap_kpa = 0.0
+    def branch(role: str) -> Dict[str, object]:
+        prefix = "fuel" if role == "fuel" else "oxidizer"
+        return {
+            "density_kg_m3": float(req[f"{prefix}_density_kg_m3"]),
+            "dynamic_viscosity_pa_s": float(req[f"{prefix}_dynamic_viscosity_pa_s"]),
+            "line_diameter_m": float(req[f"line_diameter_{prefix}_m"]),
+            "line_length_m": float(req[f"line_length_{prefix}_m"]),
+            "minor_loss_k": float(req[f"minor_loss_{prefix}_k"]),
+            "roughness_m": float(req[f"line_roughness_{prefix}_m"]),
+            "discharge_coefficient": float(req[f"{prefix}_injector_discharge_coefficient"]),
+            "injector_area_mm2": float(req[f"{prefix}_injector_area_mm2"]),
+            "supply_pressure_kpa": float(req[f"{prefix}_supply_pressure_kpa"]),
+        }
 
-    previous_chamber_pressure_kpa = chamber_pressure_kpa
+    return {
+        "mode": mode,
+        "target_chamber_pressure_kpa": target_pressure_kpa,
+        "throat_area_m2": throat_area_m2,
+        "cstar_m_s": cstar_m_s,
+        "mixture_ratio": float(req["mixture_ratio"]),
+        "design_injector_dp_ratio": float(req["design_injector_dp_ratio"]),
+        "fuel_minimum_injector_inlet_pressure_kpa": float(
+            req["fuel_minimum_injector_inlet_pressure_kpa"]
+        ),
+        "fuel_regen_pressure_drop_kpa": float(req["fuel_regen_pressure_drop_kpa"]),
+        "fuel": branch("fuel"),
+        "oxidizer": branch("oxidizer"),
+    }
+
+
+def _physical_feed_history(
+    req: Dict[str, object],
+    hydraulic_inputs: Dict[str, object],
+    nominal: Dict[str, object],
+) -> Dict[str, object]:
+    burn_time_s = max(0.1, float(req["burn_time_seconds"]))
+    history_steps = int(req["history_steps"])
+    use_pumps = bool(req["use_pumps"])
+    fill_fraction = float(req["initial_fill_fraction"])
+    polytropic_index = float(req["pressurant_polytropic_index"])
+    inlet_decay_fraction = float(req["pump_inlet_pressure_decay_fraction"])
+    margin_ratio = float(req["design_supply_margin_ratio"])
+    mode = str(req["pressure_solve_mode"])
+
+    analysis_basis = dict(hydraulic_inputs)
+    analysis_basis["mode"] = "analysis"
+    analysis_basis["fuel"] = dict(hydraulic_inputs["fuel"])
+    analysis_basis["oxidizer"] = dict(hydraulic_inputs["oxidizer"])
+    for role in ("fuel", "oxidizer"):
+        nominal_branch = _as_dict(nominal.get(role))
+        analysis_basis[role]["injector_area_mm2"] = float(nominal_branch["injector_area_mm2"])
+        if mode == "design":
+            required = float(nominal_branch["required_supply_pressure_kpa"])
+            analysis_basis[role]["supply_pressure_kpa"] = AMBIENT_PRESSURE_KPA + (
+                required - AMBIENT_PRESSURE_KPA
+            ) * (1.0 + margin_ratio)
+
+    initial_supply = {
+        role: float(analysis_basis[role]["supply_pressure_kpa"])
+        for role in ("fuel", "oxidizer")
+    }
+    rows: List[Dict[str, object]] = []
+    target_pressure = float(nominal["chamber_pressure_kpa"])
+    target_branch = {role: _as_dict(nominal[role]) for role in ("fuel", "oxidizer")}
     for time_s in _build_time_grid(burn_time_s, history_steps):
         burn_fraction = _clamp(time_s / burn_time_s, 0.0, 1.0)
-
+        step_inputs = dict(analysis_basis)
+        step_inputs["fuel"] = dict(analysis_basis["fuel"])
+        step_inputs["oxidizer"] = dict(analysis_basis["oxidizer"])
         if use_pumps:
-            fuel_tank_pressure_kpa = _pump_inlet_tank_pressure_kpa(
-                fuel_tank_initial_kpa,
-                burn_fraction,
-                inlet_decay_fraction,
+            fuel_tank_pressure = _pump_inlet_tank_pressure_kpa(
+                float(req["fuel_tank_inlet_pressure_kpa"]), burn_fraction, inlet_decay_fraction
             )
-            oxidizer_tank_pressure_kpa = _pump_inlet_tank_pressure_kpa(
-                oxidizer_tank_initial_kpa,
-                burn_fraction,
-                inlet_decay_fraction * 0.92,
+            oxidizer_tank_pressure = _pump_inlet_tank_pressure_kpa(
+                float(req["oxidizer_tank_inlet_pressure_kpa"]), burn_fraction, inlet_decay_fraction * 0.92
             )
+            fuel_supply = initial_supply["fuel"]
+            oxidizer_supply = initial_supply["oxidizer"]
         else:
-            fuel_tank_pressure_kpa = _pressure_fed_tank_pressure_kpa(
-                fuel_tank_initial_kpa,
-                burn_fraction,
-                fill_fraction,
-                polytropic_index,
+            fuel_supply = _pressure_fed_tank_pressure_kpa(
+                initial_supply["fuel"], burn_fraction, fill_fraction, polytropic_index
             )
-            oxidizer_tank_pressure_kpa = _pressure_fed_tank_pressure_kpa(
-                oxidizer_tank_initial_kpa,
-                burn_fraction,
-                fill_fraction,
-                polytropic_index,
+            oxidizer_supply = _pressure_fed_tank_pressure_kpa(
+                initial_supply["oxidizer"], burn_fraction, fill_fraction, polytropic_index
             )
-
-        chamber_iteration_kpa = chamber_pressure_kpa if time_s <= 0.0 else previous_chamber_pressure_kpa
-        pump_discharge_pressure_kpa = 0.0
-        pump_differential_pressure_kpa = 0.0
-        pump_speed_fraction = 0.0
-
-        for _ in range(4):
-            flow_scale = _clamp(chamber_iteration_kpa / max(1.0, chamber_pressure_kpa), 0.38, 1.12)
-            fuel_drop_kpa = fuel_total_drop_kpa * (flow_scale ** 2)
-            oxidizer_drop_kpa = oxidizer_total_drop_kpa * (flow_scale ** 2)
-
-            if use_pumps:
-                required_discharge_kpa = chamber_pressure_kpa * (1.0 + injector_dp_ratio) + max(
-                    fuel_drop_kpa, oxidizer_drop_kpa
-                )
-                control_reserve_kpa = max(18.0, required_discharge_kpa * (0.025 + 0.015 * burn_fraction))
-                mean_tank_pressure_kpa = 0.5 * (fuel_tank_pressure_kpa + oxidizer_tank_pressure_kpa)
-                pump_discharge_pressure_kpa = min(
-                    pump_discharge_cap_kpa,
-                    required_discharge_kpa + control_reserve_kpa,
-                )
-                pump_differential_pressure_kpa = max(0.0, pump_discharge_pressure_kpa - mean_tank_pressure_kpa)
-                pump_speed_fraction = _clamp(
-                    pump_discharge_pressure_kpa / max(1.0, nominal_pump_discharge_kpa),
-                    0.82,
-                    1.18,
-                )
-                available_feed_kpa = pump_discharge_pressure_kpa - max(fuel_drop_kpa, oxidizer_drop_kpa)
-                chamber_support_kpa = available_feed_kpa / max(1.0, 1.0 + injector_dp_ratio)
-                chamber_iteration_kpa = min(chamber_pressure_kpa, chamber_support_kpa)
-            else:
-                available_fuel_feed_kpa = fuel_tank_pressure_kpa - fuel_drop_kpa
-                available_oxidizer_feed_kpa = oxidizer_tank_pressure_kpa - oxidizer_drop_kpa
-                available_feed_kpa = min(available_fuel_feed_kpa, available_oxidizer_feed_kpa)
-                chamber_support_kpa = available_feed_kpa / max(1.0, 1.0 + injector_dp_ratio)
-                chamber_iteration_kpa = min(chamber_pressure_kpa, chamber_support_kpa)
-
-            chamber_iteration_kpa = _clamp(chamber_iteration_kpa, AMBIENT_PRESSURE_KPA + 35.0, chamber_pressure_kpa)
-
-        actual_chamber_pressure_kpa = chamber_iteration_kpa
-        actual_flow_scale = _clamp(actual_chamber_pressure_kpa / max(1.0, chamber_pressure_kpa), 0.38, 1.12)
-        actual_total_mass_flow_kg_s = total_mass_flow_kg_s * actual_flow_scale
-        actual_fuel_mass_flow_kg_s = fuel_mass_flow_kg_s * actual_flow_scale
-        actual_oxidizer_mass_flow_kg_s = oxidizer_mass_flow_kg_s * actual_flow_scale
-        actual_fuel_drop_kpa = fuel_total_drop_kpa * (actual_flow_scale ** 2)
-        actual_oxidizer_drop_kpa = oxidizer_total_drop_kpa * (actual_flow_scale ** 2)
-        actual_injector_drop_kpa = actual_chamber_pressure_kpa * injector_dp_ratio
-
-        if use_pumps:
-            required_feed_pressure_kpa = actual_chamber_pressure_kpa + actual_injector_drop_kpa + max(
-                actual_fuel_drop_kpa, actual_oxidizer_drop_kpa
-            )
-            fuel_margin_kpa = fuel_tank_pressure_kpa + pump_differential_pressure_kpa - required_feed_pressure_kpa
-            oxidizer_margin_kpa = oxidizer_tank_pressure_kpa + pump_differential_pressure_kpa - required_feed_pressure_kpa
-        else:
-            required_feed_pressure_kpa = actual_chamber_pressure_kpa + actual_injector_drop_kpa + max(
-                actual_fuel_drop_kpa, actual_oxidizer_drop_kpa
-            )
-            fuel_margin_kpa = fuel_tank_pressure_kpa - required_feed_pressure_kpa
-            oxidizer_margin_kpa = oxidizer_tank_pressure_kpa - required_feed_pressure_kpa
-
-        time_history_rows.append(
+            fuel_tank_pressure = fuel_supply
+            oxidizer_tank_pressure = oxidizer_supply
+        step_inputs["fuel"]["supply_pressure_kpa"] = fuel_supply
+        step_inputs["oxidizer"]["supply_pressure_kpa"] = oxidizer_supply
+        step = solve_hydraulic_chamber(step_inputs)
+        fuel = _as_dict(step["fuel"])
+        oxidizer = _as_dict(step["oxidizer"])
+        fuel_required = target_pressure + float(target_branch["fuel"]["total_pressure_drop_kpa"])
+        oxidizer_required = target_pressure + float(target_branch["oxidizer"]["total_pressure_drop_kpa"])
+        fuel_margin = fuel_supply - fuel_required
+        oxidizer_margin = oxidizer_supply - oxidizer_required
+        pump_discharge = min(fuel_supply, oxidizer_supply) if use_pumps else 0.0
+        mean_tank = 0.5 * (fuel_tank_pressure + oxidizer_tank_pressure)
+        rows.append(
             {
-                "time_s": round(time_s, 4),
+                "time_s": round(time_s, 6),
                 "burn_fraction": round(burn_fraction, 6),
-                "architecture_mode": "pump-fed-controlled" if use_pumps else "pressure-fed-blowdown",
-                "chamber_pressure_kpa": round(actual_chamber_pressure_kpa, 4),
-                "required_feed_pressure_kpa": round(required_feed_pressure_kpa, 4),
-                "fuel_tank_pressure_kpa": round(fuel_tank_pressure_kpa, 4),
-                "oxidizer_tank_pressure_kpa": round(oxidizer_tank_pressure_kpa, 4),
-                "fuel_branch_pressure_drop_kpa": round(actual_fuel_drop_kpa, 4),
-                "oxidizer_branch_pressure_drop_kpa": round(actual_oxidizer_drop_kpa, 4),
-                "injector_pressure_drop_kpa": round(actual_injector_drop_kpa, 4),
-                "fuel_margin_kpa": round(fuel_margin_kpa, 4),
-                "oxidizer_margin_kpa": round(oxidizer_margin_kpa, 4),
-                "pump_discharge_pressure_kpa": round(pump_discharge_pressure_kpa, 4),
-                "pump_differential_pressure_kpa": round(pump_differential_pressure_kpa, 4),
-                "pump_speed_fraction": round(pump_speed_fraction, 5),
-                "propellant_mass_flow_kg_s": round(actual_total_mass_flow_kg_s, 5),
-                "fuel_mass_flow_kg_s": round(actual_fuel_mass_flow_kg_s, 5),
-                "oxidizer_mass_flow_kg_s": round(actual_oxidizer_mass_flow_kg_s, 5),
-                "flow_scale": round(actual_flow_scale, 6),
+                "architecture_mode": "pump-fed-regulated" if use_pumps else "pressure-fed-blowdown",
+                "fuel_tank_pressure_kpa": round(fuel_tank_pressure, 4),
+                "oxidizer_tank_pressure_kpa": round(oxidizer_tank_pressure, 4),
+                "fuel_supply_pressure_kpa": round(fuel_supply, 4),
+                "oxidizer_supply_pressure_kpa": round(oxidizer_supply, 4),
+                "required_feed_pressure_kpa": round(max(fuel_required, oxidizer_required), 4),
+                "chamber_pressure_kpa": round(float(step["chamber_pressure_kpa"]), 4),
+                "propellant_mass_flow_kg_s": round(float(step["total_mass_flow_kg_s"]), 7),
+                "fuel_mass_flow_kg_s": round(float(step["fuel_mass_flow_kg_s"]), 7),
+                "oxidizer_mass_flow_kg_s": round(float(step["oxidizer_mass_flow_kg_s"]), 7),
+                "actual_mixture_ratio": round(float(step["actual_mixture_ratio"]), 6),
+                "injector_pressure_drop_kpa": round(
+                    max(float(fuel["injector_pressure_drop_kpa"]), float(oxidizer["injector_pressure_drop_kpa"])),
+                    4,
+                ),
+                "fuel_line_pressure_drop_kpa": round(float(fuel["pressure_drop_kpa"]), 4),
+                "oxidizer_line_pressure_drop_kpa": round(float(oxidizer["pressure_drop_kpa"]), 4),
+                "pump_discharge_pressure_kpa": round(pump_discharge, 4),
+                "pump_differential_pressure_kpa": round(max(0.0, pump_discharge - mean_tank), 4),
+                "pump_speed_fraction": 1.0 if use_pumps else 0.0,
+                "fuel_margin_kpa": round(fuel_margin, 4),
+                "oxidizer_margin_kpa": round(oxidizer_margin, 4),
+                "mass_balance_relative_error": step["mass_balance_relative_error"],
             }
         )
-        previous_chamber_pressure_kpa = actual_chamber_pressure_kpa
 
-    initial_row = time_history_rows[0]
-    final_row = time_history_rows[-1]
-    minimum_feed_margin_kpa = min(
-        min(float(row["fuel_margin_kpa"]), float(row["oxidizer_margin_kpa"])) for row in time_history_rows
-    )
-    minimum_chamber_pressure_kpa = min(float(row["chamber_pressure_kpa"]) for row in time_history_rows)
-    maximum_pump_speed_fraction = max(float(row["pump_speed_fraction"]) for row in time_history_rows)
+    initial_pc = float(rows[0]["chamber_pressure_kpa"])
+    final_pc = float(rows[-1]["chamber_pressure_kpa"])
     return {
-        "time_history_rows": time_history_rows,
+        "time_history_rows": rows,
         "summary": {
-            "history_step_count": len(time_history_rows),
-            "initial_chamber_pressure_kpa": _round_or_none(initial_row.get("chamber_pressure_kpa")),
-            "final_chamber_pressure_kpa": _round_or_none(final_row.get("chamber_pressure_kpa")),
-            "initial_required_feed_pressure_kpa": _round_or_none(initial_row.get("required_feed_pressure_kpa")),
-            "final_required_feed_pressure_kpa": _round_or_none(final_row.get("required_feed_pressure_kpa")),
-            "initial_fuel_tank_pressure_kpa": _round_or_none(initial_row.get("fuel_tank_pressure_kpa")),
-            "final_fuel_tank_pressure_kpa": _round_or_none(final_row.get("fuel_tank_pressure_kpa")),
-            "initial_oxidizer_tank_pressure_kpa": _round_or_none(initial_row.get("oxidizer_tank_pressure_kpa")),
-            "final_oxidizer_tank_pressure_kpa": _round_or_none(final_row.get("oxidizer_tank_pressure_kpa")),
-            "minimum_chamber_pressure_kpa": round(minimum_chamber_pressure_kpa, 3),
-            "minimum_fuel_margin_kpa": round(min(float(row["fuel_margin_kpa"]) for row in time_history_rows), 3),
-            "minimum_oxidizer_margin_kpa": round(min(float(row["oxidizer_margin_kpa"]) for row in time_history_rows), 3),
-            "minimum_feed_margin_kpa": round(minimum_feed_margin_kpa, 3),
-            "final_propellant_mass_flow_kg_s": _round_or_none(final_row.get("propellant_mass_flow_kg_s"), 5),
-            "chamber_pressure_drift_percent": round(
-                100.0
-                * (
-                    float(initial_row["chamber_pressure_kpa"]) - float(final_row["chamber_pressure_kpa"])
-                )
-                / max(1.0, float(initial_row["chamber_pressure_kpa"])),
-                3,
+            "history_step_count": len(rows),
+            "initial_chamber_pressure_kpa": round(initial_pc, 4),
+            "final_chamber_pressure_kpa": round(final_pc, 4),
+            "minimum_chamber_pressure_kpa": round(min(float(row["chamber_pressure_kpa"]) for row in rows), 4),
+            "initial_required_feed_pressure_kpa": rows[0]["required_feed_pressure_kpa"],
+            "final_required_feed_pressure_kpa": rows[-1]["required_feed_pressure_kpa"],
+            "initial_fuel_tank_pressure_kpa": rows[0]["fuel_tank_pressure_kpa"],
+            "final_fuel_tank_pressure_kpa": rows[-1]["fuel_tank_pressure_kpa"],
+            "initial_oxidizer_tank_pressure_kpa": rows[0]["oxidizer_tank_pressure_kpa"],
+            "final_oxidizer_tank_pressure_kpa": rows[-1]["oxidizer_tank_pressure_kpa"],
+            "minimum_fuel_margin_kpa": round(min(float(row["fuel_margin_kpa"]) for row in rows), 4),
+            "minimum_oxidizer_margin_kpa": round(min(float(row["oxidizer_margin_kpa"]) for row in rows), 4),
+            "minimum_feed_margin_kpa": round(
+                min(min(float(row["fuel_margin_kpa"]), float(row["oxidizer_margin_kpa"])) for row in rows), 4
             ),
-            "maximum_pump_speed_fraction": round(maximum_pump_speed_fraction, 4),
+            "final_propellant_mass_flow_kg_s": rows[-1]["propellant_mass_flow_kg_s"],
+            "chamber_pressure_drift_percent": round(100.0 * (final_pc - initial_pc) / max(1e-9, initial_pc), 6),
+            "maximum_pump_speed_fraction": 1.0 if use_pumps else 0.0,
         },
     }
 
@@ -486,84 +425,59 @@ def solve(
 ) -> Dict[str, object]:
     validation = validate_inputs(design_request)
     req = _as_dict(validation.get("normalized_request"))
-
-    thrust_n = max(1.0, float(req.get("target_thrust_newtons", 250.0)))
-    tank_diameter_mm = max(30.0, float(req.get("tank_diameter_mm", 110.0)))
     use_pumps = bool(req.get("use_pumps", False))
-    regen_cooling = bool(req.get("regen_cooling", False))
-    mixture_ratio = max(0.1, float(req.get("mixture_ratio", 1.4)))
     burn_time_s = max(1.0, float(req.get("burn_time_seconds", 12.0)))
-
-    requested_chamber_pressure_kpa = _safe_float(req.get("target_chamber_pressure_kpa"), 0.0)
-    if isinstance(upstream_context, dict):
-        requested_chamber_pressure_kpa = _safe_float(
-            upstream_context.get("target_chamber_pressure_kpa", upstream_context.get("chamber_pressure_kpa")),
-            requested_chamber_pressure_kpa,
-        )
-    chamber_pressure_kpa = (
-        _clamp(requested_chamber_pressure_kpa, 150.0, 18000.0)
-        if requested_chamber_pressure_kpa > 0.0
-        else _calculate_chamber_pressure_kpa(thrust_n, use_pumps)
+    hydraulic_inputs = _hydraulic_inputs(req, upstream_context)
+    closure = solve_hydraulic_chamber(hydraulic_inputs)
+    chamber_pressure_kpa = float(closure["chamber_pressure_kpa"])
+    total_mass_flow_kg_s = float(closure["total_mass_flow_kg_s"])
+    fuel_mass_flow_kg_s = float(closure["fuel_mass_flow_kg_s"])
+    fuel_branch = _as_dict(closure["fuel"])
+    oxidizer_branch = _as_dict(closure["oxidizer"])
+    fuel_total_drop_kpa = float(fuel_branch["total_pressure_drop_kpa"])
+    oxidizer_total_drop_kpa = float(oxidizer_branch["total_pressure_drop_kpa"])
+    injector_pressure_drop_kpa = max(
+        float(fuel_branch["injector_pressure_drop_kpa"]),
+        float(oxidizer_branch["injector_pressure_drop_kpa"]),
     )
-    injector_dp_ratio = 0.18 if str(req.get("injector_type", "impinging")) == "impinging" else 0.14
-    injector_pressure_drop_kpa = chamber_pressure_kpa * injector_dp_ratio
-
-    thermal_margin_factor = 1.05 if regen_cooling else 1.0
-    upstream_mass_flow_kg_s = (
-        _safe_float(upstream_context.get("propellant_mass_flow_kg_s"), 0.0)
-        if isinstance(upstream_context, dict)
+    total_drop_kpa = max(fuel_total_drop_kpa, oxidizer_total_drop_kpa)
+    required_feed_delta_kpa = total_drop_kpa
+    required_tank_pressure_kpa = max(
+        float(fuel_branch["required_supply_pressure_kpa"]),
+        float(oxidizer_branch["required_supply_pressure_kpa"]),
+    )
+    fuel_required_pump_head_kpa = (
+        max(
+            0.0,
+            float(fuel_branch["required_supply_pressure_kpa"])
+            - float(req["fuel_tank_inlet_pressure_kpa"]),
+        )
+        if use_pumps
         else 0.0
     )
-    request_mass_flow_kg_s = _safe_float(req.get("propellant_mass_flow_kg_s"), 0.0)
-    total_mass_flow_kg_s = upstream_mass_flow_kg_s if upstream_mass_flow_kg_s > 0.0 else request_mass_flow_kg_s
-    if total_mass_flow_kg_s <= 0.0:
-        raise RuntimeError(
-            "Feed pressure-drop solve requires propellant_mass_flow_kg_s from the design or combustion solver."
+    oxidizer_required_pump_head_kpa = (
+        max(
+            0.0,
+            float(oxidizer_branch["required_supply_pressure_kpa"])
+            - float(req["oxidizer_tank_inlet_pressure_kpa"]),
         )
-    oxidizer_mass_fraction = mixture_ratio / (1.0 + mixture_ratio)
-    oxidizer_mass_flow_kg_s = total_mass_flow_kg_s * oxidizer_mass_fraction
-    fuel_mass_flow_kg_s = total_mass_flow_kg_s - oxidizer_mass_flow_kg_s
-
-    fuel_branch = _line_loss_kpa(
-        mass_flow_kg_s=fuel_mass_flow_kg_s,
-        density_kg_m3=float(req.get("fuel_density_kg_m3", 760.0)),
-        diameter_m=float(req.get("line_diameter_fuel_m", 0.012)),
-        length_m=float(req.get("line_length_fuel_m", 1.55)),
-        minor_k=float(req.get("minor_loss_fuel_k", 8.0)),
-        dynamic_viscosity_pa_s=float(req.get("fuel_dynamic_viscosity_pa_s", 0.0011)),
-        roughness_m=float(req.get("line_roughness_fuel_m", 1.5e-6)),
+        if use_pumps
+        else 0.0
     )
-    oxidizer_branch = _line_loss_kpa(
-        mass_flow_kg_s=oxidizer_mass_flow_kg_s,
-        density_kg_m3=float(req.get("oxidizer_density_kg_m3", 980.0)),
-        diameter_m=float(req.get("line_diameter_oxidizer_m", 0.011)),
-        length_m=float(req.get("line_length_oxidizer_m", 1.75)),
-        minor_k=float(req.get("minor_loss_oxidizer_k", 9.2)),
-        dynamic_viscosity_pa_s=float(req.get("oxidizer_dynamic_viscosity_pa_s", 0.00025)),
-        roughness_m=float(req.get("line_roughness_oxidizer_m", 1.5e-6)),
-    )
+    design_mode = req["pressure_solve_mode"] == "design"
+    input_classification = {
+        "chamber_pressure_kpa": "selected design requirement" if design_mode else "calculated output",
+        "throat_geometry": "calculated design geometry" if design_mode else "specified as-built input",
+        "injector_flow_areas": "calculated design geometry" if design_mode else "specified as-built input",
+        "supply_pressures": "calculated requirement" if design_mode else "specified boundary condition",
+        "injector_discharge_coefficients": "specified characterization input",
+        "line_geometry_and_loss_coefficients": "specified hardware inputs",
+        "propellant_density_and_viscosity": "property-model inputs",
+        "characteristic_velocity": "calculated thermochemistry input",
+        "mass_flows": "calculated outputs",
+    }
 
-    distribution_loss_kpa = _clamp(5.5 * thermal_margin_factor * (110.0 / tank_diameter_mm), 2.5, 18.0)
-    fuel_total_drop_kpa = fuel_branch["pressure_drop_kpa"] + distribution_loss_kpa
-    oxidizer_total_drop_kpa = oxidizer_branch["pressure_drop_kpa"] + distribution_loss_kpa
-    branch_total_drop_kpa = max(fuel_total_drop_kpa, oxidizer_total_drop_kpa)
-    total_drop_kpa = branch_total_drop_kpa + injector_pressure_drop_kpa
-
-    pressure_margin_factor = 1.12 if use_pumps else 1.18
-    required_feed_delta_kpa = total_drop_kpa * pressure_margin_factor
-    required_tank_pressure_kpa = chamber_pressure_kpa + required_feed_delta_kpa
-
-    transient = _simulate_feed_history(
-        req,
-        chamber_pressure_kpa=chamber_pressure_kpa,
-        injector_dp_ratio=injector_dp_ratio,
-        fuel_total_drop_kpa=fuel_total_drop_kpa,
-        oxidizer_total_drop_kpa=oxidizer_total_drop_kpa,
-        total_mass_flow_kg_s=total_mass_flow_kg_s,
-        fuel_mass_flow_kg_s=fuel_mass_flow_kg_s,
-        oxidizer_mass_flow_kg_s=oxidizer_mass_flow_kg_s,
-        required_tank_pressure_kpa=required_tank_pressure_kpa,
-    )
+    transient = _physical_feed_history(req, hydraulic_inputs, closure)
     time_history_rows = transient["time_history_rows"]
     transient_summary = transient["summary"]
     average_chamber_pressure_kpa = _average_history_value(time_history_rows, "chamber_pressure_kpa")
@@ -577,7 +491,7 @@ def solve(
             "pressure_drop_kpa": round(fuel_total_drop_kpa, 2),
             "minimum_margin_kpa": transient_summary["minimum_fuel_margin_kpa"],
             "status": "calculated",
-            "velocity_m_s": round(fuel_branch["velocity_m_s"], 3),
+            "velocity_m_s": round(float(fuel_branch["velocity_m_s"]), 3),
             "reynolds": round(fuel_branch["reynolds"], 1),
             "major_pressure_drop_kpa": round(fuel_branch["major_pressure_drop_kpa"], 3),
             "minor_pressure_drop_kpa": round(fuel_branch["minor_pressure_drop_kpa"], 3),
@@ -606,6 +520,10 @@ def solve(
             "segment": "injector_pressure_drop",
             "pressure_drop_kpa": round(injector_pressure_drop_kpa, 2),
             "status": "calculated",
+            "fuel_pressure_drop_kpa": round(float(fuel_branch["injector_pressure_drop_kpa"]), 3),
+            "oxidizer_pressure_drop_kpa": round(float(oxidizer_branch["injector_pressure_drop_kpa"]), 3),
+            "fuel_total_flow_area_mm2": round(float(fuel_branch["injector_area_mm2"]), 5),
+            "oxidizer_total_flow_area_mm2": round(float(oxidizer_branch["injector_area_mm2"]), 5),
         },
         {
             "segment": "required_feed_delta",
@@ -634,9 +552,9 @@ def solve(
     )
 
     trace = [
-        "Validated request for reduced-order transient feed-pressure model.",
-        "Solved branch losses with iterative Darcy-Weisbach/Colebrook friction, roughness, viscosity, minor-loss terms, and injector closure.",
-        "Integrated burn-time feed history with pressure-fed blowdown or pump-head control logic.",
+        "Validated explicit hydraulic boundary conditions and hardware inputs.",
+        "Solved mdot_f + mdot_ox = Pc At / cstar with injector-orifice and Darcy/Colebrook branch equations.",
+        "Integrated the frozen injector geometry through the burn-time supply-pressure history.",
     ]
     if upstream_context:
         trace.append("Upstream context keys: {0}".format(", ".join(sorted(upstream_context.keys()))))
@@ -644,8 +562,9 @@ def solve(
     summary = {
         "total_pressure_drop_kpa": round(total_drop_kpa, 2),
         "model_status": "calculated",
-        "quality_flag": "stage-2-transient-feed-v2-iterative-darcy",
-        "feed_line_model": "iterative Darcy-Weisbach with Colebrook friction",
+        "quality_flag": "hydraulic-chamber-closure-v1",
+        "feed_line_model": "simultaneous chamber mass balance, injector orifice flow, and Darcy-Weisbach/Colebrook losses",
+        "pressure_solve_mode": req["pressure_solve_mode"],
         "chamber_pressure_kpa": round(chamber_pressure_kpa, 2),
         "injector_pressure_drop_kpa": round(injector_pressure_drop_kpa, 2),
         "fuel_branch_pressure_drop_kpa": round(fuel_total_drop_kpa, 2),
@@ -656,6 +575,32 @@ def solve(
         "oxidizer_branch_friction_factor": round(oxidizer_branch["friction_factor"], 6),
         "required_feed_delta_kpa": round(required_feed_delta_kpa, 2),
         "required_tank_pressure_kpa": round(required_tank_pressure_kpa, 2),
+        "fuel_required_supply_pressure_kpa": round(float(fuel_branch["required_supply_pressure_kpa"]), 3),
+        "oxidizer_required_supply_pressure_kpa": round(float(oxidizer_branch["required_supply_pressure_kpa"]), 3),
+        "fuel_required_pump_head_kpa": round(fuel_required_pump_head_kpa, 3),
+        "oxidizer_required_pump_head_kpa": round(oxidizer_required_pump_head_kpa, 3),
+        "fuel_injector_area_mm2": round(float(fuel_branch["injector_area_mm2"]), 6),
+        "fuel_injector_pressure_drop_kpa": round(
+            float(fuel_branch["injector_pressure_drop_kpa"]), 3
+        ),
+        "fuel_regen_pressure_drop_kpa": round(
+            float(fuel_branch.get("additional_pressure_drop_kpa", 0.0)), 3
+        ),
+        "fuel_minimum_injector_inlet_pressure_kpa": round(
+            float(fuel_branch.get("minimum_injector_inlet_pressure_kpa", 0.0)), 3
+        ),
+        "fuel_coolant_pressure_constraint_active": bool(
+            fuel_branch.get("minimum_injector_inlet_constraint_active", False)
+        ),
+        "oxidizer_injector_area_mm2": round(float(oxidizer_branch["injector_area_mm2"]), 6),
+        "fuel_injector_discharge_coefficient": round(float(fuel_branch["discharge_coefficient"]), 5),
+        "oxidizer_injector_discharge_coefficient": round(float(oxidizer_branch["discharge_coefficient"]), 5),
+        "actual_mixture_ratio": closure["actual_mixture_ratio"],
+        "mixture_ratio_error_percent": closure["mixture_ratio_error_percent"],
+        "mass_balance_residual_kg_s": closure["mass_balance_residual_kg_s"],
+        "mass_balance_relative_error": closure["mass_balance_relative_error"],
+        "hydraulic_iteration_count": closure["iterations"],
+        "hydraulic_converged": closure["converged"],
         "propellant_mass_flow_kg_s": round(total_mass_flow_kg_s, 4),
         "burn_time_seconds": round(burn_time_s, 3),
         "history_step_count": transient_summary["history_step_count"],
@@ -680,20 +625,23 @@ def solve(
         "metadata": {
             "solver_name": SOLVER_NAME,
             "solver_version": SOLVER_VERSION,
-            "solver_mode": "stage-2-transient-feed-v1",
-            "input_schema_version": "1.1",
-            "output_schema_version": "1.1",
+            "solver_mode": "hydraulic-chamber-v1",
+            "input_schema_version": "1.2",
+            "output_schema_version": "1.2",
         },
         "status": "ok",
         "payload": {
             "request": req,
             "summary": summary,
+            "hydraulic_closure": closure,
+            "hydraulic_inputs": hydraulic_inputs,
+            "input_classification": input_classification,
             "segment_rows": segment_rows,
             "time_history_rows": time_history_rows,
             "station_field_updates": station_field_updates,
         },
         "warnings": [
-            "Uses iterative Darcy-Weisbach/Colebrook line losses and burn-time tank pressure dynamics; still not a calibrated valve-level hydraulic network.",
+            "Hydraulic closure is one-dimensional and requires measured or manufacturer-derived Cd, loss coefficients, and supply conditions for analysis-grade use.",
         ],
         "trace": trace,
     }

@@ -1,0 +1,8 @@
+case_index,case_id,mixture_ratio,chamber_pressure_bar,hot_wall_temperature_k,measured_heat_flux_mw_m2,predicted_heat_flux_mw_m2,predicted_lower_mw_m2,predicted_upper_mw_m2,absolute_percent_error,inside_interval
+1,nasa-tp3380-01,5.9,41.7822,729.884,52.1518,53.6546,50.3697,56.9396,2.882,yes
+2,nasa-tp3380-02,6.3,41.4375,729.884,51.9247,52.5744,49.3556,55.7932,1.251,yes
+3,nasa-tp3380-03,6.0,41.3685,729.884,51.4034,53.0509,49.8029,56.2989,3.205,yes
+4,nasa-tp3380-04,6.0,41.2306,725.904,53.7902,52.9798,49.7361,56.2234,1.507,yes
+5,nasa-tp3380-05,6.1,40.4722,725.904,52.8602,51.99,48.8069,55.173,1.646,yes
+6,nasa-tp3380-06,5.8,40.817,725.904,53.3402,52.8294,49.5949,56.0638,0.958,yes
+7,nasa-tp3380-07,6.0,41.8512,725.904,53.4827,53.6496,50.365,56.9343,0.312,yes

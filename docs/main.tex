@@ -17,6 +17,12 @@
 \usepackage{hyperref}
 \usepackage{float}
 
+\hypersetup{
+  hidelinks,
+  pdftitle={StanThrust Solver Notes},
+  pdfauthor={StanThrust Project}
+}
+
 \pgfplotsset{compat=1.18}
 \usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds}
 \sisetup{detect-all}
@@ -39,7 +45,7 @@
 \newcommand{\Rey}{\operatorname{Re}}
 \newcommand{\OF}{\left(\frac{O}{F}\right)}
 
-\title{\textbf{StanThrust Solver Notes}\\\large Geometry, Feed-System, MOC, Navier-Stokes, Thermal, and Structural Formulation}
+\title{\textbf{StanThrust Solver Notes}\\\large Geometry, Feed-System, MOC, Viscous Flow, Thermal, and Structural Formulation}
 \author{StanThrust Documentation Package}
 \date{\today}
 
@@ -47,7 +53,7 @@
 \maketitle
 
 \section{Purpose}
-StanThrust is a liquid-engine sizing and analysis tool with a coupled design solver stack. The software takes a mission request, converts it into a geometry bundle, enforces an architecture-aware feed-pressure state, evaluates a burn-time feed transient, calls a Cantera thermochemistry provider, and then evaluates thrust, impulse, structural margins, and export geometry with a chamber/nozzle flow model. The software exposes fast preview, refined characteristic-net, and Navier-Stokes design modes for explicit solves. The final desktop solve always escalates to the Navier-Stokes design path so the saved design state is based on the most detailed in-app simulation.
+StanThrust is a liquid-engine sizing and analysis tool with a coupled design solver stack. The software takes a mission request or an as-built hardware definition, constructs a geometry bundle, solves the injector and feed hydraulics together with chamber mass balance, evaluates a burn-time feed transient, calls a Cantera thermochemistry provider, and then evaluates thrust, impulse, structural margins, and export geometry with a chamber/nozzle flow model. The software exposes fast preview, refined characteristic-net, and viscous quasi-one-dimensional modes. The final desktop solve uses the densest in-app station model so the saved state is based on the most detailed available calculation.
 
 This report is written as an engineering methods note for the \emph{current StanThrust solver}. The goal is to show, in explicit algebraic form, how the program moves from a mission request to geometry, flow quantities, pressures, and performance values. The representative plots in this document come from the default packaged case:
 \[
@@ -601,9 +607,9 @@ A_{s,n}=0.82\,\pi d_e L_n.
 \end{equation}
 
 \subsection{Renderable Geometry Fields}
-The desktop 3D views are rendered from the same solved scalar fields and sampled nozzle contour used by the measurement table and exports. The drawing layer may choose colors, perspective, wireframe density, and label positions, but the visible engine dimensions are not hard-coded in the renderer. For example, tank cylinders use solved outer diameters and required lengths, pump models use solved casing, impeller, eye, hub, blade-count, and motor-envelope values, and the impinging injector pattern uses the solved element count, orifice diameter, pair spacing, ring diameter, and convergence height.
+The desktop 3D views are rendered from the same solved scalar fields and sampled nozzle contour used by the measurement table and exports. The drawing layer may choose colors, perspective, wireframe density, and label positions, but the visible engine dimensions are not hard-coded in the renderer. The chamber and nozzle view builds five explicit radii at every axial point: gas-wall radius, hot-wall outer radius, channel floor, channel roof, and outer-jacket radius. The chamber portion uses the solved inner diameter and length, while every nozzle point uses the exact MOC contour radius. No independent smoothing function changes the chamber-to-nozzle geometry. Tank cylinders use solved outer diameters and required lengths, pump models use solved casing, impeller, eye, hub, blade-count, and motor-envelope values, and the impinging injector pattern uses the solved element count, orifice diameter, pair spacing, ring diameter, and convergence height.
 
-Cooling geometry is treated the same way. Regenerative ribs use the solved channel count, rib height, rib thickness, and channel depth. Film cooling uses the solved injector-face diameter, slot height, slot width, slot count, and injection angle. In the exterior 3D view, film cooling is shown as inlet-face slot hardware and short entry ticks only. The coolant film itself is an internal boundary-layer flow, not an exterior solid feature, so the renderer does not draw long film lines down the chamber body. This keeps the render faithful to the calculated hardware while avoiding a misleading solid-geometry interpretation of an internal flow layer.
+Cooling geometry is treated the same way. Regenerative ribs are equally spaced by angle and follow the complete local channel floor from injector face through nozzle exit. Local pitch is recalculated from the solved circumference and fixed channel count, so channel width changes consistently with radius while rib thickness and channel depth retain their calculated dimensions. A translucent jacket shows the channel envelope without hiding the liner and ribs. Film cooling uses the solved injector-face diameter, slot height, slot width, slot count, and injection angle. In the exterior 3D view, film cooling is shown as inlet-face slot hardware and short entry ticks only. The coolant film itself is an internal boundary-layer flow, not an exterior solid feature, so the renderer does not draw long film lines down the chamber body.
 
 \begin{table}[H]
 \centering
@@ -886,19 +892,16 @@ M_T
 \label{eq:thermal-margin}
 \end{equation}
 
-\section{Feed Pressure Closure}
-The feed-pressure solver is executed before the chamber/nozzle model, but it is no longer a single steady algebraic closure. StanThrust now advances a reduced-order feed state over burn time and stores the resulting pressure, margin, and pump-state histories.
+\section{Hydraulic and Chamber Closure}
+The feed and chamber are solved as one hydraulic system. Chamber pressure is not inferred from thrust. At every operating point, StanThrust enforces injector flow, branch pressure loss, and choked chamber mass balance simultaneously. The resulting hardware is then held fixed while the burn history is advanced.
 
 \subsection{Common Relations}
-At every time step, the total propellant flow supplied by the design or coupled solver is split by mixture ratio:
+The chamber outflow relation is
 \begin{equation}
-\dot{m}_p=\dot{m}_{p,\text{solver}},
-\qquad
-\dot{m}_{ox}=\frac{(O/F)}{1+O/F}\dot{m}_p,
-\qquad
-\dot{m}_f=\dot{m}_p-\dot{m}_{ox}.
+\dot{m}_f+\dot{m}_{ox}=\frac{P_c A_t}{c^*},
 \label{eq:feed-mass-flow-split}
 \end{equation}
+where $A_t$ is the actual throat area and $c^*$ is calculated from the active Cantera thermochemistry state and the specified combustion efficiency.
 
 Line losses are computed branch by branch with a deterministic Darcy-Weisbach closure:
 \begin{equation}
@@ -914,50 +917,37 @@ v=\frac{\dot{m}}{\rho A},
 A=\frac{\pi D^2}{4}.
 \label{eq:feed-darcy}
 \end{equation}
-The Reynolds number and friction factor are evaluated as
+The Reynolds number is evaluated directly. Laminar flow uses $f=64/\Rey$; turbulent flow uses the iterated Colebrook relation, with a continuous blend over the transition region:
 \begin{equation}
 \Rey=\frac{\rho v D}{\mu},
 \qquad
-f=
-\begin{cases}
-64/\Rey, & \Rey<2300, \\
-0.3164\,\Rey^{-1/4}, & \Rey\ge 2300.
-\end{cases}
+\frac{1}{\sqrt{f}}
+=-2\log_{10}\!\left(\frac{\epsilon/D}{3.7}+\frac{2.51}{\Rey\sqrt{f}}\right).
 \label{eq:feed-reynolds}
 \end{equation}
 
-Injector pressure drop remains proportional to chamber pressure:
+Each propellant branch obeys the aggregate incompressible injector relation
 \begin{equation}
-\Delta P_{\text{inj}} = \chi_{\text{inj}} P_c,
-\qquad
-\chi_{\text{inj}}=
-\begin{cases}
-0.18, & \text{Impinging},\\
-0.14, & \text{Pintle}.
-\end{cases}
+\dot{m}_i=C_{d,i}A_i\sqrt{2\rho_i\Delta P_{\text{inj},i}},
+\qquad i\in\{f,ox\}.
 \label{eq:feed-injector-drop}
 \end{equation}
 
-The upstream pressure that the feed system must supply is then
+The branch pressure equation is
 \begin{equation}
-P_{\text{req}}
-=
-P_c + \Delta P_{\text{inj}}
-+
-\max\!\left(\Delta P_{\ell,f},\,\Delta P_{\ell,ox}\right).
+P_{s,i}=P_c+\Delta P_{\ell,i}+\Delta P_{\text{inj},i}.
 \label{eq:feed-required-pressure}
 \end{equation}
 
-Because the chamber pressure and mass flow are coupled, StanThrust iterates each time step with
+\subsection{Design and Analysis Modes}
+In \textbf{design mode}, the user selects $P_c$, $O/F$, injector pressure-drop ratio, line geometry, $C_d$, and the required mission state. Equation~\eqref{eq:feed-mass-flow-split} determines total flow, the selected $O/F$ divides it between branches, and Eq.~\eqref{eq:feed-injector-drop} sizes the aggregate injector areas. Equation~\eqref{eq:feed-required-pressure} then calculates the required supply pressure and pump head.
+
+In \textbf{analysis mode}, the user supplies the as-built throat diameter, aggregate injector areas, discharge coefficients, line dimensions, loss coefficients, fluid properties, and fuel and oxidizer supply pressures. A bracketed root solve varies $P_c$. For each trial pressure, an inner branch solve calculates $\dot m_f$ and $\dot m_{ox}$ from Eqs.~\eqref{eq:feed-darcy} and \eqref{eq:feed-injector-drop}. The accepted pressure is the root of
 \begin{equation}
-\phi_k = \clip\!\left(\frac{P_{c,k}}{P_{c,0}},\,0.38,\,1.12\right),
-\qquad
-\dot{m}_{p,k} = \phi_k \dot{m}_{p,0},
-\qquad
-\Delta P_{\ell,k} = \phi_k^2 \Delta P_{\ell,0}.
-\label{eq:feed-flow-scaling}
+R_m(P_c)=\dot m_f(P_c)+\dot m_{ox}(P_c)-\frac{P_cA_t}{c^*}=0.
+\label{eq:hydraulic-mass-residual}
 \end{equation}
-This keeps the transient stable while still allowing line losses and chamber pressure to drift together over the burn.
+This mode predicts chamber pressure and mixture ratio from specified hardware instead of resizing the hardware to a requested thrust.
 
 \subsection{Pressure-Fed Blowdown Branch}
 For a pressure-fed case, each tank is treated as a gas-backed liquid volume with an initial liquid fill fraction $\beta$. If $\zeta=t/t_b$ is the consumed burn fraction, the gas-volume ratio becomes
@@ -976,39 +966,19 @@ P_a+\frac{P_{t,0}-P_a}{\left(V_g(\zeta)/V_{g,0}\right)^n},
 \end{equation}
 where $n$ is the pressurant polytropic index and $P_a$ is ambient pressure.
 
-At each time step, the available feed pressure after branch losses is
-\begin{equation}
-P_{\text{avail},k}
-=
-\min\!\left(
-P_{t,f,k}-\Delta P_{\ell,f,k},\,
-P_{t,ox,k}-\Delta P_{\ell,ox,k}
-\right),
-\label{eq:feed-available-pressure}
-\end{equation}
-and the chamber can sustain at most
-\begin{equation}
-P_{c,k}
-=
-\clip\!\left(
-\min\!\left(P_{c,0},\,\frac{P_{\text{avail},k}}{1+\chi_{\text{inj}}}\right),
-P_a+35,\,
-P_{c,0}
-\right).
-\label{eq:pressure-fed-chamber-tailoff}
-\end{equation}
+At each time step, the changing tank pressures become the two supply boundary conditions. The solver reruns Eq.~\eqref{eq:hydraulic-mass-residual} with the nominal injector areas and throat held fixed. Chamber pressure, branch flow, mixture ratio, and line loss therefore move together without an imposed flow-scaling factor.
 
 Fuel-side and oxidizer-side feed margins are reported explicitly:
 \begin{equation}
-\Delta P_{m,f,k}=P_{t,f,k}-P_{\text{req},k},
+\Delta P_{m,f,k}=P_{t,f,k}-P_{s,f,\text{nom}},
 \qquad
-\Delta P_{m,ox,k}=P_{t,ox,k}-P_{\text{req},k}.
+\Delta P_{m,ox,k}=P_{t,ox,k}-P_{s,ox,\text{nom}}.
 \label{eq:pressure-fed-margins}
 \end{equation}
 These are the quantities plotted and exported, because they directly show whether the tanks remain above the required delivery pressure over the whole burn.
 
 \subsection{Pump-Fed Controlled Branch}
-For a pump-fed case, StanThrust keeps low-pressure inlet tanks and models only the pump-side state history needed to maintain the chamber.
+For a pump-fed case, StanThrust keeps low-pressure inlet tanks and treats the specified discharge pressures as regulated boundary conditions.
 The inlet tank pressures are allowed to decay mildly:
 \begin{equation}
 P_{t,k}
@@ -1018,49 +988,13 @@ P_a + (P_{t,0}-P_a)\left(1-\delta\zeta^{1.15}\right),
 \end{equation}
 where $\delta$ is a small prescribed decay fraction.
 
-The required pump discharge pressure is
+The required pump head for each branch is
 \begin{equation}
-P_{\text{pump,req},k}
-=
-P_c+\Delta P_{\text{inj},k}
-+
-\max\!\left(\Delta P_{\ell,f,k},\,\Delta P_{\ell,ox,k}\right),
+\Delta P_{\text{pump},i}
+=P_{s,i}-P_{t,i},
 \label{eq:pump-required-discharge}
 \end{equation}
-and the controller applies a small reserve:
-\begin{equation}
-P_{\text{pump},k}
-=
-\min\!\left(
-P_{\text{pump,cap}},
-P_{\text{pump,req},k}+\Delta P_{\text{ctrl},k}
-\right),
-\label{eq:pump-discharge-control}
-\end{equation}
-with
-\begin{equation}
-\Delta P_{\text{ctrl},k}
-=
-\max\!\left(18,\,
-\left[0.025+0.015\zeta\right]P_{\text{pump,req},k}
-\right).
-\label{eq:pump-control-reserve}
-\end{equation}
-
-The pump differential head is then
-\begin{equation}
-\Delta P_{\text{pump},k}
-=
-P_{\text{pump},k}
--\frac{1}{2}\left(P_{t,f,k}+P_{t,ox,k}\right),
-\label{eq:pump-head-transient}
-\end{equation}
-and the corresponding nondimensional pump-speed index is
-\begin{equation}
-N_k^*=\clip\!\left(\frac{P_{\text{pump},k}}{P_{\text{pump},0}},\,0.82,\,1.18\right).
-\label{eq:pump-speed-index}
-\end{equation}
-This is still a reduced-order model, but it produces a usable burn history for pump differential pressure and pump-control effort instead of a single steady value.
+where $P_{s,i}$ is calculated in design mode or specified in analysis mode. The current transient assumes regulated discharge and reports the head demanded as the inlet pressure changes. It does not model a pump map, shaft-speed controller, cavitation, or valve dynamics.
 
 \begin{figure}[H]
 \centering
@@ -1538,7 +1472,7 @@ R=\SI{\SampleGasConstant}{J\,kg^{-1}\,K^{-1}},\qquad
 T_c=\SI{\SampleChamberTemperature}{K}.
 \]
 
-These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the coupled chamber/nozzle station model. Cantera is a required dependency for supported solver runs, and missing thermochemistry is reported as a solver error.
+These are not reconstructed inside the geometry model; they are taken from the Cantera-backed thermochemistry provider and inserted directly into the coupled chamber/nozzle station model. For gas transport, the equilibrium product mass fractions are mapped into the Cantera \texttt{gri30.yaml} transport phase. A solve is rejected unless that phase covers at least 0.999999 of the equilibrium-product mass. The accepted composition is normalized once and held frozen while Cantera evaluates viscosity, thermal conductivity, and heat capacity at every solved axial temperature and pressure. Cantera is a required dependency for supported solver runs, and missing thermochemistry or incomplete transport coverage is reported as a solver error.
 
 \section{Coupled Chamber and Nozzle Flow Solver}
 \subsection{Flow Modes and Final Pass}
@@ -1546,9 +1480,9 @@ StanThrust exposes three internal flow modes:
 \begin{enumerate}[leftmargin=6mm]
 \item \textbf{Fast preview mode}, which preserves the original constant-coefficient quasi-one-dimensional closure and is intended for quick design iteration.
 \item \textbf{Refined mode}, which uses the solved throat diameter directly, applies a contour-aware bell-nozzle loss model, and subtracts an ambient-pressure correction from the vacuum thrust coefficient.
-\item \textbf{Navier-Stokes mode}, which starts from the Cantera and MOC station field, applies shock feedback, and then applies the in-app axisymmetric viscous finite-volume correction.
+\item \textbf{Viscous quasi-one-dimensional mode}, which starts from the Cantera and MOC station field, applies shock feedback, and then applies the in-app axisymmetric finite-volume station correction.
 \end{enumerate}
-The final solve performed by the desktop app forces Navier-Stokes mode with a dense axial station count. Lower modes remain useful for comparison plots and quick inspection, but they are not the final design basis.
+The final solve performed by the desktop app forces the viscous quasi-one-dimensional mode with a dense axial station count. Lower modes remain useful for comparison plots and quick inspection, but they are not the final design basis. This mode is not a multidimensional CFD mesh.
 
 For the report case, the detailed derivation below uses
 \[
@@ -1585,9 +1519,9 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
   height=0.62\textwidth,
   ybar,
   bar width=10pt,
-  symbolic x coords={fast,refined,navier_stokes},
+  symbolic x coords={fast,refined,viscous},
   xtick=data,
-  xticklabels={Fast,Refined,Navier-Stokes},
+  xticklabels={Fast,Refined,Viscous Q1D},
   ylabel={Thrust [N]},
   grid=major,
 ]
@@ -1604,9 +1538,9 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
   height=0.62\textwidth,
   ybar,
   bar width=10pt,
-  symbolic x coords={fast,refined,navier_stokes},
+  symbolic x coords={fast,refined,viscous},
   xtick=data,
-  xticklabels={Fast,Refined,Navier-Stokes},
+  xticklabels={Fast,Refined,Viscous Q1D},
   ylabel={$I_{sp}$ [s]},
   grid=major,
 ]
@@ -1614,26 +1548,24 @@ C_{F,\mathrm{eff}} = C_{F,\mathrm{amb}}\,\eta_{\mathrm{geom}}\,\eta_{\mathrm{sep
 \end{axis}
 \end{tikzpicture}
 \end{minipage}
-\caption{Flow-mode comparison for the packaged sample case. The final app solve uses the Navier-Stokes path.}
+\caption{Flow-mode comparison for the packaged sample case. The final app solve uses the viscous quasi-one-dimensional path.}
 \end{figure}
 
 \subsection{Final-Pass Uncertainty Bounds}
-The final coupled result includes local uncertainty bounds for the headline outputs. These are not optimizer weights and they are not calibration factors. They are solver diagnostics derived from the final Navier-Stokes pass:
-\begin{itemize}[leftmargin=5mm]
-\item coupled pressure residual;
-\item final thrust residual;
-\item shock-feedback state;
-\item final Navier-Stokes momentum residual;
-\item heat-transfer and material-margin state.
-\end{itemize}
-For a solved value $y$, StanThrust reports
+The final coupled result propagates explicit input ranges through the closed hydraulic system with a deterministic seeded Latin-hypercube sample. The sampled quantities include combustion efficiency, injector discharge coefficients, aggregate injector areas, supply pressures, densities, line minor-loss coefficients, roughness, throat diameter, and thrust coefficient. For hydraulic outputs, the report provides the fifth, fiftieth, and ninety-fifth percentiles:
 \begin{equation}
-y_{\mathrm{low}}=y\left(1-\frac{u_-}{100}\right),
-\qquad
-y_{\mathrm{high}}=y\left(1+\frac{u_+}{100}\right),
+\left[y_{05},y_{50},y_{95}\right]
+=\operatorname{percentile}_{[0.05,0.50,0.95]}\!\left(\mathcal{S}(\boldsymbol{x}_j)\right),
 \label{eq:uncertainty-bounds}
 \end{equation}
-where $u_-$ and $u_+$ are field-specific percentages. The pressure, thrust, mass-flow, specific-impulse, wall-temperature, and combined material-margin rows are exported in the coupled solver payload. The bounds are intended for design review and regression comparison. External CFD and hot-fire data are still required before treating the numbers as hardware-validation values.
+where $\mathcal{S}$ is the full hydraulic and chamber closure and $\boldsymbol{x}_j$ is one Latin-hypercube input sample. The calculated intervals currently cover:
+\begin{itemize}[leftmargin=5mm]
+\item chamber pressure;
+\item total propellant mass flow;
+\item actual mixture ratio;
+\item predicted thrust.
+\end{itemize}
+Design-mode injector areas are frozen at their nominal sized values before sampling, so the interval represents one piece of hardware under uncertain operating conditions rather than repeated redesigns. Pressure sensitivities are reported as Pearson correlations for screening. The stationwise thermal march reports hot-wall bounds using the NASA TP-3380 gas-side coefficient interval $0.023\le C_g\le0.026$, coolant-side coefficient uncertainty of 10 percent, and wall-conductivity uncertainty of 8 percent. These are correlation uncertainty bands, not hot-fire confidence limits, and should be calibrated when test data become available.
 
 \subsection{Area Relations}
 The chamber and exit areas are
@@ -1682,28 +1614,12 @@ c^\star_{\text{ideal}}
 }
 \label{eq:cstar-ideal}
 \end{equation}
-and the empirical efficiency applied to it is
+and the specified combustion efficiency applied to it is
 \begin{equation}
-\eta_{c^\star}
-=
-\clip\!\Big(
-\left[
-0.90
-+0.04\chi_f
-+0.03\,\mathbb{1}_{\text{regen}}
-+0.01\,\mathbb{1}_{\text{pump}}
--0.01\,\mathbb{1}_{\text{pressure-fed}}
--0.03\tau_{ox}
-\right]
-\eta_{\text{comb}}
-\eta_{\text{thermo}},
-\,
-0.72,\,
-1.15
-\Big)
+\eta_{c^\star}=\eta_{\text{comb}},
 \label{eq:cstar-eff}
 \end{equation}
-where $\eta_{\text{comb}}$ is the solver-assumption combustion efficiency and $\eta_{\text{thermo}}$ is the provider-specific thermochemistry efficiency factor.
+where $\eta_{\text{comb}}$ is an explicit input. It is not inferred from cooling mode, propellant labels, or feed architecture.
 
 The effective characteristic velocity is then
 \begin{equation}
@@ -2014,9 +1930,9 @@ I=F\max(0.5,t_b).
 
 \section{Heat Transfer, Shock, and Material Redesign}
 \subsection{Wall Heat-Transfer Network}
-The combustion solve now calls a reduced-order heat-transfer model after the quasi-one-dimensional flow state has been assembled. The model evaluates three representative wall sections: chamber midsection, throat region, and nozzle exit plane. Each section uses the local diameter, length, Mach number, material, wall thickness, and cooling configuration from the solved design state.
+The combustion solve calls a stationwise conjugate heat-transfer model after the quasi-one-dimensional flow state has been assembled. Chamber stations are combined with every sampled nozzle contour point to create one ordered engine-axis grid. Each station uses its local diameter, control-volume length, Mach number, material, wall thickness, channel pitch, channel width, and cooling configuration from the solved design state. Chamber, throat, and nozzle summary rows are retained for compatibility, but material evaluation uses the limiting thermal station within each physical region.
 
-For a station with Mach number $M$, the gas-side static state is
+Each production thermal station receives $T_s$ and $P_s$ directly from the active chamber/nozzle flow result. Before a viscous correction those fields satisfy
 \begin{equation}
 T_s=\frac{T_c}{1+\frac{\gamma-1}{2}M^2}
 \label{eq:heat-static-temperature}
@@ -2037,12 +1953,17 @@ The gas Reynolds number is
 \Rey_g=\frac{\rho_s u_s D_h}{\mu_g}
 \label{eq:gas-reynolds}
 \end{equation}
-where $\mu_g$ is calculated with a Sutherland-law temperature correction. The gas Nusselt number is
+where $\mu_g$ is calculated by Cantera at the station's solved $(T_s,P_s)$ state using the frozen equilibrium-product composition. Cantera also supplies $k_g$ and $c_{p,g}$, and the solver calculates
+\begin{equation}
+\Pr_g=\frac{c_{p,g}\mu_g}{k_g}.
+\label{eq:gas-prandtl}
+\end{equation}
+The same local transport state is used by the Reynolds, Nusselt, recovery-temperature, and wall-resistance calculations. NASA TP-3380 reports chamber and throat calorimeter data in the form $\mathrm{Nu}=C_g\Rey^{0.8}\Pr^{0.3}$, with measured $C_g$ values from 0.023 to 0.026 for its two injectors. StanThrust uses the midpoint, $C_g=0.0245$, and retains the reported endpoints as coefficient bounds. The gas Nusselt number is
 \begin{equation}
 \mathrm{Nu}_g=
 \begin{cases}
 3.66+0.008\sqrt{\Rey_g}, & \Rey_g<2300\\
-0.026\Rey_g^{0.8}\Pr_g^{0.4}, & \Rey_g\ge 2300
+0.0245\Rey_g^{0.8}\Pr_g^{0.3}, & \Rey_g\ge 2300
 \end{cases}
 \label{eq:gas-nusselt}
 \end{equation}
@@ -2052,14 +1973,63 @@ h_g=\frac{\mathrm{Nu}_g k_g}{D_h}.
 \label{eq:gas-heat-transfer-coefficient}
 \end{equation}
 
+The TP-3380 closure is retained through the chamber and throat. Downstream of the throat, the solver also marches a boundary-layer state along wall distance $s$. The laminar momentum thickness is reconstructed with a Thwaites integral,
+\begin{equation}
+\theta^2(s)=\frac{0.45\nu(s)}{U_e^6(s)}\int_0^s U_e^5(\xi)\,\mathrm{d}\xi,
+\label{eq:thwaites-momentum-thickness}
+\end{equation}
+and the transition diagnostic is
+\begin{equation}
+\Rey_\theta=\frac{U_e\theta}{\nu}.
+\label{eq:momentum-thickness-reynolds}
+\end{equation}
+The fixed transition screening value is $\Rey_\theta=400$. For a station selected as laminar or relaminarized, the local wall-distance relation is
+\begin{equation}
+\mathrm{Nu}_s=0.332\Rey_s^{1/2}\Pr_g^{1/3},
+\qquad
+\Rey_s=\frac{U_es}{\nu}.
+\label{eq:laminar-nozzle-nusselt}
+\end{equation}
+The acceleration parameter in Eq.~\eqref{eq:thermal-acceleration-parameter} supplies a second regime test. A favorable gradient with $K\ge2.0\times10^{-6}$ latches the downstream state as relaminarized until the gradient is no longer favorable.
+
+The selected momentum profile drives a wall-normal thermal solve. Let
+\begin{equation}
+\phi=\frac{T-T_w}{T_r-T_w},
+\qquad
+\phi(s,0)=0,
+\qquad
+\phi(s,y_e)=1.
+\label{eq:thermal-boundary-layer-scalar}
+\end{equation}
+Using the local compressible edge-state properties, the marched energy equation is
+\begin{equation}
+u_e f(y)\frac{\partial\phi}{\partial s}
+=\frac{1}{r_w-y}\frac{\partial}{\partial y}
+\left[(r_w-y)\alpha_e\frac{\partial\phi}{\partial y}\right],
+\qquad
+\alpha_e=\frac{k_e}{\rho_e c_{p,e}}.
+\label{eq:axisymmetric-thermal-boundary-layer}
+\end{equation}
+The internal-nozzle axisymmetric factor uses local radius $r_w-y$. Laminar stations use a Pohlhausen velocity profile and turbulent stations use a one-seventh-power profile. Their thickness is fixed by the momentum thickness in Eq.~\eqref{eq:thwaites-momentum-thickness}, rather than fitted to heat-flux data. Equation~\eqref{eq:axisymmetric-thermal-boundary-layer} is discretized implicitly on a cosine-clustered 96-node grid. A second 48-node march supplies the numerical-refinement component of the uncertainty interval. The wall coefficient follows directly from
+\begin{equation}
+h_g=k_e\left.\frac{\partial\phi}{\partial y}\right|_{y=0}.
+\label{eq:resolved-wall-heat-transfer-coefficient}
+\end{equation}
+The march costs $O(N_xN_y)$ time and $O(N_y)$ working memory. Five wall-normal profiles are retained for diagnostics, adding $O(5N_y)$ stored output. The calculation resolves thermal diffusion over a prescribed momentum profile. It does not yet solve normal convection, variable properties across the layer, reacting boundary-layer chemistry, or shock-boundary-layer interaction.
+
 The recovery temperature is
 \begin{equation}
 T_r=T_s\left(1+\sqrt{\Pr_g}\frac{\gamma-1}{2}M^2\right).
 \label{eq:recovery-temperature}
 \end{equation}
 If film cooling is enabled, the wall-side recovery temperature is reduced by the local film effectiveness:
+\par\medskip
 \begin{equation}
-T_{r,\mathrm{eff}}=T_r-\eta_{\mathrm{film}}\left(T_r-T_{\mathrm{ref}}\right).
+\begin{aligned}
+T_{r,\mathrm{eff}}
+&=T_r-\eta_{\mathrm{film}}
+\left(T_r-T_{\mathrm{ref}}\right).
+\end{aligned}
 \label{eq:film-recovery-temperature}
 \end{equation}
 The implementation uses the solved film coverage to set a bounded effectiveness, strongest in the chamber and reduced toward the throat and exit.
@@ -2079,8 +2049,25 @@ The coolant Nusselt number is $3.66$ in laminar flow, $0.023\Rey_c^{0.8}\Pr_c^{0
 h_c=\frac{\mathrm{Nu}_c k_c}{D_{h,c}}.
 \label{eq:coolant-heat-transfer-coefficient}
 \end{equation}
+At every coolant station, $\rho_c$, $c_{p,c}$, $\mu_c$, and $k_c$ are recalculated from the local bulk temperature and static pressure with CoolProp. Ethanol and methane use the fluid-specific equations of state and transport correlations documented by CoolProp and their underlying references. The solver records the backend version in its output. It stops if the path enters a two-phase state. A continuous liquid-like to gas-like transition is permitted only when local pressure remains above the CoolProp critical pressure. Isopropyl alcohol is not accepted as a regenerative coolant until an equivalent pressure-dependent property backend is supplied.
 
-Each wall section is then solved as a gas-wall-coolant resistance network:
+The coolant phase envelope participates in design rather than serving only as a diagnostic. For maximum calculated bulk temperature $T_{c,\max}$, the phase-boundary pressure is
+\begin{equation}
+P_{\mathrm{phase}}=
+\begin{cases}
+P_{\mathrm{sat}}(T_{c,\max}), & T_{c,\max}<T_{\mathrm{crit}}\\
+P_{\mathrm{crit}}, & T_{c,\max}\ge T_{\mathrm{crit}}.
+\end{cases}
+\label{eq:coolant-phase-boundary}
+\end{equation}
+The selected supply margin $m_P$ gives the required minimum pressure at the jacket outlet, immediately upstream of the fuel injector:
+\begin{equation}
+P_{j,\mathrm{out,min}}=(1+m_P)P_{\mathrm{phase}}.
+\label{eq:coolant-phase-margin}
+\end{equation}
+Methane regenerative designs use the supercritical branch because the cryogenic inlet path can cross the critical temperature during the wall march. Ethanol uses its calculated saturation branch unless its calculated maximum temperature reaches the critical point.
+
+Each axial control volume is solved as a gas-wall-coolant resistance network:
 \begin{equation}
 R_{\mathrm{tot}}=\frac{1}{h_g}+\frac{t_w}{k_w}+\frac{1}{h_c}
 \label{eq:thermal-resistance}
@@ -2096,14 +2083,47 @@ T_{\mathrm{hot}}=T_{r,\mathrm{eff}}-\frac{q''}{h_g},
 T_{\mathrm{cold}}=T_{\mathrm{sink}}+\frac{q''}{h_c}.
 \label{eq:wall-temperatures}
 \end{equation}
-The section heat load and coolant outlet rise are
+The control-volume heat load and coolant outlet rise are
 \begin{equation}
 \dot{Q}=q''\pi dL,
 \qquad
 \Delta T_c=\frac{\dot{Q}}{\mdot_{\mathrm{cool}}c_{p,c}}.
 \label{eq:section-heat-load}
 \end{equation}
-For passive sections, the outer sink is ambient convection. For regenerative sections, the coolant outlet from each solved section becomes the inlet bulk temperature for the next section.
+For passive stations, the outer sink is ambient convection. For regenerative cooling, the complete fuel stream is routed through the jacket and marched in counterflow from nozzle exit to injector face. At station $i$, local channel pitch is
+\begin{equation}
+p_i=\frac{2\pi(r_i+t_{w,i})}{N_{\mathrm{ch}}},
+\qquad
+w_i=p_i-t_{\mathrm{rib}}.
+\label{eq:local-channel-pitch}
+\end{equation}
+The hydraulic diameter is recalculated from $w_i$ and channel depth. Darcy pressure loss is accumulated as
+\begin{equation}
+\Delta P_{c,i}=f_i\frac{\Delta x_i}{D_{h,i}}\frac{\rho_c u_{c,i}^2}{2}.
+\label{eq:coolant-pressure-march}
+\end{equation}
+The station outlet temperature and pressure become the inlet state of the next upstream control volume. Wall conductivity is also updated iteratively from the station mean wall temperature, so the resistance network and the reported material state use the same converged value.
+
+The integrated jacket loss closes the required jacket inlet pressure:
+\begin{equation}
+P_{j,\mathrm{in,req}}=P_{j,\mathrm{out,min}}+\sum_i\Delta P_{c,i}.
+\label{eq:coolant-required-inlet-pressure}
+\end{equation}
+Because the coolant discharges into the fuel injector, the fuel injector pressure drop and total flow area are recalculated as
+\begin{equation}
+\Delta P_{\mathrm{inj},f}=\max\left(r_{\mathrm{inj}}P_c,\ P_{j,\mathrm{out,min}}-P_c\right),
+\label{eq:coolant-coupled-injector-drop}
+\end{equation}
+\begin{equation}
+A_{\mathrm{inj},f}=\frac{\mdot_f}{C_{d,f}\sqrt{2\rho_f\Delta P_{\mathrm{inj},f}}}.
+\label{eq:coolant-coupled-injector-area}
+\end{equation}
+The fuel supply requirement is then
+\begin{equation}
+P_{f,\mathrm{supply,req}}=P_c+\Delta P_{\mathrm{inj},f}+\sum_i\Delta P_{c,i}+\Delta P_{\mathrm{line},f}.
+\label{eq:coolant-coupled-fuel-supply}
+\end{equation}
+Design mode feeds these values into the next coupled iteration until jacket inlet pressure, minimum injector inlet pressure, and jacket loss each change by no more than 0.05 kPa. Analysis mode does not resize hardware or raise a supplied boundary condition. It rejects an inlet pressure below Equation~\ref{eq:coolant-required-inlet-pressure} and reports the pressure margin for an acceptable case.
 
 \subsection{Rankine-Hugoniot Shock Diagnostics}
 The nozzle shock module evaluates whether the solved exit pressure is underexpanded, pressure matched, or overexpanded:
@@ -2113,11 +2133,11 @@ The nozzle shock module evaluates whether the solved exit pressure is underexpan
 \end{equation}
 The current thresholds are
 \begin{equation}
-\Pi_e<0.85 \Rightarrow \text{overexpanded},
-\qquad
-0.85\le\Pi_e\le1.15 \Rightarrow \text{pressure matched},
-\qquad
-\Pi_e>1.15 \Rightarrow \text{underexpanded}.
+\begin{aligned}
+\Pi_e<0.85 &\Rightarrow \text{overexpanded},\\
+0.85\le\Pi_e\le1.15 &\Rightarrow \text{pressure matched},\\
+\Pi_e>1.15 &\Rightarrow \text{underexpanded}.
+\end{aligned}
 \label{eq:expansion-regime}
 \end{equation}
 
@@ -2156,16 +2176,21 @@ The structural material stage now consumes both pressure and heat-transfer outpu
 \sigma_\theta=\frac{Pr}{t_w}
 \label{eq:material-hoop-stress}
 \end{equation}
-and a temperature-derated allowable stress
+and a temperature-interpolated allowable stress
 \begin{equation}
-\sigma_{\mathrm{allow},T}=\phi_T(T_{\mathrm{hot}},T_{\mathrm{limit}})\sigma_{\mathrm{allow}}.
+\sigma_{\mathrm{allow},T}=\operatorname{interp}\!\left(T_{\mathrm{hot}};\,\mathcal{D}_{\sigma,m}\right).
 \label{eq:material-derated-stress}
 \end{equation}
-The derating factor remains unity below $0.55T_{\mathrm{limit}}$, falls linearly to $0.45$ at the material temperature limit, and continues decreasing if the predicted hot wall exceeds the limit.
+Here $\mathcal{D}_{\sigma,m}$ is the tabulated allowable-stress curve for material $m$. Thermal conductivity is evaluated in the same way from $\mathcal{D}_{k,m}$. Each table carries a source, valid temperature interval, provenance class, and uncertainty fraction. The stress calculation uses the lower uncertainty bound
+\begin{equation}
+\sigma_{\mathrm{allow},T}^{-}=\sigma_{\mathrm{allow},T}(1-u_m)
+\label{eq:material-allowable-lower}
+\end{equation}
+rather than the nominal curve. Manufacturer tables are used where a product-form source is public. Remaining catalog entries are explicitly marked as conservative screening curves and carry wider uncertainty. Values outside the tabulated interval are flagged in the output rather than presented as validated extrapolations.
 
 The stress and heat-transfer margins are
 \begin{equation}
-M_\sigma=\frac{\sigma_{\mathrm{allow},T}}{\sigma_\theta N_{\mathrm{FS}}},
+M_\sigma=\frac{\sigma_{\mathrm{allow},T}^{-}}{\sigma_\theta N_{\mathrm{FS}}},
 \qquad
 M_T=\frac{T_{\mathrm{limit}}}{T_{\mathrm{hot}}}.
 \label{eq:stress-heat-margins}
@@ -2177,26 +2202,153 @@ M_{\mathrm{mat}}=\min(M_\sigma,M_T).
 \end{equation}
 If $M_{\mathrm{mat}}<1$, the solver ranks the available material catalog at the same section state and reports a redesign recommendation. Stress failures recommend a minimum wall thickness; thermal failures recommend a better material when one exists, or more cooling capacity when no catalog material clears the combined margin.
 
-\section{Axial Field Model}
-For visualization and exports, StanThrust creates a simple axial field model across the entire engine length. If
-\[
-\xi=\frac{x}{L_{\text{stack}}}\in[0,1],
-\]
-then the report pressure and temperature profiles are constructed as
+\subsection{Thermal Closure Validation}
+NASA TP-3380 reports a measured throat heat flux of $54\ \mathrm{MW/m^2}$ at $P_c=4.14\ \mathrm{MPa}$, mixture ratio 6.0, and hot-wall temperature 730 K for a liquid-oxygen and gaseous-hydrogen plug-nozzle calorimeter. More directly applicable to StanThrust's gas-side closure, the report gives fitted coefficients of 0.023 and 0.026 for
 \begin{equation}
-P(x)=\max(80,\,P_c(1-0.78\,\xi))
-\label{eq:axial-pressure}
+\mathrm{Nu}=C_g\Rey^{0.8}\Pr^{0.3}.
+\label{eq:nasa-calorimeter-correlation}
 \end{equation}
+The implemented value of 0.0245 lies at the midpoint of that measured range. This validation is a fixed comparison with no optimization or fitted StanThrust parameter. The NASA geometry gives a 66.0 mm outer chamber diameter and a 53.3 mm centerbody diameter at the annular throat. The resulting hydraulic diameter is therefore
 \begin{equation}
-T(x)=\max(220,\,T_c(1-0.46\,\xi))
-\label{eq:axial-temp}
+D_h=D_o-D_i=12.7\ \mathrm{mm}.
+\label{eq:nasa-annular-hydraulic-diameter}
 \end{equation}
-\begin{equation}
-u(x)=u_e(0.08+0.92\,\xi).
-\label{eq:axial-velocity}
-\end{equation}
+That local hydraulic diameter makes a geometry-matched throat calculation possible even though the overall apparatus is a plug nozzle. For each measured point, Cantera solves the LOX/GH2 adiabatic chamber state at the reported pressure and mixture ratio. Composition is frozen while pressure and temperature are expanded to the Mach-one throat state, where Cantera evaluates viscosity, conductivity, and Prandtl number. Equation~\eqref{eq:nasa-calorimeter-correlation} then predicts heat flux from the measured wall temperature. The reported coefficient range supplies the prediction interval.
 
-These are display-oriented field proxies, not a discretized conservation-law solution.
+The fixed series contains \ThermalValidationCaseCount{} directly measured points. Its mean absolute percentage error is \ThermalValidationMeanError\%, median error is \ThermalValidationMedianError\%, 95th-percentile error is \ThermalValidationNinetyFifthError\%, and maximum error is \ThermalValidationMaxError\%. All \ThermalValidationCoverage\% of measured points lie inside the interval produced by $C_g=0.023$ to 0.026. No case is optimized or used to recalibrate the midpoint coefficient. However, NASA fitted the published coefficient range from this same test campaign. The comparison therefore verifies geometry reconstruction, thermochemistry, transport-property plumbing, and equation implementation. It is not an independent predictive-accuracy score. Figure~\ref{fig:thermal-calorimeter-validation} and Table~\ref{tab:thermal-calorimeter-validation} are regenerated from the same validation function exercised by the test suite.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.88\textwidth,
+  height=0.38\textwidth,
+  xlabel={Fixed calorimeter case},
+  ylabel={Throat heat flux [MW/m$^2$]},
+  xmin=0.6,
+  xmax=7.4,
+  xtick={1,2,3,4,5,6,7},
+  ymin=47,
+  ymax=59,
+  grid=major,
+  legend style={draw=none, fill=none, at={(0.5,1.02)}, anchor=south, legend columns=2,
+    /tikz/every even column/.append style={column sep=0.6cm}},
+]
+\addplot+[stanred, thick, mark=*, error bars/.cd, y dir=both, y explicit]
+table[x=case_index,y=predicted_heat_flux_mw_m2,
+  y error plus expr=\thisrow{predicted_upper_mw_m2}-\thisrow{predicted_heat_flux_mw_m2},
+  y error minus expr=\thisrow{predicted_heat_flux_mw_m2}-\thisrow{predicted_lower_mw_m2},
+  col sep=comma] {data/thermal_calorimeter_validation.csv};
+\addlegendentry{StanThrust prediction and $C_g$ interval}
+\addplot+[only marks, mark=square*, mark size=2.3pt, draw=stancharcoal, fill=stancharcoal]
+table[x=case_index,y=measured_heat_flux_mw_m2,col sep=comma] {data/thermal_calorimeter_validation.csv};
+\addlegendentry{Measured}
+\end{axis}
+\end{tikzpicture}
+\caption{No-calibration comparison against the NASA TP-3380 annular-throat calorimeter series.}
+\label{fig:thermal-calorimeter-validation}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Fixed NASA TP-3380 calorimeter validation cases.}
+\label{tab:thermal-calorimeter-validation}
+\small
+\pgfplotstabletypeset[
+col sep=comma,
+columns={case_index,mixture_ratio,chamber_pressure_bar,hot_wall_temperature_k,measured_heat_flux_mw_m2,predicted_heat_flux_mw_m2,absolute_percent_error},
+columns/case_index/.style={column name=Case},
+columns/mixture_ratio/.style={column name={$O/F$}},
+columns/chamber_pressure_bar/.style={column name={$P_c$ [bar]}, fixed, precision=2},
+columns/hot_wall_temperature_k/.style={column name={$T_w$ [K]}, fixed, precision=1},
+columns/measured_heat_flux_mw_m2/.style={column name={$q''_{\mathrm{meas}}$}, fixed, precision=2},
+columns/predicted_heat_flux_mw_m2/.style={column name={$q''_{\mathrm{pred}}$}, fixed, precision=2},
+columns/absolute_percent_error/.style={column name={Error [\%]}, fixed, precision=2},
+every head row/.style={before row=\toprule, after row=\midrule},
+every last row/.style={after row=\bottomrule}
+]{data/thermal_calorimeter_validation.csv}
+\end{table}
+
+The primary data compilation and selection rules are documented by Pizzarelli in Data in Brief 37 (2021), available at \url{https://doi.org/10.1016/j.dib.2021.107173}. The original apparatus, geometry, and nominal operating point are documented by Quentmeyer and Roncace in NASA TP-3380, available at \url{https://ntrs.nasa.gov/citations/19940008097}.
+
+An independent check uses reading 121 from NASA TP-2726, a GOX/GH2 hot-fire test of a conventional Rao and method-of-characteristics bell nozzle with a 25.4 mm throat and 1030:1 exit area ratio. The reconstruction uses the reported chamber pressure of 2.482 MPa, mixture ratio 4.11, propellant inlet temperatures, measured inner-wall temperatures, and digitized source contour. The reported 96.8 percent characteristic-velocity efficiency is transferred to total temperature through $c^*\propto\sqrt{T_0}$ before the frozen-composition station expansion. No coefficient is fitted. The source identifies the area-ratio 5.6 and 12 measurements as inaccurate because of their proximity to the water-cooled manifold, so those two points are recorded but excluded by a fixed source-based rule. The remaining \BellThermalValidationCaseCount{} points span area ratios 20 to 975.
+
+The stationwise acceleration parameter is
+\begin{equation}
+K_i=\frac{\nu_i}{U_i^2}\left(\frac{\mathrm{d}U}{\mathrm{d}x}\right)_i,
+\label{eq:thermal-acceleration-parameter}
+\end{equation}
+with the velocity derivative evaluated by a centered difference on the reported contour. NASA TP-2726 discusses $K=2.0\times10^{-6}$ as a relaminarization screening threshold. The production boundary-layer march evaluates both $K_i$ and $\Rey_{\theta,i}$ and records the selected regime at every thermal station. Upstream acceleration triggers the relaminarization latch in this reconstruction, and \BellThermalValidationRelaminarizedCount{} of the ten accepted measurement stations remain in the relaminarized regime. The maximum $K$ at those accepted stations is \BellThermalValidationMaxK$\times10^{-6}$; the lower accepted-station value does not clear a state already established upstream.
+
+The independent comparison gives \BellThermalValidationMeanError\% mean absolute percentage error, \BellThermalValidationMedianError\% median error, \BellThermalValidationNinetyFifthError\% 95th-percentile error, and \BellThermalValidationMaxError\% maximum error. Mean signed bias is \BellThermalValidationSignedBias\%, and \BellThermalValidationCoverage\% of measurements lie within the numerical and model-form envelope. The \BellThermalValidationWallNodes-node solution differs from the 48-node march by no more than \BellThermalValidationMaxGridError\% at the accepted stations. The fixed screening target is \BellThermalValidationTarget\% MAPE, so the wall-normal march passes the mean-error screen without fitted coefficients. That result is not a blanket validation pass: the area-ratio-20 station remains the \BellThermalValidationMaxError\% maximum-error outlier and drives the high 95th-percentile error. The mean, tail error, and individual station residuals are therefore reported together.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.88\textwidth,
+  height=0.40\textwidth,
+  xlabel={Local area ratio $A/A_t$},
+  ylabel={Heat flux [kW/m$^2$]},
+  xmode=log,
+  ymode=log,
+  xmin=18,
+  xmax=1100,
+  ymin=10,
+  ymax=1800,
+  grid=both,
+  legend style={draw=none, fill=none, at={(0.5,1.02)}, anchor=south, legend columns=2,
+    /tikz/every even column/.append style={column sep=0.6cm}},
+]
+\addplot+[stanred, thick, mark=*, error bars/.cd, y dir=both, y explicit]
+table[x=area_ratio,y=predicted_heat_flux_kw_m2,
+  y error plus expr=\thisrow{predicted_upper_kw_m2}-\thisrow{predicted_heat_flux_kw_m2},
+  y error minus expr=\thisrow{predicted_heat_flux_kw_m2}-\thisrow{predicted_lower_kw_m2},
+  col sep=comma] {data/thermal_bell_nozzle_validation.csv};
+\addlegendentry{StanThrust wall-normal march and uncertainty envelope}
+\addplot+[only marks, mark=square*, mark size=2.3pt, draw=stancharcoal, fill=stancharcoal]
+table[x=area_ratio,y=measured_heat_flux_kw_m2,col sep=comma] {data/thermal_bell_nozzle_validation.csv};
+\addlegendentry{NASA TP-2726 measured}
+\end{axis}
+\end{tikzpicture}
+\caption{Independent no-calibration comparison against NASA TP-2726 reading 121.}
+\label{fig:thermal-bell-nozzle-validation}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Accepted NASA TP-2726 bell-nozzle validation stations.}
+\label{tab:thermal-bell-nozzle-validation}
+\scriptsize
+\pgfplotstabletypeset[
+col sep=comma,
+columns={area_ratio,mach,momentum_thickness_reynolds,wall_temperature_k,measured_heat_flux_kw_m2,predicted_heat_flux_kw_m2,absolute_percent_error,acceleration_parameter_million},
+columns/area_ratio/.style={column name={$A/A_t$}, fixed, precision=0},
+columns/mach/.style={column name={$M$}, fixed, precision=2},
+columns/momentum_thickness_reynolds/.style={column name={$\Rey_\theta$}, fixed, precision=1},
+columns/wall_temperature_k/.style={column name={$T_w$ [K]}, fixed, precision=1},
+columns/measured_heat_flux_kw_m2/.style={column name={$q''_{\mathrm{meas}}$}, fixed, precision=1},
+columns/predicted_heat_flux_kw_m2/.style={column name={$q''_{\mathrm{pred}}$}, fixed, precision=1},
+columns/absolute_percent_error/.style={column name={Error [\%]}, fixed, precision=1},
+columns/acceleration_parameter_million/.style={column name={$10^6K$}, fixed, precision=3},
+every head row/.style={before row=\toprule, after row=\midrule},
+every last row/.style={after row=\bottomrule}
+]{data/thermal_bell_nozzle_validation.csv}
+\end{table}
+
+The independent source is NASA TP-2726, available at \url{https://ntrs.nasa.gov/citations/19870015991}. Its original comparison found laminar TDK predictions within 15 percent over the accepted divergent-nozzle stations and turbulent predictions approximately 120 percent high. The present wall-normal march responds in the physically expected direction and is evaluated without fitted coefficients. The near-throat outlier and single available independent contour still require caution. The next thermal-physics step is a fully coupled axisymmetric momentum and energy boundary-layer system with normal convection and temperature-dependent properties across the layer, followed by validation against additional nozzle datasets.
+
+Coolant-property regression points are checked directly against CoolProp at fixed ethanol and methane states. The ethanol transport implementation traces to the NIST reference correlations for viscosity and thermal conductivity. Inconel 625 conductivity points are checked against the Special Metals technical bulletin. These tests protect data plumbing and interpolation behavior. Additional independent datasets across propellant pairs, scales, cooling modes, and pressure ranges remain necessary before treating the thermal model as hardware qualification evidence.
+
+\section{Axial Field Model}
+For visualization and exports, StanThrust uses the same ordered axial station rows returned by the active chamber and nozzle flow solve. Each row contains the solved contour area, Mach number, pressure, temperature, density, and velocity. Pressure and temperature follow the local isentropic station relations in Eqs.~\eqref{eq:heat-static-temperature} and \eqref{eq:heat-static-pressure}; velocity is checked against continuity as
+\begin{equation}
+u_{i,\mathrm{cont}}=\frac{\mdotp}{\rho_i A_i},
+\qquad
+\epsilon_{u,i}=\frac{|u_i-u_{i,\mathrm{cont}}|}{\max(1,u_{i,\mathrm{cont}})}.
+\label{eq:axial-continuity-check}
+\end{equation}
+The plotted and exported arrays are solver outputs, not separately shaped display curves. The two-dimensional flow-field view maps these axisymmetric station values across the local solved radius; it does not add an independent radial CFD solution.
 
 \begin{figure}[H]
 \centering
@@ -2227,7 +2379,7 @@ These are display-oriented field proxies, not a discretized conservation-law sol
 \addlegendentry{Temperature}
 \end{axis}
 \end{tikzpicture}
-\caption{Representative axial fields used for visualization and export.}
+\caption{Solved axial pressure and temperature fields used for visualization and export.}
 \end{figure}
 
 \begin{figure}[H]
@@ -2244,7 +2396,7 @@ These are display-oriented field proxies, not a discretized conservation-law sol
 \addplot+[stanredbright, thick, mark=none] table[x=x_mm,y=velocity_m_s,col sep=comma] {data/axial_profile.csv};
 \end{axis}
 \end{tikzpicture}
-\caption{Axial velocity ramp used in the report's simplified field model.}
+\caption{Solved axial velocity field from the active station model.}
 \end{figure}
 
 \section{Representative Output}
@@ -2278,7 +2430,7 @@ For a solver change to be considered healthy, the expected path is:
 This keeps method documentation, UI-visible geometry, and packaged application behavior tied to the same code path.
 
 \section{Benchmark Against Real Student Engines}
-The most useful benchmark is not a simple side-by-side list of thrust levels. A better engineering check is to reconstruct a small set of public student engines, run those reconstructed cases through the same StanThrust solver used for the final design pass, and then compare the solver output against the published operating point. The benchmark code does not run an optimizer and does not tune inputs to match the references. Each case is a direct Navier-Stokes solver call from the public operating-point data and the stated reconstruction assumptions.
+The most useful benchmark is not a simple side-by-side list of thrust levels. A better engineering check is to reconstruct a small set of public student engines, run those reconstructed cases through the same StanThrust solver used for the final design pass, and then compare the solver output against the published operating point. The benchmark code does not run an optimizer and does not tune inputs to match the references. Each case fixes the published chamber pressure, runs the final viscous station mode once, and predicts thrust, mass flow, and specific impulse from the reconstructed geometry and stated assumptions.
 
 This report therefore uses a two-level benchmark:
 \begin{enumerate}[leftmargin=6mm]
@@ -2407,7 +2559,7 @@ Iron Lotus & BURPG & IPA / N$_2$O & 2553 & 500 & [C] \\
 \caption{Scale comparison between the packaged StanThrust sample case and the public collegiate engine reference points.}
 \end{figure}
 
-The scale plot immediately shows that the packaged default case is much smaller than the collegiate engines listed in Table~\ref{tab:benchmarks}. That is useful for context, but it is not yet a solver validation. A more meaningful check is to reconstruct each public engine as a StanThrust case and compare the solved operating point directly.
+The scale plot immediately shows that the packaged default case is much smaller than the collegiate engines listed in Table~\ref{tab:benchmarks}. That is useful for context, but it is not yet a solver validation. A more meaningful check is to reconstruct each public engine at its published chamber pressure and compare the predicted performance directly.
 
 \subsection*{Reconstructed Case Setup}
 Table~\ref{tab:reconstructed-public} lists the public quantities used as benchmark anchors. Table~\ref{tab:reconstructed-model} lists the additional modeling assumptions required to build complete StanThrust inputs.
@@ -2484,10 +2636,10 @@ every last row/.style={after row=\bottomrule}
 ]{data/individual_benchmark_runs.csv}
 \end{table}
 
-This is where the reconstructed StanThrust cases are more useful than a flat reference list. The solver does not simply restate the published thrust. It builds a full engine state, exposes which values are directly comparable, and leaves a reproducible trail of derived geometry that can be checked again after future code changes.
+This is where the reconstructed StanThrust cases are more useful than a flat reference list. The solver does not root chamber pressure to force the published thrust. It builds a full engine state at fixed published pressure, exposes which values are directly comparable, and leaves a reproducible trail of derived geometry that can be checked again after future code changes.
 
 \subsection*{Reconstructed Operating-Point Comparison}
-Figure~\ref{fig:reconstructed-parity} compares the published and reconstructed StanThrust operating points. The purpose of this plot is not to claim exact duplication of the student engines; instead, it shows whether the reduced-order model lands in the correct performance neighborhood once the public hardware is translated into the StanThrust input vocabulary.
+Figure~\ref{fig:reconstructed-parity} compares the published and reconstructed StanThrust operating points. Chamber pressure is a fixed benchmark boundary condition, so its agreement verifies boundary propagation rather than predictive accuracy. Thrust, mass flow, and specific impulse are calculated outputs. Because complete as-built throat, injector, and feed dimensions are not public for these cases, the comparison remains a reconstruction consistency check rather than a hardware-level validation.
 
 \begin{figure}[H]
 \centering
@@ -2633,13 +2785,13 @@ Taken together, the benchmark reconstruction should be read as a \emph{behaviora
 \section{Scope and Limits}
 Despite the large number of equations above, StanThrust remains a reduced-order tool. The equations are fast algebraic closures, not first-principles time-marching simulations. In particular:
 \begin{itemize}[leftmargin=5mm]
-\item the feed solver now time-marches pressure and margin over the burn, but it is still a reduced-order lumped model rather than a valve-by-valve fluid network or full pressurant thermodynamics model;
+\item the hydraulic solver closes injector flow, branch loss, and chamber mass balance at each burn station, but the transient remains a lumped model rather than a valve-by-valve fluid network or full pressurant thermodynamics model;
 \item chamber and nozzle performance begins from an axial station solution and applies an axisymmetric finite-volume viscous correction, but it is not a full multidimensional external CFD mesh;
-\item thermal quantities are bounded engineering calculations;
+\item thermal quantities come from a stationwise conjugate wall and counterflow coolant march with pressure and temperature dependent coolant properties, temperature dependent wall properties, phase-envelope pressure redesign, momentum-thickness regime selection, and an axisymmetric wall-normal finite-volume energy march, but the velocity profile is prescribed by the integral state and the result is not a multidimensional conjugate CFD solution;
 \item pump, injector, and cooling dimensions are sizing closures rather than detailed component designs;
 \item the two-dimensional flow-field plot revolves the solved axial stations across the calculated wall contour; it is a visualization of the station solution rather than an independently meshed CFD domain.
 \end{itemize}
 
-Within those limits, the implementation is internally consistent and well suited to rapid trade studies, packaging iteration, and architecture comparison.
+The most reliable use is design-mode sizing followed by analysis-mode verification with measured or manufacturer-derived discharge coefficients, loss coefficients, supply conditions, and as-built dimensions. Within those limits, the implementation is suited to rapid trade studies, packaging iteration, architecture comparison, and preparation for higher-fidelity analysis.
 
 \end{document}

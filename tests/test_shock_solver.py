@@ -1,3 +1,5 @@
+"""Tests for the normal and oblique shock relations."""
+
 import math
 
 from stanthrust.shock_solver import (

@@ -1,9 +1,13 @@
-from dataclasses import dataclass
+"""Cantera-backed equilibrium thermochemistry and frozen-composition transport."""
+
 import importlib
-from pathlib import Path
 import site
 import sys
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+
+from stanthrust import dependency_error_message
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
@@ -12,6 +16,8 @@ def _clamp(value: float, min_value: float, max_value: float) -> float:
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 EQUILIBRIUM_MECHANISM_PATH = DATA_DIR / "rocket_mech_equilibrium.yaml"
+TRANSPORT_MECHANISM_NAME = "gri30.yaml"
+MINIMUM_TRANSPORT_MASS_FRACTION_COVERAGE = 0.999999
 
 
 def _import_cantera():
@@ -28,10 +34,7 @@ def _import_cantera():
         try:
             return importlib.import_module("cantera")
         except Exception as second_error:
-            raise RuntimeError(
-                "Cantera is required for StanThrust thermochemistry. "
-                "Install project dependencies with 'python -m pip install -r requirements.txt'."
-            ) from second_error
+            raise RuntimeError(dependency_error_message("Cantera", second_error)) from second_error
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,56 @@ class ThermochemistryResult:
     provider_name: str
     source: str
     status: str
+    transport_mass_fractions: Tuple[Tuple[str, float], ...]
+    transport_mechanism: str
+    transport_mass_fraction_coverage: float
     note: str = ""
+
+
+def apply_frozen_transport_to_profile(
+    axial_profile: Sequence[Mapping[str, object]],
+    mass_fractions: Sequence[Tuple[str, float]],
+) -> List[Dict[str, object]]:
+    """Evaluate mixture transport at each solved station with frozen composition."""
+
+    if not mass_fractions:
+        raise RuntimeError("Cantera transport composition is empty.")
+    ct = _import_cantera()
+    try:
+        gas = ct.Solution(TRANSPORT_MECHANISM_NAME)
+        composition = {str(name): float(value) for name, value in mass_fractions if value > 0.0}
+        gas.TPY = 300.0, 101325.0, composition
+    except Exception as exc:
+        raise RuntimeError("Cantera transport mechanism initialization failed: {0}".format(exc)) from exc
+
+    solved_profile: List[Dict[str, object]] = []
+    for index, source_row in enumerate(axial_profile):
+        row = dict(source_row)
+        try:
+            temperature_k = max(200.0, float(row["temperature_k"]))
+            pressure_pa = max(1000.0, float(row["pressure_kpa"]) * 1000.0)
+            gas.TP = temperature_k, pressure_pa
+            viscosity_pa_s = float(gas.viscosity)
+            conductivity_w_m_k = float(gas.thermal_conductivity)
+            cp_j_kg_k = float(gas.cp_mass)
+            prandtl = cp_j_kg_k * viscosity_pa_s / conductivity_w_m_k
+        except Exception as exc:
+            raise RuntimeError(
+                "Cantera transport solve failed at axial station {0}: {1}".format(index, exc)
+            ) from exc
+        row.update(
+            {
+                "gas_viscosity_pa_s": round(viscosity_pa_s, 10),
+                "gas_conductivity_w_m_k": round(conductivity_w_m_k, 8),
+                "gas_cp_j_kg_k": round(cp_j_kg_k, 6),
+                "gas_prandtl": round(prandtl, 8),
+                "gas_transport_source": "cantera-frozen-composition:{0}".format(
+                    TRANSPORT_MECHANISM_NAME
+                ),
+            }
+        )
+        solved_profile.append(row)
+    return solved_profile
 
 
 class ThermochemistryProvider:
@@ -156,6 +208,27 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
             gamma = cp_mass / cv_mass
             r_gas = cp_mass - cv_mass
             chamber_temperature_k = float(gas.T)
+            transport_gas = ct.Solution(TRANSPORT_MECHANISM_NAME)
+            transport_species = set(transport_gas.species_names)
+            mapped_mass_fractions = tuple(
+                (name, float(fraction))
+                for name, fraction in zip(gas.species_names, gas.Y)
+                if float(fraction) > 1e-14 and name in transport_species
+            )
+            transport_coverage = sum(value for _, value in mapped_mass_fractions)
+            if transport_coverage < MINIMUM_TRANSPORT_MASS_FRACTION_COVERAGE:
+                missing_species = [
+                    name
+                    for name, fraction in zip(gas.species_names, gas.Y)
+                    if float(fraction) > 1e-10 and name not in transport_species
+                ]
+                raise RuntimeError(
+                    "Transport mechanism covers only {0:.8f} of equilibrium product mass; missing species: {1}."
+                    .format(transport_coverage, ", ".join(missing_species) or "unknown")
+                )
+            normalized_transport_mass_fractions = tuple(
+                (name, value / transport_coverage) for name, value in mapped_mass_fractions
+            )
             cstar_efficiency_factor = _clamp(
                 chamber_temperature_k / max(1.0, float(assumptions.chamber_temperature_k)),
                 0.92,
@@ -169,6 +242,9 @@ class CanteraThermochemistryProvider(ThermochemistryProvider):
                 provider_name=self.name,
                 source="cantera-equilibrium-{0}:{1}".format(mechanism_path.name, phase_name),
                 status="ok",
+                transport_mass_fractions=normalized_transport_mass_fractions,
+                transport_mechanism=TRANSPORT_MECHANISM_NAME,
+                transport_mass_fraction_coverage=float(transport_coverage),
                 note="Cantera equilibrium solution using bundled mechanism {0} (phase {1}).".format(
                     mechanism_path.name, phase_name
                 ),

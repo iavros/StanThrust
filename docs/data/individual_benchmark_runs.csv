@@ -1,4 +1,4 @@
 engine,comparable_stats,mean_abs_error_percent,max_abs_error_percent,solved_expansion_ratio,solved_stack_length_mm,solved_field_count
-Elysium,2,9.03,9.63,2.25,1020.6,9
-Juno,4,12.92,19.64,4.77,847.6,9
-Iron Lotus,4,16.8,25.07,5.14,1801.5,9
+Elysium,2,2.96,5.91,2.25,1020.6,9
+Juno,4,9.94,21.21,4.77,847.6,9
+Iron Lotus,4,8.83,18.43,5.14,1801.5,9

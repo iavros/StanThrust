@@ -1,9 +1,10 @@
+"""Objective definitions and weighted design scoring."""
+
 from dataclasses import dataclass
 from typing import Callable, Dict
 
 from stanthrust.design_model import EngineDesign, clamp
 from stanthrust.inputs import DEFAULT_OBJECTIVE_WEIGHTS
-
 
 ObjectiveEvaluator = Callable[[EngineDesign], float]
 

@@ -1,0 +1,13 @@
+reading,area_ratio,inner_wall_temperature_k,measured_heat_flux_kw_m2,measurement_basis,included,exclusion_reason
+121,5.6,587.53,1009.6,direct,no,water-cooled manifold proximity
+121,12,512.40,716.5,direct,no,water-cooled manifold proximity
+121,20,485.46,614.8,direct,yes,
+121,50,356.26,364.6,direct,yes,
+121,100,332.76,207.9,direct,yes,
+121,200,318.02,108.7,direct,yes,
+121,300,313.11,72.9,direct,yes,
+121,388,310.28,60.8,direct,yes,
+121,500,306.85,45.6,direct,yes,
+121,635,303.23,33.3,direct,yes,
+121,800,301.61,23.4,direct,yes,
+121,975,298.79,18.3,direct,yes,

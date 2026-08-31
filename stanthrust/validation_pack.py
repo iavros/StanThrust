@@ -1,4 +1,4 @@
-"""Validation pack for Stage 4.1: analytical checks and regression gates.
+"""Validation pack: analytical checks and regression gates.
 
 This module provides lightweight analytical validators for design-stage designs
 to ensure outputs remain within expected physical bounds and match design intent.
@@ -6,8 +6,8 @@ Validators are deterministic, require no external solvers, and operate on a
 EngineDesign object or raw solver outputs.
 """
 
-from typing import Dict, List, Tuple
 from dataclasses import dataclass
+from typing import Dict, List, Tuple
 
 from stanthrust.benchmark_cases import get_internal_baseline_cases
 from stanthrust.design_model import EngineDesign
@@ -64,7 +64,7 @@ def _check_thrust_delivery(design: EngineDesign) -> ValidationCheck:
         return ValidationCheck(
             check_name="thrust_delivery",
             passed=False,
-            message=f"Calculated thrust {calculated:.1f} N is {ratio:.2f}x target {target:.1f} N; expected 0.7–1.3x.",
+            message=f"Calculated thrust {calculated:.1f} N is {ratio:.2f}x target {target:.1f} N; expected 0.7-1.3x.",
             severity="warning",
         )
 
@@ -257,11 +257,11 @@ def _check_index_bounds(design: EngineDesign) -> ValidationCheck:
 
     msgs = []
     if not (0.0 <= thermal <= 100.0):
-        msgs.append(f"thermal_margin_index {thermal:.1f} out of range [0–100]")
+        msgs.append(f"thermal_margin_index {thermal:.1f} out of range [0-100]")
     if not (0.0 <= packaging <= 100.0):
-        msgs.append(f"packaging_efficiency_index {packaging:.1f} out of range [0–100]")
+        msgs.append(f"packaging_efficiency_index {packaging:.1f} out of range [0-100]")
     if not (0.0 <= mass <= 100.0):
-        msgs.append(f"dry_mass_index {mass:.1f} out of range [0–100]")
+        msgs.append(f"dry_mass_index {mass:.1f} out of range [0-100]")
 
     if msgs:
         return ValidationCheck(
@@ -274,7 +274,7 @@ def _check_index_bounds(design: EngineDesign) -> ValidationCheck:
     return ValidationCheck(
         check_name="index_bounds",
         passed=True,
-        message=f"All indices in range [0–100]: thermal {thermal:.1f}, packaging {packaging:.1f}, mass {mass:.1f}.",
+        message=f"All indices in range [0-100]: thermal {thermal:.1f}, packaging {packaging:.1f}, mass {mass:.1f}.",
         severity="info",
     )
 

@@ -1,3 +1,5 @@
+"""Rankine-Hugoniot normal and oblique shock relations for nozzle diagnostics."""
+
 import math
 from typing import Dict, List, Mapping, Optional
 
@@ -79,7 +81,6 @@ def _bisect_beta(
     high_beta_rad: float,
 ) -> float:
     low_value = _theta_from_beta(mach, low_beta_rad, gamma) - target_theta_rad
-    high_value = _theta_from_beta(mach, high_beta_rad, gamma) - target_theta_rad
     for _ in range(80):
         mid_beta_rad = 0.5 * (low_beta_rad + high_beta_rad)
         mid_value = _theta_from_beta(mach, mid_beta_rad, gamma) - target_theta_rad
@@ -87,7 +88,6 @@ def _bisect_beta(
             return mid_beta_rad
         if low_value * mid_value <= 0.0:
             high_beta_rad = mid_beta_rad
-            high_value = mid_value
         else:
             low_beta_rad = mid_beta_rad
             low_value = mid_value

@@ -1,6 +1,7 @@
+"""Design defaults, selectable input catalogues, and solver assumptions."""
+
 from dataclasses import asdict, dataclass
 from typing import Dict, List
-
 
 DEFAULT_OBJECTIVE_WEIGHTS = {
     "thrust": 0.25,
@@ -28,7 +29,7 @@ class DefaultState:
     mixture_ratio: float = 1.4
     injector_type: str = "impinging"
     target_thrust_newtons: float = 250.0
-    target_chamber_pressure_kpa: float = 0.0
+    target_chamber_pressure_kpa: float = 1500.0
     target_impulse_newton_seconds: float = 3000.0
     target_diameter_mm: float = 110.0
     burn_time_seconds: float = 12.0
@@ -47,6 +48,30 @@ class DefaultState:
     use_pumps: bool = True
     regen_cooling: bool = False
     film_cooling: bool = False
+    regen_coolant_inlet_temperature_k: float = 0.0
+    regen_coolant_inlet_pressure_kpa: float = 0.0
+    pressure_solve_mode: str = "design"
+    combustion_efficiency: float = 0.95
+    design_injector_dp_ratio: float = 0.20
+    fuel_injector_discharge_coefficient: float = 0.72
+    oxidizer_injector_discharge_coefficient: float = 0.72
+    fuel_injector_area_mm2: float = 0.0
+    oxidizer_injector_area_mm2: float = 0.0
+    fuel_supply_pressure_kpa: float = 0.0
+    oxidizer_supply_pressure_kpa: float = 0.0
+    fuel_tank_inlet_pressure_kpa: float = 300.0
+    oxidizer_tank_inlet_pressure_kpa: float = 330.0
+    design_supply_margin_ratio: float = 0.08
+    analysis_throat_diameter_mm: float = 0.0
+    line_diameter_fuel_m: float = 0.012
+    line_diameter_oxidizer_m: float = 0.0114
+    line_length_fuel_m: float = 1.55
+    line_length_oxidizer_m: float = 1.75
+    minor_loss_fuel_k: float = 8.0
+    minor_loss_oxidizer_k: float = 9.2
+    line_roughness_fuel_m: float = 1.5e-6
+    line_roughness_oxidizer_m: float = 1.5e-6
+    uncertainty_sample_count: int = 128
 
 
 DEFAULT_STATE = DefaultState()
@@ -87,38 +112,19 @@ def lookup_propellant(name: str, role: str) -> PropellantOption:
     table = _FUEL_LOOKUP if role == "fuel" else _OXIDIZER_LOOKUP
     if key in table:
         return table[key]
-
-    if role == "fuel":
-        return PropellantOption(
-            name=(name or "Custom Fuel").strip() or "Custom Fuel",
-            role="fuel",
-            density_index=0.68,
-            cooling_affinity=0.46,
-            thermal_severity=0.48,
-            handling_complexity=0.32,
-            visualization_weight=0.9,
-        )
-
-    return PropellantOption(
-        name=(name or "Custom Oxidizer").strip() or "Custom Oxidizer",
-        role="oxidizer",
-        density_index=0.86,
-        cooling_affinity=0.18,
-        thermal_severity=0.7,
-        handling_complexity=0.42,
-        visualization_weight=0.94,
-    )
+    supported = ", ".join(option.name for option in table.values())
+    raise ValueError("Unsupported {0} '{1}'. Supported options: {2}.".format(role, name, supported))
 
 
 @dataclass(frozen=True)
 class SolverAssumptions:
-    flow_model: str = "navier_stokes"
+    flow_model: str = "viscous"
     gravity_m_s2: float = 9.80665
     ambient_pressure_kpa: float = 101.3
     gamma: float = 1.22
     gas_constant_j_kgk: float = 355.0
     chamber_temperature_k: float = 3350.0
-    combustion_efficiency: float = 1.0
+    combustion_efficiency: float = 0.95
     nozzle_efficiency: float = 1.0
     nozzle_discharge_coefficient: float = 0.96
     nozzle_divergence_half_angle_deg: float = 14.0
@@ -136,4 +142,3 @@ class SolverAssumptions:
 
 def get_default_solver_assumptions() -> SolverAssumptions:
     return SolverAssumptions()
-

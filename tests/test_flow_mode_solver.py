@@ -1,11 +1,8 @@
 """Regression tests for combustion flow modes."""
 
-import sys
 from dataclasses import replace
 
-sys.path.insert(0, r"E:/StanThrust")
-
-from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.chamber_nozzle_solver import solve_chamber_nozzle_flow
 from stanthrust.design_model import create_engine_design
 from stanthrust.inputs import get_default_solver_assumptions
 
@@ -16,12 +13,12 @@ def test_flow_modes_emit_distinct_metadata_and_outputs():
     values = design.derived.engineering_values
     base_assumptions = get_default_solver_assumptions()
 
-    fast_result = run_combustion_cfd_solver(
+    fast_result = solve_chamber_nozzle_flow(
         design,
         replace(base_assumptions, flow_model="fast"),
         station_count=18,
     )
-    refined_result = run_combustion_cfd_solver(
+    refined_result = solve_chamber_nozzle_flow(
         design,
         replace(base_assumptions, flow_model="refined"),
         station_count=18,
@@ -68,6 +65,20 @@ def test_flow_modes_emit_distinct_metadata_and_outputs():
     assert float(refined_profile[0]["mach"]) < 1.0
     assert max(float(row["mach"]) for row in refined_profile) > 1.0
     assert float(refined_profile[-1]["pressure_kpa"]) < float(refined_profile[0]["pressure_kpa"])
+    assert refined_summary["gas_transport_status"] == "calculated-stationwise"
+    assert float(refined_summary["gas_transport_mass_fraction_coverage"]) >= 0.999999
+    for row in refined_profile:
+        assert float(row["gas_viscosity_pa_s"]) > 0.0
+        assert float(row["gas_conductivity_w_m_k"]) > 0.0
+        assert float(row["gas_prandtl"]) > 0.0
+        assert str(row["gas_transport_source"]).startswith("cantera-frozen-composition:")
+
+    thermal = refined_result["heat_transfer"]
+    assert thermal["summary"]["gas_transport_status"] == "calculated-stationwise"
+    assert all(
+        station["gas"]["transport_source"] == "provided-local-state"
+        for station in thermal["axial_stations"]
+    )
 
 
 def test_architecture_cooling_and_flow_modes_share_solved_geometry():
@@ -88,8 +99,8 @@ def test_architecture_cooling_and_flow_modes_share_solved_geometry():
             assert float(values["nozzle_throat_diameter_mm"]) < float(values["nozzle_inner_diameter_mm"])
             assert float(values["minimum_structural_margin_ratio"]) > 0.0
 
-            for flow_model in ("fast", "refined", "navier_stokes"):
-                result = run_combustion_cfd_solver(
+            for flow_model in ("fast", "refined", "viscous"):
+                result = solve_chamber_nozzle_flow(
                     design,
                     replace(base_assumptions, flow_model=flow_model),
                     station_count=12,
@@ -100,31 +111,5 @@ def test_architecture_cooling_and_flow_modes_share_solved_geometry():
                 assert float(result["physics"]["nozzle"]["overall_efficiency"]) > 0.0
                 assert result["heat_transfer"]["status"].startswith("calculated")
                 assert "regime" in result["shock_analysis"]
-                if flow_model == "navier_stokes":
-                    assert result["navier_stokes"]["status"] == "calculated"
-
-
-def run_all_tests():
-    tests = [
-        test_flow_modes_emit_distinct_metadata_and_outputs,
-        test_architecture_cooling_and_flow_modes_share_solved_geometry,
-    ]
-    passed = 0
-    failed = 0
-    for test_func in tests:
-        try:
-            test_func()
-            passed += 1
-            print(f"[ok] {test_func.__name__} passed")
-        except AssertionError as exc:
-            failed += 1
-            print(f"[fail] {test_func.__name__} failed: {exc}")
-        except Exception as exc:
-            failed += 1
-            print(f"[error] {test_func.__name__} error: {exc}")
-    print(f"\nFlow Mode Tests: {passed} passed, {failed} failed out of {len(tests)} total.")
-    return failed == 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(0 if run_all_tests() else 1)
+                if flow_model == "viscous":
+                    assert result["viscous_correction"]["status"] == "calculated"

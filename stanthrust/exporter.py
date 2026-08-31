@@ -1,7 +1,9 @@
+"""Project persistence and CAD/CSV/DXF export of the solved design state."""
+
 import csv
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -11,12 +13,11 @@ from stanthrust.benchmark_cases import (
 )
 from stanthrust.design_model import EngineDesign
 from stanthrust.uncertainty import (
-    UncertaintyBand,
     ProvenanceField,
+    UncertaintyBand,
     build_uncertainty_summary,
     calculate_field_confidence,
 )
-
 
 PROJECT_SCHEMA_VERSION = 1
 
@@ -44,7 +45,7 @@ def build_project_document(
     objective_weights: Dict[str, float],
     ga_result: Optional[Dict[str, object]] = None,
 ) -> ProjectDocument:
-    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     return ProjectDocument(
         version=PROJECT_SCHEMA_VERSION,
         generated_at=generated_at,
@@ -100,9 +101,9 @@ def _build_analysis_field(
     row_label: str,
 ) -> Dict[str, object]:
     """Build an analysis field with provenance and confidence data.
-    
-    Merges value/status from station_field_updates (if available), adds confidence
-    and uncertainty bands using the uncertainty module.
+
+    Merges the value and status from ``station_field_updates`` when available and
+    adds the confidence and uncertainty bands from the uncertainty module.
     """
     # Get value and status from station updates or row-level data.
     row_updates = _as_dict(station_field_updates.get(row_label, {}))
@@ -119,7 +120,7 @@ def _build_analysis_field(
         "status": final_status,
         "source_solver": final_source,
     }
-    
+
     # Attempt to add confidence and uncertainty
     if final_value is not None and isinstance(final_value, (int, float)):
         confidence_field = calculate_field_confidence(
@@ -128,14 +129,14 @@ def _build_analysis_field(
             final_source,
             status=final_status,
         )
-        
+
         if confidence_field is not None:
             base_field["confidence"] = round(confidence_field.confidence, 3)
             base_field["uncertainty"] = {
                 "lower_percent": round(confidence_field.uncertainty.lower_percent, 2),
                 "upper_percent": round(confidence_field.uncertainty.upper_percent, 2),
             }
-    
+
     return base_field
 
 
@@ -322,8 +323,8 @@ def _build_stage_2_nozzle_metadata(
         "ambient_correction": nozzle.get("ambient_correction", coefficients.get("ambient_correction")),
         "exit_pressure_kpa": nozzle.get("exit_pressure_kpa", _as_dict(physics.get("results", {})).get("exit_pressure_kpa")),
         "note": (
-            "Navier-Stokes mode uses Cantera thermochemistry, a characteristic-net nozzle contour, shock feedback, and viscous station corrections; external CFD validation is still recommended."
-            if metadata.get("flow_model") == "navier_stokes"
+            "Viscous mode uses Cantera thermochemistry, a characteristic-net nozzle contour, shock feedback, and quasi-1D station corrections; external CFD validation is still recommended."
+            if metadata.get("flow_model") == "viscous"
             else "Refined mode uses the characteristic-net nozzle contour with pressure-root solving and shock feedback."
             if metadata.get("flow_model") == "refined"
             else "Fast preview mode uses geometry-aware nozzle losses and is intended for quick iteration."
@@ -423,7 +424,7 @@ def build_cad_export_payload(
                 "mach_note": row.mach_note,
                 "thermal_margin_index": row.thermal_margin_index,
                 "thermal_margin_note": row.thermal_margin_note,
-                # Machine-friendly numeric fields (Stage 2.4)
+                # Machine-readable numeric fields.
                 "temperature_k": row.temperature_k,
                 "pressure_kpa": row.pressure_kpa,
                 "mass_flow_kg_s": row.mass_flow_kg_s,
@@ -486,7 +487,7 @@ def build_cad_export_payload(
         "metadata": {
             "app": "StanThrust",
             "mode": "design-stage",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "safety_boundary": "This project intentionally stays at the level of preliminary visualization and software architecture. The measurements and scores shown are solver outputs for analysis review only. They are not manufacturing dimensions, propulsion calculations for hardware release, test parameters, or build instructions.",
         },
         "solver": {
@@ -549,6 +550,7 @@ def export_cad_json(
     solver_interface_result: Optional[Dict[str, object]] = None,
     structural_result: Optional[Dict[str, object]] = None,
 ) -> None:
+    """Write the full CAD payload, including provenance and uncertainty, as JSON."""
     payload = build_cad_export_payload(
         design,
         objective_report,
@@ -673,10 +675,10 @@ def export_station_csv(
                 "feed_stage_status",
                 "feed_stage_quality_flag",
                 "feed_stage_total_pressure_drop_kpa",
-                # Structural numeric fields (Stage 3.2)
+                # Structural numeric fields.
                 "thermal_margin_index",
                 "thermal_margin_source",
-                # Numeric station fields (Stage 2.4)
+                # Numeric station fields.
                 "temperature_k",
                 "pressure_kpa",
                 "mass_flow_kg_s",

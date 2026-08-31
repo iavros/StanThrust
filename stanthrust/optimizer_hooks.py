@@ -1,13 +1,14 @@
+"""Genetic and feasibility-first optimiser drivers over the design model."""
+
 import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from stanthrust.inputs import DEFAULT_OBJECTIVE_WEIGHTS
 from stanthrust.design_model import EngineDesign, create_engine_design
 from stanthrust.fidelity_coordinator import AdaptiveSamplingPool, FidelityRouter
+from stanthrust.inputs import DEFAULT_OBJECTIVE_WEIGHTS
 from stanthrust.objectives import evaluate_objectives, normalize_objective_weights
 from stanthrust.validation_pack import validate_engine_design
-
 
 PACKAGING_BIAS_OPTIONS = ["balanced", "compact", "serviceable"]
 
@@ -225,13 +226,6 @@ def apply_multifidelity_confirmation(
             "screening_applied": False,
             "screening_error": str(exc),
         }
-
-
-def score_current_design(
-    design: EngineDesign,
-    objective_weights: Optional[Dict[str, float]] = None,
-) -> Dict[str, object]:
-    return evaluate_objectives(design, objective_weights or DEFAULT_OBJECTIVE_WEIGHTS)
 
 
 def _is_design_feasible(

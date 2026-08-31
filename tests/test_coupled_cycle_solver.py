@@ -1,15 +1,12 @@
+"""Tests for the coupled cycle loop solver.
+
+Covers convergence behaviour, input validation, payload structure, station
+field provenance, and edge cases.
 """
-Tests for Stage 3.2 Coupled Cycle Loop Solver.
 
-Covers convergence behavior, input validation, payload structure,
-station field provenance, and edge cases.
-"""
+import math
 
-import sys
-import os
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import pytest
 
 from stanthrust.coupled_cycle_solver import (
     solve,
@@ -39,8 +36,8 @@ def test_coupled_solver_basic_convergence():
     # Check metadata
     metadata = result["metadata"]
     assert metadata["solver_name"] == "Coupled Cycle Loop Solver"
-    assert metadata["solver_version"] == "0.2"
-    assert metadata["solver_mode"] == "stage-3-coupled-cycle-v2"
+    assert metadata["solver_version"] == "0.3"
+    assert metadata["solver_mode"] == "coupled-cycle-v3"
 
     # Check status
     assert result["status"] in ["ok", "converged-degraded"], f"Status should be ok or converged-degraded, got {result['status']}"
@@ -54,10 +51,9 @@ def test_coupled_solver_basic_convergence():
     assert "structural_solver_result" in payload, "Payload should include structural solver result"
     feed_summary = payload["feed_solver_result"]["payload"]["summary"]
     feed_request = payload["feed_solver_result"]["payload"]["request"]
-    assert feed_summary["quality_flag"] == "stage-2-transient-feed-v2-iterative-darcy"
+    assert feed_summary["quality_flag"] == "hydraulic-chamber-closure-v1"
     assert float(feed_request["fuel_dynamic_viscosity_pa_s"]) > 0.0
 
-    print("✓ test_coupled_solver_basic_convergence passed")
 
 
 def test_convergence_structure():
@@ -95,11 +91,10 @@ def test_convergence_structure():
     assert isinstance(conv["minimum_combined_material_margin_ratio"], float), "combined material margin should be float"
     assert conv["iteration_count"] >= conv["minimum_iteration_count"], "solver should not stop before the minimum iteration count"
 
-    print("✓ test_convergence_structure passed")
 
 
 def test_final_pass_uncertainty_payload():
-    """Test that the final pass reports dense Navier-Stokes bounds."""
+    """Test that the final pass reports dense viscous quasi-1D bounds."""
     design_request = {
         "target_thrust_newtons": 500.0,
         "target_chamber_pressure_kpa": 1500.0,
@@ -118,9 +113,9 @@ def test_final_pass_uncertainty_payload():
     bounds = payload["final_uncertainty_bounds"]
 
     assert request["requested_solver_flow_model"] == "fast"
-    assert request["solver_flow_model"] == "navier_stokes"
+    assert request["solver_flow_model"] == "viscous"
     assert int(request["solver_station_count"]) >= 180
-    assert bounds["flow_model"] == "navier_stokes"
+    assert bounds["flow_model"] == "viscous"
     assert int(bounds["station_count"]) >= 180
     assert isinstance(bounds["bounds"], list)
     assert len(bounds["bounds"]) >= 4
@@ -130,7 +125,80 @@ def test_final_pass_uncertainty_payload():
         assert row["lower_percent"] >= 0.0
         assert row["upper_percent"] >= 0.0
 
-    print("[ok] test_final_pass_uncertainty_payload passed")
+
+
+def test_methane_regen_pressure_feedback_reaches_fuel_hydraulics():
+    result = solve(
+        {
+            "fuel_name": "Methane",
+            "oxidizer_name": "Liquid Oxygen",
+            "regen_cooling": True,
+            "use_pumps": True,
+            "target_chamber_pressure_kpa": 1550.0,
+            "mixture_ratio": 3.2,
+            "uncertainty_sample_count": 24,
+        },
+        max_iterations=3,
+    )
+    payload = result["payload"]
+    heat = payload["combustion_solver_result"]["heat_transfer"]["summary"]
+    feed = payload["feed_solver_result"]["payload"]["summary"]
+
+    assert heat["coolant_pressure_requirement_met"] is True
+    assert heat["coolant_phase_pressure_basis"] == "critical-pressure"
+    assert feed["fuel_coolant_pressure_constraint_active"] is True
+    assert feed["fuel_minimum_injector_inlet_pressure_kpa"] == pytest.approx(
+        heat["coolant_minimum_single_phase_pressure_kpa"], abs=0.01
+    )
+    assert feed["fuel_regen_pressure_drop_kpa"] == pytest.approx(
+        heat["coolant_pressure_drop_kpa"], abs=0.01
+    )
+    assert feed["fuel_required_supply_pressure_kpa"] >= heat[
+        "coolant_required_inlet_pressure_kpa"
+    ]
+
+
+def test_analysis_mode_uses_as_built_hardware_to_recover_pressure():
+    design_request = {
+        "target_thrust_newtons": 500.0,
+        "target_chamber_pressure_kpa": 1500.0,
+        "tank_diameter_mm": 100.0,
+        "chamber_diameter_mm": 80.0,
+        "use_pumps": False,
+        "mixture_ratio": 2.0,
+        "burn_time_seconds": 12.0,
+        "uncertainty_sample_count": 24,
+    }
+    design_result = solve(design_request, max_iterations=3)
+    design_payload = design_result["payload"]
+    feed_payload = design_payload["feed_solver_result"]["payload"]
+    summary = feed_payload["summary"]
+    hydraulic_inputs = feed_payload["hydraulic_inputs"]
+    throat_diameter_mm = 1000.0 * math.sqrt(
+        4.0 * float(hydraulic_inputs["throat_area_m2"]) / math.pi
+    )
+
+    analysis_request = {
+        **design_request,
+        "pressure_solve_mode": "analysis",
+        "target_thrust_newtons": 900.0,
+        "analysis_throat_diameter_mm": throat_diameter_mm,
+        "fuel_injector_area_mm2": summary["fuel_injector_area_mm2"],
+        "oxidizer_injector_area_mm2": summary["oxidizer_injector_area_mm2"],
+        "fuel_supply_pressure_kpa": summary["fuel_required_supply_pressure_kpa"],
+        "oxidizer_supply_pressure_kpa": summary["oxidizer_required_supply_pressure_kpa"],
+    }
+    analysis_result = solve(analysis_request, max_iterations=3)
+    analysis_payload = analysis_result["payload"]
+    analysis_summary = analysis_payload["feed_solver_result"]["payload"]["summary"]
+    analysis_combustion = analysis_payload["combustion_solver_result"]["summary"]
+
+    assert analysis_result["status"] in {"ok", "converged-degraded"}
+    assert analysis_summary["pressure_solve_mode"] == "analysis"
+    assert analysis_summary["chamber_pressure_kpa"] == pytest.approx(1500.0, abs=3.0)
+    assert analysis_combustion["chamber_pressure_kpa"] == pytest.approx(
+        analysis_summary["chamber_pressure_kpa"], abs=0.1
+    )
 
 
 def test_convergence_results_structure():
@@ -161,10 +229,9 @@ def test_convergence_results_structure():
     assert 100 < results["oxidizer_tank_pressure_kpa"] < 10000, \
         f"oxidizer_tank_pressure {results['oxidizer_tank_pressure_kpa']} out of range"
 
-    # Stage 3.2 solves a relaxed coupled pressure state. This test validates
-    # reasonable magnitude rather than enforcing one architecture-specific ordering.
+    # The solver relaxes towards a coupled pressure state, so this checks for a
+    # reasonable magnitude rather than one architecture-specific ordering.
 
-    print("✓ test_convergence_results_structure passed")
 
 
 def test_iteration_trace_structure():
@@ -200,7 +267,6 @@ def test_iteration_trace_structure():
         assert "notes" in entry
         assert isinstance(entry["notes"], list), "notes should be list"
 
-    print("✓ test_iteration_trace_structure passed")
 
 
 def test_station_field_updates_merged():
@@ -228,7 +294,6 @@ def test_station_field_updates_merged():
             for field_name, field_data in fields.items():
                 assert "source_solver" in field_data, f"Field {field_name} should have source_solver"
 
-    print("✓ test_station_field_updates_merged passed")
 
 
 def test_pump_vs_blowdown_modes():
@@ -264,7 +329,6 @@ def test_pump_vs_blowdown_modes():
     # across fallback and Cantera-backed thermochemistry providers.
     assert pump_chamber > 300.0, "Pump-fed should have reasonable chamber pressure"
 
-    print("[ok] test_pump_vs_blowdown_modes passed")
 
 
 def test_convergence_tolerance_effect():
@@ -291,7 +355,6 @@ def test_convergence_tolerance_effect():
     assert tight_iterations >= 1, "Should have at least 1 iteration"
     assert loose_iterations >= 1, "Should have at least 1 iteration"
 
-    print("✓ test_convergence_tolerance_effect passed")
 
 
 def test_max_iterations_limit():
@@ -311,7 +374,6 @@ def test_max_iterations_limit():
 
     assert iterations <= 3, f"Should not exceed max_iterations (got {iterations})"
 
-    print("✓ test_max_iterations_limit passed")
 
 
 def test_input_validation():
@@ -342,7 +404,6 @@ def test_input_validation():
     assert req2["target_thrust_newtons"] > 0, "Should have default thrust"
     assert req2["target_chamber_pressure_kpa"] > 0, "Should have default chamber pressure"
 
-    print("✓ test_input_validation passed")
 
 
 def test_warnings_when_not_converged():
@@ -363,7 +424,6 @@ def test_warnings_when_not_converged():
     assert isinstance(warnings, list)
     assert len(warnings) > 0, "Should have warnings"
 
-    print("✓ test_warnings_when_not_converged passed")
 
 
 def test_trace_lines_structure():
@@ -387,9 +447,8 @@ def test_trace_lines_structure():
 
     # Check for expected content
     trace_str = " ".join(trace)
-    assert "Stage 3.2" in trace_str, "Should mention Stage 3.2"
+    assert "Coupled Cycle Loop Solver" in trace_str
 
-    print("✓ test_trace_lines_structure passed")
 
 
 def test_edge_case_very_small_thrust():
@@ -410,7 +469,6 @@ def test_edge_case_very_small_thrust():
     chamber_pressure = payload["results"]["chamber_pressure_kpa"]
     assert chamber_pressure > 0, "Should have positive chamber pressure"
 
-    print("✓ test_edge_case_very_small_thrust passed")
 
 
 def test_edge_case_very_high_thrust():
@@ -431,66 +489,4 @@ def test_edge_case_very_high_thrust():
     chamber_pressure = payload["results"]["chamber_pressure_kpa"]
     assert chamber_pressure > 0, "Should have positive chamber pressure"
     assert chamber_pressure < 10000, "Should not exceed reasonable bounds"
-
-    print("✓ test_edge_case_very_high_thrust passed")
-
-
-def run_all_tests():
-    """Run all tests and report results."""
-    tests = [
-        test_coupled_solver_basic_convergence,
-        test_convergence_structure,
-        test_final_pass_uncertainty_payload,
-        test_convergence_results_structure,
-        test_iteration_trace_structure,
-        test_station_field_updates_merged,
-        test_pump_vs_blowdown_modes,
-        test_convergence_tolerance_effect,
-        test_max_iterations_limit,
-        test_input_validation,
-        test_warnings_when_not_converged,
-        test_trace_lines_structure,
-        test_edge_case_very_small_thrust,
-        test_edge_case_very_high_thrust,
-    ]
-
-    passed = 0
-    failed = 0
-    errors = []
-
-    print("\n" + "=" * 70)
-    print("Running Stage 3.2 Coupled Cycle Solver Tests")
-    print("=" * 70 + "\n")
-
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except AssertionError as e:
-            failed += 1
-            errors.append((test.__name__, str(e)))
-            print(f"✗ {test.__name__} FAILED: {str(e)}")
-        except Exception as e:
-            failed += 1
-            errors.append((test.__name__, str(e)))
-            print(f"✗ {test.__name__} ERROR: {str(e)}")
-
-    print("\n" + "=" * 70)
-    print(f"Test Results: {passed} passed, {failed} failed")
-    print("=" * 70)
-
-    if failed > 0:
-        print("\nFailed tests:")
-        for test_name, error in errors:
-            print(f"  - {test_name}: {error}")
-        return False
-    else:
-        print("\nAll tests passed!")
-        return True
-
-
-if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
-
 

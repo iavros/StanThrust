@@ -1,3 +1,5 @@
+"""Tests for project document persistence."""
+
 from stanthrust.exporter import load_project, save_project
 
 

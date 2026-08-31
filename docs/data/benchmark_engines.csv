@@ -1,5 +1,5 @@
 engine,team,thrust_lbf,thrust_n,chamber_pressure_psi,chamber_pressure_kpa
-StanThrust sample,Model default case,52.85,235.1,235.15,1621.3
+StanThrust sample,Model default case,53.84,239.5,204.63,1410.9
 Elysium,Texas A&M RED,300.0,1334.47,150.0,1034.21
 Juno,ERPL,350.0,1556.88,450.0,3102.64
 Iron Lotus,BURPG,2553.0,11356.31,500.0,3447.38

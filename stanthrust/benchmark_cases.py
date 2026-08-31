@@ -1,7 +1,13 @@
+"""Published engine benchmark cases reconstructed through the solver.
+
+Each case is a direct reconstruction of a documented operating point. No
+optimiser fitting is applied, so the results measure solver accuracy rather
+than curve fit quality."""
+
 from dataclasses import asdict, dataclass, replace
 from typing import Dict, List, Optional
 
-from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.chamber_nozzle_solver import solve_chamber_nozzle_flow
 from stanthrust.design_model import create_engine_design
 from stanthrust.inputs import DEFAULT_STATE, SolverAssumptions
 
@@ -253,17 +259,18 @@ def build_reconstructed_benchmark_rows(
     thermochemistry_provider: Optional[object] = None,
 ) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
-    benchmark_assumptions = replace(assumptions, flow_model="navier_stokes")
+    benchmark_assumptions = replace(assumptions, flow_model="viscous")
     gravity_m_s2 = float(benchmark_assumptions.gravity_m_s2)
 
     for case in get_public_benchmark_cases():
         design = create_engine_design(case.as_state())
-        combustion = run_combustion_cfd_solver(
+        combustion = solve_chamber_nozzle_flow(
             design,
             benchmark_assumptions,
             station_count=160,
             thermochemistry_mode="auto",
             thermochemistry_provider=thermochemistry_provider,
+            fixed_chamber_pressure_kpa=case.reference_chamber_pressure_kpa,
         )
         summary = combustion["summary"]
         values = design.derived.engineering_values
@@ -290,7 +297,7 @@ def build_reconstructed_benchmark_rows(
                 "feed_mode_model": "pump-fed" if case.use_pumps else "pressure-fed",
                 "regen_cooling_model": "yes" if case.regen_cooling else "no",
                 "film_cooling_model": "yes" if case.film_cooling else "no",
-                "solver_validation_path": "direct_navier_stokes_solver",
+                "solver_validation_path": "direct_fixed-pressure_final-mode",
                 "optimizer_used": "no",
                 "solver_station_count": int(float(summary["station_count"])),
                 "simulated_thrust_n": round(float(summary["predicted_thrust_newtons"]), 5),

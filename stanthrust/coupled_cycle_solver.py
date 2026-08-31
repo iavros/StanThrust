@@ -1,29 +1,28 @@
-"""
-Stage 3.2 coupled cycle loop solver.
+"""Coupled cycle loop solver.
 
-This module runs a coupled design solve across the design geometry,
-feed-transient model, chamber/nozzle flow solver, shock feedback, and structural
+Runs one coupled design solve across the design geometry, the feed-transient
+model, the chamber/nozzle flow solver, shock feedback, and the structural
 material outputs. The goal is not hardware certification; it is a numerically
 consistent design state where chamber pressure, feed margin, thrust residual,
-shock response, and section margins are solved together instead of reported as
+shock response, and section margins are solved together rather than reported as
 isolated subsystem values.
 """
 
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.chamber_nozzle_solver import solve_chamber_nozzle_flow
 from stanthrust.design_model import create_engine_design
 from stanthrust.feed_pressure_drop_solver import solve as solve_feed_system
+from stanthrust.hydraulic_chamber_solver import propagate_hydraulic_uncertainty
 from stanthrust.inputs import get_default_solver_assumptions, lookup_propellant
 from stanthrust.structural_material_solver import assign_materials, build_structural_materials_output
 
-
 SOLVER_NAME = "Coupled Cycle Loop Solver"
-SOLVER_VERSION = "0.2"
-FINAL_FLOW_MODEL = "navier_stokes"
+SOLVER_VERSION = "0.3"
+FINAL_FLOW_MODEL = "viscous"
 FINAL_MIN_STATION_COUNT = 180
-SOLVER_MODE = "stage-3-coupled-cycle-v2"
+SOLVER_MODE = "coupled-cycle-v3"
 ProgressCallback = Callable[[float, str], None]
 
 
@@ -47,8 +46,8 @@ def _metadata() -> Dict[str, str]:
         "solver_name": SOLVER_NAME,
         "solver_version": SOLVER_VERSION,
         "solver_mode": SOLVER_MODE,
-        "input_schema_version": "1.1",
-        "output_schema_version": "1.1",
+        "input_schema_version": "1.2",
+        "output_schema_version": "1.2",
     }
 
 
@@ -74,6 +73,9 @@ class ConvergenceInfo:
     minimum_structural_margin_ratio: float
     minimum_heat_transfer_margin_ratio: float
     minimum_combined_material_margin_ratio: float
+    coolant_required_inlet_pressure_kpa: float
+    coolant_pressure_margin_kpa: float
+    coolant_pressure_requirement_met: bool
     converged: bool
     notes: List[str]
 
@@ -105,9 +107,51 @@ def validate_inputs(design_request: Dict[str, object]) -> Dict[str, object]:
         "use_pumps": bool(req.get("use_pumps", False)),
         "regen_cooling": bool(req.get("regen_cooling", False)),
         "film_cooling": bool(req.get("film_cooling", False)),
-        "solver_flow_model": str(req.get("solver_flow_model", "navier_stokes") or "navier_stokes"),
+        "solver_flow_model": str(req.get("solver_flow_model", "viscous") or "viscous"),
         "solver_station_count": _safe_float(req.get("solver_station_count"), 160.0),
+        "pressure_solve_mode": str(req.get("pressure_solve_mode", "design") or "design").strip().lower(),
+        "combustion_efficiency": _clamp(_safe_float(req.get("combustion_efficiency"), 0.95), 0.50, 1.0),
+        "design_injector_dp_ratio": _clamp(_safe_float(req.get("design_injector_dp_ratio"), 0.20), 0.05, 0.50),
+        "fuel_injector_discharge_coefficient": _clamp(
+            _safe_float(req.get("fuel_injector_discharge_coefficient"), 0.72), 0.20, 1.0
+        ),
+        "oxidizer_injector_discharge_coefficient": _clamp(
+            _safe_float(req.get("oxidizer_injector_discharge_coefficient"), 0.72), 0.20, 1.0
+        ),
+        "fuel_injector_area_mm2": max(0.0, _safe_float(req.get("fuel_injector_area_mm2"), 0.0)),
+        "oxidizer_injector_area_mm2": max(0.0, _safe_float(req.get("oxidizer_injector_area_mm2"), 0.0)),
+        "fuel_supply_pressure_kpa": max(0.0, _safe_float(req.get("fuel_supply_pressure_kpa"), 0.0)),
+        "oxidizer_supply_pressure_kpa": max(0.0, _safe_float(req.get("oxidizer_supply_pressure_kpa"), 0.0)),
+        "fuel_tank_inlet_pressure_kpa": max(101.325, _safe_float(req.get("fuel_tank_inlet_pressure_kpa"), 300.0)),
+        "oxidizer_tank_inlet_pressure_kpa": max(
+            101.325, _safe_float(req.get("oxidizer_tank_inlet_pressure_kpa"), 330.0)
+        ),
+        "design_supply_margin_ratio": _clamp(_safe_float(req.get("design_supply_margin_ratio"), 0.08), 0.0, 0.50),
+        "regen_coolant_inlet_temperature_k": max(
+            0.0, _safe_float(req.get("regen_coolant_inlet_temperature_k"), 0.0)
+        ),
+        "regen_coolant_inlet_pressure_kpa": max(
+            0.0, _safe_float(req.get("regen_coolant_inlet_pressure_kpa"), 0.0)
+        ),
+        "fuel_minimum_injector_inlet_pressure_kpa": max(
+            0.0, _safe_float(req.get("fuel_minimum_injector_inlet_pressure_kpa"), 0.0)
+        ),
+        "fuel_regen_pressure_drop_kpa": max(
+            0.0, _safe_float(req.get("fuel_regen_pressure_drop_kpa"), 0.0)
+        ),
+        "analysis_throat_diameter_mm": max(0.0, _safe_float(req.get("analysis_throat_diameter_mm"), 0.0)),
+        "line_diameter_fuel_m": max(0.001, _safe_float(req.get("line_diameter_fuel_m"), 0.012)),
+        "line_diameter_oxidizer_m": max(0.001, _safe_float(req.get("line_diameter_oxidizer_m"), 0.0114)),
+        "line_length_fuel_m": max(0.01, _safe_float(req.get("line_length_fuel_m"), 1.55)),
+        "line_length_oxidizer_m": max(0.01, _safe_float(req.get("line_length_oxidizer_m"), 1.75)),
+        "minor_loss_fuel_k": max(0.0, _safe_float(req.get("minor_loss_fuel_k"), 8.0)),
+        "minor_loss_oxidizer_k": max(0.0, _safe_float(req.get("minor_loss_oxidizer_k"), 9.2)),
+        "line_roughness_fuel_m": max(0.0, _safe_float(req.get("line_roughness_fuel_m"), 1.5e-6)),
+        "line_roughness_oxidizer_m": max(0.0, _safe_float(req.get("line_roughness_oxidizer_m"), 1.5e-6)),
+        "uncertainty_sample_count": int(_clamp(_safe_float(req.get("uncertainty_sample_count"), 32), 24, 1024)),
     }
+    if normalized["pressure_solve_mode"] not in {"design", "analysis"}:
+        normalized["pressure_solve_mode"] = "design"
     return {"normalized_request": normalized}
 
 
@@ -149,6 +193,32 @@ def _build_feed_request(state: Dict[str, object], chamber_pressure_kpa: float) -
             "film_cooling": state["film_cooling"],
             "packaging_bias": state["packaging_bias"],
         },
+        "feed_pressure_drop_request": {
+            "pressure_solve_mode": state["pressure_solve_mode"],
+            "design_injector_dp_ratio": state["design_injector_dp_ratio"],
+            "fuel_injector_discharge_coefficient": state["fuel_injector_discharge_coefficient"],
+            "oxidizer_injector_discharge_coefficient": state["oxidizer_injector_discharge_coefficient"],
+            "fuel_injector_area_mm2": state["fuel_injector_area_mm2"],
+            "oxidizer_injector_area_mm2": state["oxidizer_injector_area_mm2"],
+            "fuel_supply_pressure_kpa": state["fuel_supply_pressure_kpa"],
+            "oxidizer_supply_pressure_kpa": state["oxidizer_supply_pressure_kpa"],
+            "fuel_tank_inlet_pressure_kpa": state["fuel_tank_inlet_pressure_kpa"],
+            "oxidizer_tank_inlet_pressure_kpa": state["oxidizer_tank_inlet_pressure_kpa"],
+            "design_supply_margin_ratio": state["design_supply_margin_ratio"],
+            "fuel_minimum_injector_inlet_pressure_kpa": state[
+                "fuel_minimum_injector_inlet_pressure_kpa"
+            ],
+            "fuel_regen_pressure_drop_kpa": state["fuel_regen_pressure_drop_kpa"],
+            "analysis_throat_diameter_mm": state["analysis_throat_diameter_mm"],
+            "line_diameter_fuel_m": state["line_diameter_fuel_m"],
+            "line_diameter_oxidizer_m": state["line_diameter_oxidizer_m"],
+            "line_length_fuel_m": state["line_length_fuel_m"],
+            "line_length_oxidizer_m": state["line_length_oxidizer_m"],
+            "minor_loss_fuel_k": state["minor_loss_fuel_k"],
+            "minor_loss_oxidizer_k": state["minor_loss_oxidizer_k"],
+            "line_roughness_fuel_m": state["line_roughness_fuel_m"],
+            "line_roughness_oxidizer_m": state["line_roughness_oxidizer_m"],
+        },
     }
 
 
@@ -187,25 +257,30 @@ def _run_combustion(
     chamber_pressure_kpa: float,
     feed_summary: Dict[str, object],
     max_iterations: int,
+    fixed_chamber_pressure_kpa: Optional[float] = None,
 ) -> Dict[str, object]:
     assumptions = get_default_solver_assumptions()
-    flow_model = str(state.get("solver_flow_model", "navier_stokes")).strip().lower()
-    if flow_model not in {"fast", "refined", "navier_stokes"}:
-        flow_model = "navier_stokes"
+    flow_model = str(state.get("solver_flow_model", "viscous")).strip().lower()
+    if flow_model == "navier_stokes":
+        flow_model = "viscous"
+    if flow_model not in {"fast", "refined", "viscous"}:
+        flow_model = "viscous"
     assumptions = assumptions.__class__(
         **{
             **assumptions.__dict__,
             "flow_model": flow_model,
+            "combustion_efficiency": float(state["combustion_efficiency"]),
             "max_iterations": max(3, min(200, max_iterations * 8)),
         }
     )
     station_count = int(_clamp(_safe_float(state.get("solver_station_count"), 160.0), 24.0, 240.0))
-    return run_combustion_cfd_solver(
+    return solve_chamber_nozzle_flow(
         design,
         assumptions,
         station_count=station_count,
         max_iterations_override=max(3, min(200, max_iterations * 8)),
         thermochemistry_mode="auto",
+        fixed_chamber_pressure_kpa=fixed_chamber_pressure_kpa,
     )
 
 
@@ -291,19 +366,38 @@ def _bound_row(
     }
 
 
+def _sampled_bound_row(
+    name: str,
+    value: float,
+    unit: str,
+    interval: Dict[str, object],
+    basis: str,
+) -> Dict[str, object]:
+    lower = min(value, _safe_float(interval.get("p05"), value))
+    upper = max(value, _safe_float(interval.get("p95"), value))
+    return {
+        "name": name,
+        "value": round(value, 6),
+        "unit": unit,
+        "lower": round(lower, 6),
+        "upper": round(upper, 6),
+        "lower_percent": round(100.0 * max(0.0, value - lower) / max(1e-12, abs(value)), 3),
+        "upper_percent": round(100.0 * max(0.0, upper - value) / max(1e-12, abs(value)), 3),
+        "basis": basis,
+        "interval_method": "P05-P95 input propagation",
+    }
+
+
 def _build_final_uncertainty_bounds(
     conv_info: ConvergenceInfo,
     combustion_result: Optional[Dict[str, object]],
     structural_result: Optional[Dict[str, object]],
+    hydraulic_uncertainty: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     combustion_summary = _as_dict(_as_dict(combustion_result).get("summary"))
     combustion_metadata = _as_dict(_as_dict(combustion_result).get("metadata"))
-    navier_stokes = _as_dict(_as_dict(combustion_result).get("navier_stokes"))
-    navier_summary = _as_dict(navier_stokes.get("summary"))
-    navier_residual_rows = navier_stokes.get("residual_history")
-    final_momentum_residual = 0.0
-    if isinstance(navier_residual_rows, list) and navier_residual_rows:
-        final_momentum_residual = _safe_float(_as_dict(navier_residual_rows[-1]).get("momentum_residual"), 0.0)
+    viscous_correction = _as_dict(_as_dict(combustion_result).get("viscous_correction"))
+    viscous_summary = _as_dict(viscous_correction.get("summary"))
 
     chamber_pressure_kpa = max(1.0, _safe_float(combustion_summary.get("chamber_pressure_kpa"), conv_info.chamber_pressure_kpa))
     residual_percent = 100.0 * conv_info.residual_kpa / chamber_pressure_kpa
@@ -312,73 +406,142 @@ def _build_final_uncertainty_bounds(
     shock_penalty = 2.0 if bool(shock_feedback.get("influences_design")) else 0.0
     residual_penalty = min(4.0, residual_percent * 0.25)
     thrust_penalty = min(4.0, thrust_error_percent * 0.35)
-    navier_penalty = min(2.0, final_momentum_residual * 100.0)
+    viscous_pressure_loss_kpa = max(
+        0.0, _safe_float(viscous_summary.get("cumulative_pressure_loss_kpa"), 0.0)
+    )
+    viscous_pressure_loss_fraction = viscous_pressure_loss_kpa / chamber_pressure_kpa
+    viscous_penalty = min(2.0, viscous_pressure_loss_fraction * 100.0)
 
-    solver_basis = "Cantera thermochemistry, MOC nozzle contour, shock feedback, Navier-Stokes viscous correction"
-    common_penalty = residual_penalty + thrust_penalty + shock_penalty + navier_penalty
-    fields = [
-        _bound_row(
+    solver_basis = "Cantera thermochemistry, MOC nozzle contour, shock feedback, viscous quasi-1D correction"
+    common_penalty = residual_penalty + thrust_penalty + shock_penalty + viscous_penalty
+    interval_rows = {
+        str(row.get("name")): _as_dict(row)
+        for row in _as_dict(hydraulic_uncertainty).get("intervals", [])
+        if isinstance(row, dict)
+    }
+    pressure_interval = interval_rows.get("chamber_pressure_kpa")
+    thrust_interval = interval_rows.get("predicted_thrust_newtons")
+    flow_interval = interval_rows.get("total_mass_flow_kg_s")
+    pressure_row = (
+        _sampled_bound_row(
+            "chamber_pressure_kpa",
+            chamber_pressure_kpa,
+            "kPa",
+            pressure_interval,
+            "Hydraulic input propagation through chamber mass balance",
+        )
+        if pressure_interval
+        else _bound_row(
             "chamber_pressure_kpa",
             chamber_pressure_kpa,
             "kPa",
             2.0 + common_penalty,
             3.0 + common_penalty,
             "Coupled pressure residual and final flow solve",
-        ),
-        _bound_row(
+        )
+    )
+    thrust_value = _safe_float(combustion_summary.get("predicted_thrust_newtons"), 0.0)
+    thrust_row = (
+        _sampled_bound_row(
             "predicted_thrust_newtons",
-            _safe_float(combustion_summary.get("predicted_thrust_newtons"), 0.0),
+            thrust_value,
+            "N",
+            thrust_interval,
+            "Hydraulic inputs, throat tolerance, and thrust-coefficient range",
+        )
+        if thrust_interval
+        else _bound_row(
+            "predicted_thrust_newtons",
+            thrust_value,
             "N",
             3.0 + common_penalty,
             4.0 + common_penalty,
             "Pressure-root thrust balance, nozzle loss model, and shock feedback",
-        ),
-        _bound_row(
+        )
+    )
+    hydraulic_nominal = _as_dict(_as_dict(hydraulic_uncertainty).get("nominal"))
+    flow_value = _safe_float(
+        hydraulic_nominal.get("total_mass_flow_kg_s"),
+        _safe_float(combustion_summary.get("mass_flow_kg_s"), 0.0),
+    )
+    flow_row = (
+        _sampled_bound_row(
             "mass_flow_kg_s",
-            _safe_float(combustion_summary.get("mass_flow_kg_s"), 0.0),
+            flow_value,
+            "kg/s",
+            flow_interval,
+            "Hydraulic input propagation and Cantera c-star efficiency range",
+        )
+        if flow_interval
+        else _bound_row(
+            "mass_flow_kg_s",
+            flow_value,
             "kg/s",
             3.0 + residual_penalty,
             4.0 + residual_penalty,
             "Cantera c-star and solved throat area",
-        ),
-        _bound_row(
+        )
+    )
+    isp_value = _safe_float(combustion_summary.get("predicted_isp_seconds"), 0.0)
+    if thrust_interval and flow_interval and isp_value > 0.0:
+        isp_interval = {
+            "p05": _safe_float(thrust_interval.get("p05"), thrust_value)
+            / max(1e-12, _safe_float(flow_interval.get("p95"), flow_value) * 9.80665),
+            "p95": _safe_float(thrust_interval.get("p95"), thrust_value)
+            / max(1e-12, _safe_float(flow_interval.get("p05"), flow_value) * 9.80665),
+        }
+        isp_row = _sampled_bound_row(
             "predicted_isp_seconds",
-            _safe_float(combustion_summary.get("predicted_isp_seconds"), 0.0),
+            isp_value,
+            "s",
+            isp_interval,
+            "Conservative thrust and mass-flow P05/P95 combination",
+        )
+    else:
+        isp_row = _bound_row(
+            "predicted_isp_seconds",
+            isp_value,
             "s",
             4.0 + common_penalty,
             5.0 + common_penalty,
             "Solved thrust divided by propellant mass flow",
-        ),
+        )
+    fields = [
+        pressure_row,
+        thrust_row,
+        flow_row,
+        isp_row,
         _bound_row(
             "max_hot_wall_temperature_k",
             _safe_float(combustion_summary.get("max_hot_wall_temperature_k"), 0.0),
             "K",
-            6.0 + navier_penalty,
-            10.0 + navier_penalty,
+            6.0 + viscous_penalty,
+            10.0 + viscous_penalty,
             "Heat-transfer station solution and wall model",
         ),
         _bound_row(
             "minimum_combined_material_margin_ratio",
             conv_info.minimum_combined_material_margin_ratio,
             "x",
-            8.0 + navier_penalty,
-            12.0 + navier_penalty,
+            8.0 + viscous_penalty,
+            12.0 + viscous_penalty,
             "Stress and heat-transfer material evaluation",
         ),
     ]
 
     return {
         "basis": solver_basis,
-        "flow_model": combustion_metadata.get("flow_model", "navier_stokes"),
+        "flow_model": combustion_metadata.get("flow_model", "viscous"),
         "station_count": combustion_metadata.get("station_count"),
         "convergence_residual_kpa": round(conv_info.residual_kpa, 6),
         "thrust_error_fraction": round(conv_info.thrust_error_fraction, 8),
-        "navier_stokes_final_momentum_residual": round(final_momentum_residual, 8),
-        "viscous_pressure_loss_kpa": navier_summary.get("cumulative_pressure_loss_kpa"),
+        "viscous_pressure_loss_kpa": round(viscous_pressure_loss_kpa, 8),
+        "viscous_pressure_loss_fraction": round(viscous_pressure_loss_fraction, 8),
         "bounds": fields,
+        "hydraulic_input_propagation": hydraulic_uncertainty,
         "notes": [
-            "Bounds are local solver uncertainty bands for design review.",
-            "They combine convergence residual, final flow-model tier, shock feedback, and viscous residual indicators.",
+            "Pressure, mass-flow, thrust, and specific-impulse bounds use explicit hydraulic input propagation when available.",
+            "Thermal and material bounds remain engineering screening bands pending the axial thermal milestone.",
             "They are not a substitute for external CFD validation or engine hot-fire data.",
         ],
     }
@@ -416,6 +579,9 @@ def iterate_coupling_loop(
         minimum_structural_margin_ratio=0.0,
         minimum_heat_transfer_margin_ratio=0.0,
         minimum_combined_material_margin_ratio=0.0,
+        coolant_required_inlet_pressure_kpa=0.0,
+        coolant_pressure_margin_kpa=0.0,
+        coolant_pressure_requirement_met=True,
         converged=False,
         notes=[],
     )
@@ -427,32 +593,75 @@ def iterate_coupling_loop(
             progress_callback(iteration_base, "Coupled iteration {0}: preparing design state".format(iteration))
         design = _build_design_for_pressure(state, pressure_iteration_kpa)
         final_design = design
+        if progress_callback is not None:
+            progress_callback(iteration_base + iteration_span * 0.18, "Coupled iteration {0}: solving Cantera chamber state".format(iteration))
+        combustion_result = _run_combustion(
+            state,
+            design,
+            pressure_iteration_kpa,
+            {},
+            max_iterations,
+            fixed_chamber_pressure_kpa=pressure_iteration_kpa,
+        )
+        final_combustion_result = combustion_result
+        combustion_summary = _as_dict(combustion_result.get("summary"))
+        heat_transfer = _as_dict(combustion_result.get("heat_transfer"))
+        heat_summary = _as_dict(heat_transfer.get("summary"))
+        coolant_required_inlet_pressure_kpa = _safe_float(
+            heat_summary.get("coolant_required_inlet_pressure_kpa"), 0.0
+        )
+        coolant_minimum_injector_inlet_kpa = _safe_float(
+            heat_summary.get("coolant_minimum_single_phase_pressure_kpa"), 0.0
+        )
+        coolant_regen_pressure_drop_kpa = _safe_float(
+            heat_summary.get("coolant_pressure_drop_kpa"), 0.0
+        )
+        coolant_pressure_margin_kpa = _safe_float(
+            heat_summary.get("coolant_pressure_margin_kpa"), 0.0
+        )
+        coolant_pressure_requirement_met = bool(
+            heat_summary.get("coolant_pressure_requirement_met", True)
+        )
+        coolant_redesign_active = False
+        if bool(state.get("regen_cooling")) and str(state.get("pressure_solve_mode")) == "design":
+            previous_inlet_kpa = _safe_float(state.get("regen_coolant_inlet_pressure_kpa"), 0.0)
+            previous_minimum_kpa = _safe_float(
+                state.get("fuel_minimum_injector_inlet_pressure_kpa"), 0.0
+            )
+            previous_drop_kpa = _safe_float(state.get("fuel_regen_pressure_drop_kpa"), 0.0)
+            state["regen_coolant_inlet_pressure_kpa"] = coolant_required_inlet_pressure_kpa
+            state["fuel_minimum_injector_inlet_pressure_kpa"] = coolant_minimum_injector_inlet_kpa
+            state["fuel_regen_pressure_drop_kpa"] = coolant_regen_pressure_drop_kpa
+            coolant_redesign_active = any(
+                abs(current - previous) > 0.05
+                for current, previous in (
+                    (coolant_required_inlet_pressure_kpa, previous_inlet_kpa),
+                    (coolant_minimum_injector_inlet_kpa, previous_minimum_kpa),
+                    (coolant_regen_pressure_drop_kpa, previous_drop_kpa),
+                )
+            )
         feed_request = _build_feed_request(state, pressure_iteration_kpa)
         if progress_callback is not None:
-            progress_callback(iteration_base + iteration_span * 0.18, "Coupled iteration {0}: solving feed transient".format(iteration))
+            progress_callback(
+                iteration_base + iteration_span * 0.44,
+                "Coupled iteration {0}: closing feed, injector, and chamber mass balance".format(iteration),
+            )
         feed_result = solve_feed_system(
             feed_request,
             upstream_context={
                 "source": "coupled-cycle-loop",
                 "iteration": iteration,
                 "target_chamber_pressure_kpa": pressure_iteration_kpa,
-                "chamber_pressure_kpa": design.derived.engineering_values.get("chamber_pressure_kpa"),
-                "propellant_mass_flow_kg_s": design.derived.engineering_values.get("propellant_mass_flow_kg_s"),
+                "chamber_pressure_kpa": pressure_iteration_kpa,
+                "cstar_m_s": combustion_summary.get("cstar_m_s"),
+                "throat_area_m2": combustion_summary.get("throat_area_m2"),
+                "propellant_mass_flow_kg_s": combustion_summary.get("mass_flow_kg_s"),
             },
         )
         final_feed_result = feed_result
-        feed_summary = _as_dict(_as_dict(feed_result.get("payload")).get("summary"))
-
-        if progress_callback is not None:
-            progress_callback(iteration_base + iteration_span * 0.44, "Coupled iteration {0}: solving chamber and nozzle".format(iteration))
-        combustion_result = _run_combustion(
-            state,
-            design,
-            pressure_iteration_kpa,
-            feed_summary,
-            max_iterations,
-        )
-        final_combustion_result = combustion_result
+        feed_payload = _as_dict(feed_result.get("payload"))
+        feed_summary = _as_dict(feed_payload.get("summary"))
+        hydraulic_closure = _as_dict(feed_payload.get("hydraulic_closure"))
         shock_feedback = _as_dict(combustion_result.get("shock_design_feedback"))
         shock_redesign_active = False
         if bool(shock_feedback.get("influences_design")) and str(state.get("nozzle_exit_mode", "auto")) == "auto":
@@ -471,15 +680,12 @@ def iterate_coupling_loop(
         final_structural_result = structural_result
 
         combustion_pressure_kpa = _extract_combustion_pressure(combustion_result, pressure_iteration_kpa)
-        feed_supported_pressure_kpa = min(
-            _safe_float(feed_summary.get("initial_chamber_pressure_kpa"), pressure_iteration_kpa),
-            _safe_float(feed_summary.get("final_chamber_pressure_kpa"), pressure_iteration_kpa),
+        feed_supported_pressure_kpa = _safe_float(
+            hydraulic_closure.get("chamber_pressure_kpa"),
+            _safe_float(feed_summary.get("chamber_pressure_kpa"), pressure_iteration_kpa),
         )
         minimum_feed_margin_kpa = _safe_float(feed_summary.get("minimum_feed_margin_kpa"), 0.0)
-        if minimum_feed_margin_kpa < 0.0:
-            feed_supported_pressure_kpa += minimum_feed_margin_kpa * 0.45
-
-        physics_target_kpa = min(combustion_pressure_kpa, feed_supported_pressure_kpa)
+        physics_target_kpa = feed_supported_pressure_kpa
         next_pressure_kpa = (1.0 - relaxation) * pressure_iteration_kpa + relaxation * physics_target_kpa
         next_pressure_kpa = _clamp(next_pressure_kpa, 100.0, 10000.0)
 
@@ -489,19 +695,27 @@ def iterate_coupling_loop(
         minimum_structural_margin_ratio = material_margins["minimum_structural_margin_ratio"]
         minimum_heat_transfer_margin_ratio = material_margins["minimum_heat_transfer_margin_ratio"]
         minimum_combined_material_margin_ratio = material_margins["minimum_combined_material_margin_ratio"]
+        pressure_mode = str(state.get("pressure_solve_mode", "design"))
+        thrust_requirement_met = pressure_mode == "analysis" or thrust_error_fraction <= 0.035
+        hydraulic_converged = bool(hydraulic_closure.get("converged", False))
+        hydraulic_residual = abs(_safe_float(hydraulic_closure.get("mass_balance_relative_error"), 1.0))
         criteria_met = (
             pressure_residual_kpa <= convergence_tolerance_kpa
-            and thrust_error_fraction <= 0.035
-            and minimum_feed_margin_kpa >= -convergence_tolerance_kpa
+            and thrust_requirement_met
+            and hydraulic_converged
+            and hydraulic_residual <= 1e-5
             and minimum_structural_margin_ratio > 1.0
             and minimum_combined_material_margin_ratio > 1.0
             and not shock_redesign_active
+            and coolant_pressure_requirement_met
+            and not coolant_redesign_active
         )
         converged = criteria_met and iteration >= minimum_required_iterations
         notes = [
             "feed-supported Pc={0:.1f} kPa".format(feed_supported_pressure_kpa),
-            "combustion-supported Pc={0:.1f} kPa".format(combustion_pressure_kpa),
+            "Cantera state evaluated at Pc={0:.1f} kPa".format(combustion_pressure_kpa),
             "relaxed Pc={0:.1f} kPa".format(next_pressure_kpa),
+            "hydraulic mass residual={0:.3e}".format(hydraulic_residual),
         ]
         if minimum_feed_margin_kpa < 0.0:
             notes.append("feed margin negative: {0:.1f} kPa".format(minimum_feed_margin_kpa))
@@ -513,6 +727,18 @@ def iterate_coupling_loop(
             notes.append(
                 "shock feedback resized next nozzle exit to {0:.2f} mm".format(
                     _safe_float(state.get("nozzle_diameter_mm"), 0.0)
+                )
+            )
+        if coolant_redesign_active:
+            notes.append(
+                "coolant pressure feedback set fuel jacket inlet to {0:.1f} kPa".format(
+                    coolant_required_inlet_pressure_kpa
+                )
+            )
+        if not coolant_pressure_requirement_met:
+            notes.append(
+                "coolant pressure margin negative: {0:.1f} kPa".format(
+                    coolant_pressure_margin_kpa
                 )
             )
 
@@ -532,6 +758,15 @@ def iterate_coupling_loop(
             "criteria_met": criteria_met,
             "converged": converged,
             "shock_redesign_active": shock_redesign_active,
+            "coolant_redesign_active": coolant_redesign_active,
+            "coolant_required_inlet_pressure_kpa": round(
+                coolant_required_inlet_pressure_kpa, 3
+            ),
+            "coolant_pressure_margin_kpa": round(coolant_pressure_margin_kpa, 3),
+            "coolant_pressure_requirement_met": coolant_pressure_requirement_met,
+            "hydraulic_converged": hydraulic_converged,
+            "hydraulic_mass_balance_relative_error": round(hydraulic_residual, 10),
+            "pressure_solve_mode": pressure_mode,
             "notes": notes,
         }
         trace_rows.append(row)
@@ -555,6 +790,9 @@ def iterate_coupling_loop(
             minimum_structural_margin_ratio=minimum_structural_margin_ratio,
             minimum_heat_transfer_margin_ratio=minimum_heat_transfer_margin_ratio,
             minimum_combined_material_margin_ratio=minimum_combined_material_margin_ratio,
+            coolant_required_inlet_pressure_kpa=coolant_required_inlet_pressure_kpa,
+            coolant_pressure_margin_kpa=coolant_pressure_margin_kpa,
+            coolant_pressure_requirement_met=coolant_pressure_requirement_met,
             converged=converged,
             notes=notes,
         )
@@ -634,9 +872,29 @@ def solve(
     except Exception as exc:
         return _error_result(req, "Iteration loop failed: {0}".format(str(exc)), "Coupling loop raised exception")
 
+    hydraulic_uncertainty: Optional[Dict[str, object]] = None
+    uncertainty_warning = ""
+    try:
+        feed_payload = _as_dict(_as_dict(feed_result).get("payload"))
+        hydraulic_inputs = _as_dict(feed_payload.get("hydraulic_inputs"))
+        combustion_summary = _as_dict(_as_dict(combustion_result).get("summary"))
+        if hydraulic_inputs:
+            combustion_physics = _as_dict(_as_dict(combustion_result).get("physics"))
+            combustion_coefficients = _as_dict(combustion_physics.get("coefficients"))
+            hydraulic_uncertainty = propagate_hydraulic_uncertainty(
+                hydraulic_inputs,
+                sample_count=int(req["uncertainty_sample_count"]),
+                thrust_coefficient=_safe_float(
+                    combustion_coefficients.get("effective_thrust_coefficient"),
+                    _safe_float(combustion_summary.get("thrust_coefficient"), 0.0),
+                ),
+            )
+    except Exception as exc:
+        uncertainty_warning = "Hydraulic uncertainty propagation failed: {0}".format(str(exc))
+
     merged_station_updates = _merge_station_field_updates(feed_result, combustion_result, structural_result)
     trace_lines = [
-        "Stage 3.2 Coupled Cycle Loop Solver",
+        SOLVER_NAME,
         "Initial chamber pressure: {0:.1f} kPa".format(initial_chamber_pressure_kpa),
         "Convergence tolerance: {0:.2f} kPa, max iterations: {1}".format(
             convergence_tolerance_kpa, max_iterations
@@ -654,8 +912,18 @@ def solve(
         )
     if isinstance(combustion_result, dict):
         warnings.extend(str(item) for item in combustion_result.get("warnings", []) if item)
-    warnings.append("Stage 3.2 is a coupled design solver. External CFD and test validation are still required before hardware release.")
-    final_uncertainty_bounds = _build_final_uncertainty_bounds(conv_info, combustion_result, structural_result)
+    if uncertainty_warning:
+        warnings.append(uncertainty_warning)
+    warnings.append(
+        "This is a coupled design solver. External CFD and hot-fire test validation "
+        "are still required before hardware release."
+    )
+    final_uncertainty_bounds = _build_final_uncertainty_bounds(
+        conv_info,
+        combustion_result,
+        structural_result,
+        hydraulic_uncertainty,
+    )
 
     return {
         "metadata": _metadata(),
@@ -673,6 +941,11 @@ def solve(
                 "minimum_structural_margin_ratio": round(conv_info.minimum_structural_margin_ratio, 4),
                 "minimum_heat_transfer_margin_ratio": round(conv_info.minimum_heat_transfer_margin_ratio, 4),
                 "minimum_combined_material_margin_ratio": round(conv_info.minimum_combined_material_margin_ratio, 4),
+                "coolant_required_inlet_pressure_kpa": round(
+                    conv_info.coolant_required_inlet_pressure_kpa, 3
+                ),
+                "coolant_pressure_margin_kpa": round(conv_info.coolant_pressure_margin_kpa, 3),
+                "coolant_pressure_requirement_met": conv_info.coolant_pressure_requirement_met,
             },
             "results": {
                 "chamber_pressure_kpa": round(conv_info.chamber_pressure_kpa, 3),
@@ -683,9 +956,14 @@ def solve(
                 "minimum_structural_margin_ratio": round(conv_info.minimum_structural_margin_ratio, 4),
                 "minimum_heat_transfer_margin_ratio": round(conv_info.minimum_heat_transfer_margin_ratio, 4),
                 "minimum_combined_material_margin_ratio": round(conv_info.minimum_combined_material_margin_ratio, 4),
+                "coolant_required_inlet_pressure_kpa": round(
+                    conv_info.coolant_required_inlet_pressure_kpa, 3
+                ),
+                "coolant_pressure_margin_kpa": round(conv_info.coolant_pressure_margin_kpa, 3),
             },
             "iteration_trace": iteration_trace,
             "final_uncertainty_bounds": final_uncertainty_bounds,
+            "hydraulic_uncertainty": hydraulic_uncertainty,
             "station_field_updates": merged_station_updates,
             "feed_solver_result": feed_result if isinstance(feed_result, dict) else None,
             "combustion_solver_result": combustion_result if isinstance(combustion_result, dict) else None,

@@ -1,7 +1,7 @@
-"""Comprehensive tests for Stage 2.4 station field promotion feature."""
+"""Tests for numeric station field promotion in the export payloads."""
+import csv
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import csv
 
 import pytest
 
@@ -52,12 +52,12 @@ def test_json_export_contains_analysis_fields():
     assert "design_station_rows" in payload
     rows = payload["design_station_rows"]
     assert isinstance(rows, list) and len(rows) > 0
-    
+
     for r in rows:
         # Check analysis_fields structure
         assert "analysis_fields" in r, f"Missing analysis_fields in {r.get('label')}"
         af = r["analysis_fields"]
-        
+
         # Each field should have value, unit, status, source_solver
         for field_name in ("temperature", "pressure", "mass_flow", "mach"):
             assert field_name in af, f"Missing {field_name} in analysis_fields"
@@ -79,7 +79,7 @@ def test_json_export_numeric_fields():
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
     rows = payload["design_station_rows"]
-    
+
     for r in rows:
         assert "temperature_k" in r, f"Missing temperature_k in {r.get('label')}"
         assert "pressure_kpa" in r, f"Missing pressure_kpa in {r.get('label')}"
@@ -119,14 +119,14 @@ def test_regen_cooling_scenario():
         "tank_diameter_mm": 110.0,
     }
     design = create_engine_design(state)
-    
+
     # Verify all stations have numeric fields
     for row in design.derived.station_rows:
         assert row.temperature_k is not None
         assert row.pressure_kpa > 0
         assert row.mass_flow_kg_s > 0
         assert row.mach_number >= 0
-    
+
     # Thermal margins should be calculated with regen on
     assert design.derived.engineering_values.get("regen_thermal_model_status") == "calculated"
     assert design.derived.engineering_values.get("regen_min_thermal_margin_index") > 0
@@ -150,14 +150,14 @@ def test_no_regen_cooling_scenario():
         "tank_diameter_mm": 110.0,
     }
     design = create_engine_design(state)
-    
+
     # Verify all stations have numeric fields
     for row in design.derived.station_rows:
         assert row.temperature_k is not None
         assert row.pressure_kpa >= 0
         assert row.mass_flow_kg_s > 0
         assert row.mach_number >= 0
-    
+
     # Thermal margins should NOT be calculated without regen
     assert design.derived.engineering_values.get("regen_thermal_model_status") == "not-active"
 
@@ -171,23 +171,23 @@ def test_csv_export_numeric_columns():
     with TemporaryDirectory() as tmpdir:
         csv_path = Path(tmpdir) / "stations.csv"
         export_station_csv(csv_path, design)
-        
+
         # Read and check header
         rows = list(csv.reader(csv_path.open("r")))
         header = rows[0]
-        
+
         # Check for numeric column headers
         assert "temperature_k" in header, "Missing temperature_k column"
         assert "pressure_kpa" in header, "Missing pressure_kpa column"
         assert "mass_flow_kg_s" in header, "Missing mass_flow_kg_s column"
         assert "mach_number_calculated" in header, "Missing mach_number_calculated column"
-        
+
         # Check that numeric columns are at the end
         expected_numeric_columns = ["temperature_k", "pressure_kpa", "mass_flow_kg_s", "mach_number_calculated"]
         actual_last_columns = header[-len(expected_numeric_columns):]
         assert actual_last_columns == expected_numeric_columns, \
             f"Numeric columns not at end. Last columns: {actual_last_columns}"
-        
+
         # Verify data rows have numeric values in those columns
         if len(rows) > 1:
             data_row = rows[1]
@@ -195,22 +195,22 @@ def test_csv_export_numeric_columns():
             press_col_idx = header.index("pressure_kpa")
             mass_col_idx = header.index("mass_flow_kg_s")
             mach_col_idx = header.index("mach_number_calculated")
-            
+
             # Temperature should parse as float
             if data_row[temp_col_idx]:
                 temp_val = float(data_row[temp_col_idx])
                 assert 200 <= temp_val <= 4000, f"Temp {temp_val} out of range"
-            
+
             # Pressure should parse as float and be positive
             if data_row[press_col_idx]:
                 press_val = float(data_row[press_col_idx])
                 assert press_val > 0, f"Pressure {press_val} should be positive"
-            
+
             # Mass flow should parse as float and be positive
             if data_row[mass_col_idx]:
                 mass_val = float(data_row[mass_col_idx])
                 assert mass_val > 0, f"Mass flow {mass_val} should be positive"
-            
+
             # Mach should parse as float and be in reasonable range
             if data_row[mach_col_idx]:
                 mach_val = float(data_row[mach_col_idx])
@@ -225,7 +225,7 @@ def test_solver_provenance_tagging():
     design = create_engine_design({})
     payload = build_cad_export_payload(design, {"total_score": 1.0})
     rows = payload["design_station_rows"]
-    
+
     # Check that source_solver field exists and has reasonable values
     for r in rows:
         af = r["analysis_fields"]
@@ -440,40 +440,3 @@ def test_export_includes_nozzle_geometry_metadata():
     assert float(geometry_meta["bell_entrance_angle_deg"]) > float(geometry_meta["bell_exit_angle_deg"])
     assert float(geometry_meta["throat_entry_blend_radius_mm"]) > 0.0
     assert float(geometry_meta["throat_exit_blend_radius_mm"]) > 0.0
-
-
-if __name__ == "__main__":
-    # Run tests manually if pytest is not available
-    import traceback
-    
-    test_functions = [
-        test_station_numeric_promotion,
-        test_numeric_value_ranges,
-        test_json_export_contains_analysis_fields,
-        test_json_export_numeric_fields,
-        test_backward_compatibility_notes,
-        test_regen_cooling_scenario,
-        test_no_regen_cooling_scenario,
-        test_csv_export_numeric_columns,
-        test_solver_provenance_tagging,
-        test_nozzle_contour_metadata_and_shape,
-        test_nozzle_exit_diameter_is_auto_sized_by_default,
-        test_manual_nozzle_exit_override_remains_available,
-        test_nozzle_expansion_bias_changes_auto_exit_target,
-        test_impinging_injector_reports_full_orifice_pattern,
-        test_render_geometry_fields_are_calculated,
-        test_cooling_geometry_fields_describe_visible_features,
-        test_export_includes_nozzle_geometry_metadata,
-    ]
-    
-    for test_func in test_functions:
-        try:
-            test_func()
-            print(f"✓ {test_func.__name__}")
-        except Exception as e:
-            print(f"✗ {test_func.__name__}: {e}")
-            traceback.print_exc()
-
-
-
-

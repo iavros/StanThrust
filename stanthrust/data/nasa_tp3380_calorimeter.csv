@@ -1,0 +1,8 @@
+case_id,mixture_ratio,chamber_pressure_bar,hot_wall_temperature_k,measured_throat_heat_flux_mw_m2,measurement_basis
+nasa-tp3380-01,5.9,41.782229,729.884,52.1518,direct
+nasa-tp3380-02,6.3,41.437491,729.884,51.9247,direct
+nasa-tp3380-03,6.0,41.368544,729.884,51.4034,direct
+nasa-tp3380-04,6.0,41.230649,725.904,53.7902,direct
+nasa-tp3380-05,6.1,40.472225,725.904,52.8602,direct
+nasa-tp3380-06,5.8,40.816963,725.904,53.3402,direct
+nasa-tp3380-07,6.0,41.851177,725.904,53.4827,direct

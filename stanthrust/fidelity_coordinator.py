@@ -1,10 +1,9 @@
 """Direct solver fidelity coordination for optimizer runs."""
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-import time
 from typing import Dict, List, Optional, Tuple
-
 
 FAST_COST_MS = 10
 DESIGN_COST_MS = 50

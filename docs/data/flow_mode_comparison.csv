@@ -1,4 +1,4 @@
 flow_model,flow_model_label,predicted_thrust_newtons,predicted_isp_seconds,chamber_pressure_kpa,mass_flow_kg_s,exit_pressure_kpa,thrust_coefficient,overall_efficiency,separation_efficiency,nozzle_half_angle_deg,nozzle_expansion_ratio
-fast,Fast design preview,244.3,208.8,1577.8,0.1,92.6,1.5,0.9523,1.0,5.067,3.219
-refined,Characteristic-net viscous design solve,245.0,208.0,1588.7,0.1,93.2,1.5,0.9523,1.0,5.067,3.219
-navier_stokes,Cantera plus Navier-Stokes design solve,235.1,195.5,1621.3,0.1,95.1,1.4,0.9364,1.0,5.067,3.219
+fast,Fast design preview,251.2,223.3,1392.5,0.1,97.1,1.5,0.9532,1.0,4.79,2.876
+refined,Characteristic-net viscous design solve,250.4,222.6,1392.5,0.1,97.1,1.5,0.9538,1.0,4.79,2.876
+viscous,Cantera plus viscous quasi-1D correction,239.5,210.1,1410.9,0.1,98.4,1.4,0.9379,1.0,4.79,2.876

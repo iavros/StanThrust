@@ -1,15 +1,13 @@
-"""Regression tests for Stage 4.1: validation pack.
+"""Regression tests for the validation pack.
 
 These tests ensure that design solver outputs remain stable and fall within
 expected physical bounds. They serve as regression gates to catch unintended
 changes in solver behavior.
 """
 
-import sys
 
-sys.path.insert(0, r"E:/StanThrust")
 
-from stanthrust.combustion_cfd_solver import run_combustion_cfd_solver
+from stanthrust.chamber_nozzle_solver import solve_chamber_nozzle_flow
 from stanthrust.design_model import create_engine_design
 from stanthrust.inputs import get_default_solver_assumptions
 from stanthrust.validation_pack import (
@@ -29,7 +27,6 @@ def test_default_design_validation():
         f"Checks: {[(c.check_name, c.passed, c.message) for c in report.checks]}"
     )
     assert any(check.check_name == "section_margins" and check.passed for check in report.checks)
-    print(f"[ok] test_default_design_validation passed: {report.summary}")
 
 
 def test_high_thrust_design_validation():
@@ -43,7 +40,6 @@ def test_high_thrust_design_validation():
     report = validate_engine_design(design)
 
     assert report.passed, f"High-thrust validation failed: {report.summary}"
-    print(f"[ok] test_high_thrust_design_validation passed: {report.summary}")
 
 
 def test_low_thrust_design_validation():
@@ -57,7 +53,6 @@ def test_low_thrust_design_validation():
     report = validate_engine_design(design)
 
     assert report.passed, f"Low-thrust validation failed: {report.summary}"
-    print(f"[ok] test_low_thrust_design_validation passed: {report.summary}")
 
 
 def test_pump_fed_design_validation():
@@ -77,7 +72,6 @@ def test_pump_fed_design_validation():
     )
     assert float(eng.get("fuel_pressure_margin_kpa", -1.0)) >= 0.0
     assert float(eng.get("oxidizer_pressure_margin_kpa", -1.0)) >= 0.0
-    print(f"[ok] test_pump_fed_design_validation passed: {report.summary}")
 
 
 def test_blowdown_design_validation():
@@ -92,7 +86,6 @@ def test_blowdown_design_validation():
     report = validate_engine_design(design)
 
     assert report.passed, f"Blowdown validation failed: {report.summary}"
-    print(f"[ok] test_blowdown_design_validation passed: {report.summary}")
 
 
 def test_regression_baselines_within_range():
@@ -139,9 +132,6 @@ def test_regression_baselines_within_range():
             )
 
     assert not failures, "Regression baselines exceeded:\n" + "\n".join(failures)
-    print(
-        f"[ok] test_regression_baselines_within_range passed: all {len(baselines)} metrics within expected ranges"
-    )
 
 
 def test_section_margin_outputs_exist():
@@ -213,7 +203,7 @@ def test_combustion_solver_consistency():
     """Test that combustion solver output integrates consistently with design."""
     design = create_engine_design({})
     assumptions = get_default_solver_assumptions()
-    result = run_combustion_cfd_solver(design, assumptions)
+    result = solve_chamber_nozzle_flow(design, assumptions)
 
     assert isinstance(result, dict), "Combustion result must be a dict"
     assert "station_field_updates" in result, "Result must contain 'station_field_updates'"
@@ -234,7 +224,6 @@ def test_combustion_solver_consistency():
                     f"Temperature for {station} should be positive"
                 )
 
-    print("[ok] test_combustion_solver_consistency passed: combustion solver integrates correctly")
 
 
 def test_refined_flow_mode_metadata():
@@ -243,7 +232,7 @@ def test_refined_flow_mode_metadata():
 
     design = create_engine_design({})
     assumptions = replace(get_default_solver_assumptions(), flow_model="refined")
-    result = run_combustion_cfd_solver(design, assumptions)
+    result = solve_chamber_nozzle_flow(design, assumptions)
 
     metadata = result.get("metadata", {})
     summary = result.get("summary", {})
@@ -252,44 +241,3 @@ def test_refined_flow_mode_metadata():
     assert summary.get("flow_model") == "refined"
     assert summary.get("exit_pressure_kpa", 0.0) > 0.0
     assert summary.get("predicted_isp_seconds", 0.0) > 120.0
-
-
-def run_all_tests():
-    """Run all Stage 4.1 validation tests."""
-    tests = [
-        test_default_design_validation,
-        test_high_thrust_design_validation,
-        test_low_thrust_design_validation,
-        test_pump_fed_design_validation,
-        test_blowdown_design_validation,
-        test_regression_baselines_within_range,
-        test_section_margin_outputs_exist,
-        test_maximum_diameter_is_hard_capped_and_reported,
-        test_internal_regression_baseline_cases_pass_and_stay_in_range,
-        test_combustion_solver_consistency,
-        test_refined_flow_mode_metadata,
-    ]
-
-    passed = 0
-    failed = 0
-
-    for test_func in tests:
-        try:
-            test_func()
-            passed += 1
-        except AssertionError as exc:
-            print(f"[fail] {test_func.__name__} failed: {exc}")
-            failed += 1
-        except Exception as exc:
-            print(f"[error] {test_func.__name__} error: {exc}")
-            failed += 1
-
-    print(
-        f"\nStage 4.1 Tests: {passed} passed, {failed} failed out of {len(tests)} total."
-    )
-    return failed == 0
-
-
-if __name__ == "__main__":
-    success = run_all_tests()
-    raise SystemExit(0 if success else 1)
