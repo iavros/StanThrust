@@ -3,15 +3,17 @@
 import pytest
 from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
+
+import stanthrust.ui.main_window as desktop_module
+from stanthrust.design_model import create_engine_design
 from stanthrust.optimizer_hooks import (
+    GeneticAlgorithmResult,
+    _summarize_tier_usage,
     build_optimizer_seed,
     run_genetic_optimizer,
     run_genetic_optimizer_with_fidelity,
-    GeneticAlgorithmResult,
-    _summarize_tier_usage,
 )
-from stanthrust.design_model import create_engine_design
-import stanthrust.qt_desktop as desktop_module
+from stanthrust.ui.inputs_panel import DEFAULT_SOLVER_STATION_COUNT
 
 
 class TestGAIntegrationBasics:
@@ -195,9 +197,7 @@ class TestGAGenerationCount:
         )
         decisions_list = result.fidelity_metadata["decisions_by_generation"]
         assert len(decisions_list) == len(result.history)
-        for i, (decision_entry, history_entry) in enumerate(
-            zip(decisions_list, result.history)
-        ):
+        for decision_entry, history_entry in zip(decisions_list, result.history):
             assert decision_entry["generation"] == int(history_entry["generation"])
 
 
@@ -261,7 +261,7 @@ class TestQtInputPreservation:
             assert window.widgets["packaging_bias"].currentText() == "Balanced"
             assert original_state["packaging_bias"] == "balanced"
 
-            fake_result = GeneticAlgorithmResult(
+            expected_result = GeneticAlgorithmResult(
                 best_score=9.99,
                 best_breakdown={"total_score": 9.99},
                 best_state={**original_state, "mixture_ratio": 2.2, "burn_time_seconds": 18.0},
@@ -270,14 +270,14 @@ class TestQtInputPreservation:
             )
 
             original_runner = desktop_module.run_feasibility_first_optimizer
-            desktop_module.run_feasibility_first_optimizer = lambda seed: fake_result
+            desktop_module.run_feasibility_first_optimizer = lambda seed: expected_result
             try:
                 window.run_design_ga()
             finally:
                 desktop_module.run_feasibility_first_optimizer = original_runner
 
             assert window.collect_form_state() == original_state
-            assert window.current_ga_candidate_state == fake_result.best_state
+            assert window.current_ga_candidate_state == expected_result.best_state
             assert window.widgets["mixture_ratio"].value() == pytest.approx(1.4)
             assert window.widgets["burn_time_seconds"].value() == pytest.approx(12.0)
         finally:
@@ -308,7 +308,7 @@ class TestQtInputPreservation:
             }
             assert expected_cards.issubset(set(window.plot_cards))
             assert window.flow_field_card is not None
-            assert int(window.widgets["solver_station_count"].value()) == desktop_module.DEFAULT_SOLVER_STATION_COUNT
+            assert int(window.widgets["solver_station_count"].value()) == DEFAULT_SOLVER_STATION_COUNT
             assert window.collect_form_state()["nozzle_expansion_bias"] == "pressure_matched"
             window._set_default_plots()
         finally:
@@ -411,10 +411,3 @@ class TestIntegration:
                 assert "assigned_tier" in decision
                 assert "requested_accuracy" in decision
                 assert "sobol_sensitivity_score" in decision
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
-
-

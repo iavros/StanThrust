@@ -1,10 +1,10 @@
-"""Matplotlib-backed engineering plots for the StanThrust desktop UI."""
+"""Matplotlib-backed engineering plots embedded in the desktop interface."""
 
 from __future__ import annotations
 
 import math
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 os.environ.setdefault("QT_API", "PyQt5")
 
@@ -15,18 +15,7 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from PyQt5.QtWidgets import QSizePolicy
 
-
-PLOT_COLORS = {
-    "background": "#11151A",
-    "axes": "#11161C",
-    "border": "#35404A",
-    "grid": "#2A3138",
-    "text": "#F2F5F3",
-    "muted": "#A9B2AD",
-    "centerline": "#747E7A",
-    "throat": "#55C2A2",
-    "sonic": "#F2F5F3",
-}
+from stanthrust.theme import PLOT_COLORS
 
 MACH_CMAP = LinearSegmentedColormap.from_list(
     "stanthrust_mach",
@@ -83,6 +72,57 @@ def _normalize_series(raw_series: List[Dict[str, object]]) -> List[Dict[str, obj
     return normalized
 
 
+#: Margins reserved around the axes, in pixels. Expressing them in pixels
+#: rather than as a fraction of the figure keeps the axis labels and the legend
+#: legible whether a canvas is 260 px tall in a grid or 760 px tall on its own.
+MARGINS_PX = {
+    "left": 68,
+    "right": 20,
+    "right_secondary": 68,
+    "bottom": 46,
+    "top": 16,
+    "legend_row": 17,
+}
+
+#: Legend entries per row before it wraps.
+LEGEND_COLUMNS = 4
+
+#: Rows reserved above the flow field for its inset colour bar and label.
+COLORBAR_ROWS = 3
+
+
+def legend_rows(entry_count: int) -> int:
+    """Return how many rows a legend of ``entry_count`` entries needs."""
+    if entry_count <= 0:
+        return 0
+    return -(-entry_count // LEGEND_COLUMNS)
+
+
+def _apply_margins(
+    figure, *, secondary: bool = False, rows: int = 0
+) -> Tuple[float, float, float]:
+    """Reserve a fixed pixel border around the axes of ``figure``.
+
+    ``rows`` is the legend row count; the space above the axes grows with it so
+    that a wrapped legend is never clipped. Returns the left, right, and top
+    fractions that were applied, for anchoring overlays in figure coordinates.
+    """
+    width_px = max(1.0, figure.get_size_inches()[0] * figure.dpi)
+    height_px = max(1.0, figure.get_size_inches()[1] * figure.dpi)
+    right_px = MARGINS_PX["right_secondary"] if secondary else MARGINS_PX["right"]
+    top_px = MARGINS_PX["top"] + rows * MARGINS_PX["legend_row"]
+    left = min(0.45, MARGINS_PX["left"] / width_px)
+    right = max(0.55, 1.0 - right_px / width_px)
+    top = max(0.55, 1.0 - top_px / height_px)
+    figure.subplots_adjust(
+        left=left,
+        right=right,
+        bottom=min(0.45, MARGINS_PX["bottom"] / height_px),
+        top=top,
+    )
+    return left, right, top
+
+
 def _style_axis(axis) -> None:
     axis.set_facecolor(PLOT_COLORS["axes"])
     axis.tick_params(axis="both", colors=PLOT_COLORS["muted"], labelsize=8, length=3)
@@ -110,6 +150,8 @@ class EngineeringPlotCanvas(FigureCanvasQTAgg):
         self.setStyleSheet(f"background: {PLOT_COLORS['background']};")
         self.axes = None
         self.secondary_axes = None
+        self._legend_rows = 0
+        self._last_request: Optional[Dict[str, object]] = None
         self._empty_message = "Run Solve to populate this plot."
         self._draw_empty(self._empty_message)
 
@@ -123,6 +165,14 @@ class EngineeringPlotCanvas(FigureCanvasQTAgg):
         secondary_series: Optional[List[Dict[str, object]]] = None,
         empty_message: str = "Run Solve to populate this plot.",
     ) -> None:
+        self._last_request = {
+            "x_label": x_label,
+            "primary_label": primary_label,
+            "primary_series": primary_series,
+            "secondary_label": secondary_label,
+            "secondary_series": secondary_series,
+            "empty_message": empty_message,
+        }
         primary = _normalize_series(primary_series)
         secondary = _normalize_series(secondary_series or [])
         self._empty_message = empty_message
@@ -131,7 +181,10 @@ class EngineeringPlotCanvas(FigureCanvasQTAgg):
             return
 
         self.figure.clear()
-        self.figure.subplots_adjust(left=0.105, right=0.895 if secondary else 0.97, bottom=0.19, top=0.76)
+        self._legend_rows = legend_rows(len(primary) + len(secondary))
+        legend_left, _legend_right, legend_bottom = _apply_margins(
+            self.figure, secondary=bool(secondary), rows=self._legend_rows
+        )
         axis = self.figure.add_subplot(111)
         self.axes = axis
         self.secondary_axes = axis.twinx() if secondary else None
@@ -190,12 +243,13 @@ class EngineeringPlotCanvas(FigureCanvasQTAgg):
         if self.secondary_axes is not None:
             self.secondary_axes.margins(y=0.12)
 
-        columns = min(4, max(1, len(handles)))
+        columns = min(LEGEND_COLUMNS, max(1, len(handles)))
         legend = axis.legend(
             handles,
             labels,
             loc="lower left",
-            bbox_to_anchor=(0.0, 1.04),
+            bbox_to_anchor=(legend_left, legend_bottom + 0.006),
+            bbox_transform=self.figure.transFigure,
             ncol=columns,
             frameon=False,
             fontsize=8,
@@ -206,6 +260,14 @@ class EngineeringPlotCanvas(FigureCanvasQTAgg):
         for text in legend.get_texts():
             text.set_color(PLOT_COLORS["muted"])
         self.draw_idle()
+
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._last_request is not None:
+            # Margins and the legend anchor are pixel based, so the plot is
+            # rebuilt from the stored request rather than rescaled.
+            self.set_plot_data(**self._last_request)
 
     def _draw_empty(self, message: str) -> None:
         self.figure.clear()
@@ -239,6 +301,7 @@ class FlowFieldPlotCanvas(FigureCanvasQTAgg):
         self.setStyleSheet(f"background: {PLOT_COLORS['background']};")
         self.axes = None
         self.colorbar = None
+        self._last_request: Optional[Dict[str, object]] = None
         self._empty_message = "Run Solve to populate the 2D flow field."
         self._draw_empty(self._empty_message)
 
@@ -250,6 +313,12 @@ class FlowFieldPlotCanvas(FigureCanvasQTAgg):
         variable_label: str = "Mach",
         empty_message: str = "Run Solve to populate the 2D flow field.",
     ) -> None:
+        self._last_request = {
+            "axial_profile": axial_profile,
+            "variable": variable,
+            "variable_label": variable_label,
+            "empty_message": empty_message,
+        }
         rows_by_x: Dict[float, Dict[str, float]] = {}
         for row in axial_profile:
             x_value = _finite_float(row.get("x_mm"))
@@ -286,7 +355,7 @@ class FlowFieldPlotCanvas(FigureCanvasQTAgg):
             norm = Normalize(vmin=field_min, vmax=field_max)
 
         self.figure.clear()
-        self.figure.subplots_adjust(left=0.07, right=0.98, bottom=0.20, top=0.73)
+        _bar_left, bar_right, bar_top = _apply_margins(self.figure, rows=COLORBAR_ROWS)
         axis = self.figure.add_subplot(111)
         self.axes = axis
         _style_axis(axis)
@@ -390,7 +459,14 @@ class FlowFieldPlotCanvas(FigureCanvasQTAgg):
             va="bottom",
         )
 
-        color_axis = axis.inset_axes([0.68, 1.16, 0.32, 0.075])
+        # A figure-level axes keeps the colour bar in the reserved strip above
+        # the plot regardless of how tall the canvas is.
+        height_px = max(1.0, self.figure.get_size_inches()[1] * self.figure.dpi)
+        bar_height = 9.0 / height_px
+        bar_width = 0.22
+        color_axis = self.figure.add_axes(
+            (bar_right - bar_width, bar_top + 20.0 / height_px, bar_width, bar_height)
+        )
         self.colorbar = self.figure.colorbar(field_mesh, cax=color_axis, orientation="horizontal")
         self.colorbar.ax.tick_params(colors=PLOT_COLORS["muted"], labelsize=7, length=2)
         self.colorbar.outline.set_edgecolor(PLOT_COLORS["border"])
@@ -398,10 +474,20 @@ class FlowFieldPlotCanvas(FigureCanvasQTAgg):
         self.colorbar.set_label(variable_label, color=PLOT_COLORS["text"], fontsize=8, labelpad=4)
         self.colorbar.ax.xaxis.set_label_position("top")
         if is_mach and field_min < 1.0 < field_max:
-            ticks = sorted(set([field_min, 1.0, field_max]))
+            ticks = sorted({field_min, 1.0, field_max})
             self.colorbar.set_ticks(ticks)
             self.colorbar.set_ticklabels([_format_tick(value) for value in ticks])
         self.draw_idle()
+
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._last_request is not None:
+            # The margins and the colour bar are positioned in pixels, so the
+            # field is rebuilt rather than rescaled.
+            request = dict(self._last_request)
+            profile = request.pop("axial_profile")
+            self.set_flow_data(profile, **request)
 
     def _draw_empty(self, message: str) -> None:
         self.figure.clear()

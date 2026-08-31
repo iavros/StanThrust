@@ -1,5 +1,7 @@
-import site
+"""StanThrust desktop entry point and packaged-runtime self tests."""
+
 import os
+import site
 import sys
 
 
@@ -29,6 +31,25 @@ def _self_test_cantera() -> int:
     return 0
 
 
+def _self_test_properties() -> int:
+    from stanthrust.fluid_properties import coolant_property_state
+    from stanthrust.material_properties import material_property_state
+
+    coolant = coolant_property_state("Ethanol", 293.15, 2000.0)
+    material = material_property_state("Inconel 625", 811.15)
+    print(
+        "Coolant properties: ok ({0}, rho={1:.3f} kg/m3)".format(
+            coolant["backend_version"], coolant["density_kg_m3"]
+        )
+    )
+    print(
+        "Material properties: ok (Inconel 625, k={0:.3f} W/m-K)".format(
+            material["thermal_conductivity_w_m_k"]
+        )
+    )
+    return 0
+
+
 def _self_test_desktop() -> int:
     trace_path = os.environ.get("STANTHRUST_SELF_TEST_LOG", "")
 
@@ -51,9 +72,18 @@ def _self_test_desktop() -> int:
     trace("pyqt-imported")
     from stanthrust.plotting import EngineeringPlotCanvas, FlowFieldPlotCanvas
     trace("matplotlib-imported")
+    # Import the interface package too. The bundled entry point only reaches it
+    # from main(), so without this a packaging gap would ship a build that
+    # cannot open its own window.
+    from stanthrust.theme import apply_theme
+    from stanthrust.ui.main_window import MainWindow
+    trace(f"interface-imported-{MainWindow.__name__}")
+    _self_test_properties()
+    trace("properties-verified")
 
     application = QApplication.instance() or QApplication([])
     application.setQuitOnLastWindowClosed(False)
+    apply_theme(application)
     trace("application-created")
     line_plot = EngineeringPlotCanvas()
     trace("line-canvas-created")
@@ -78,6 +108,7 @@ def _self_test_desktop() -> int:
     flow_field.draw()
     trace("field-rendered")
     print("Desktop plotting: ok (Matplotlib QtAgg)")
+    print("Interface package: ok (stanthrust.ui)")
     sys.stdout.flush()
     QTimer.singleShot(0, lambda: trace("event-loop-running"))
     if getattr(sys, "frozen", False) and sys.platform == "win32":
@@ -92,10 +123,12 @@ def _self_test_desktop() -> int:
 def main() -> int:
     if "--self-test-cantera" in sys.argv:
         return _self_test_cantera()
+    if "--self-test-properties" in sys.argv:
+        return _self_test_properties()
     if "--self-test-desktop" in sys.argv:
         return _self_test_desktop()
 
-    from stanthrust.qt_desktop import run
+    from stanthrust.ui import run
 
     run()
     return 0
